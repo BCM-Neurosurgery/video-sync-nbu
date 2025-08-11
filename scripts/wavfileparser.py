@@ -2,72 +2,57 @@ import wave
 import contextlib
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
-
 import numpy as np
 
+"""
+Clean, MATLAB-style block decoder for frame IDs embedded in audio.
+- Mono WAV only (raises if not mono)
+- Binarize @ 0.5
+- Global flip of full binary stream
+- For each detected low start, take a fixed window (default 231 samples)
+- Flip the window, sample 5x(8 taps), drop last tap → 7-bit per byte
+- Concatenate bytes as [b5‖b4‖b3‖b2‖b1] (each 7-bit) → 35-bit counter
+- Advance by fixed stride (default 1100 samples)
+- Flip final vector to restore chronological order
+"""
 
-# ---- Site presets from lab findings (flip + nominal window length in samples) ----
-SITE_PRESETS: Dict[str, Dict[str, object]] = {
-    # Jamail: clean forward decoding, ~231 samples per 5-byte block at 44.1 kHz
-    "jamail": {"flip": False, "window_samples": 231},
-    # NBU sleep room: decode backwards in MATLAB doc; here we auto-try flip
-    "nbu_sleep": {"flip": True, "window_samples": 536},
-    # NBU lounge: longer window due to extra idle/spacing
-    "nbu_lounge": {"flip": True, "window_samples": 646},
+# ---- Block presets (from lab MATLAB) ----
+BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
+    # Jamail site defaults
+    "jamail": {
+        "flip_signal": True,  # binary_signal = flip(binary_signal)
+        "flip_window": True,  # win = flip(win)
+        "window_samples": 231,  # size of one serial burst window
+        "block_stride": 1100,  # hop size to next window candidate
+        # MATLAB defined in 1-based indexing; convert to 0-based in code
+        "transition_points_1b": [6, 53, 100, 147, 194],
+        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
+    },
+    # NBU Sleep room (empirical)
+    "nbu_sleep": {
+        "flip_signal": True,
+        "flip_window": True,
+        "window_samples": 536,  # empirically observed at NBU sleep
+        "block_stride": 1100,  # keep same unless you have a measured stride
+        "transition_points_1b": [
+            6,
+            53,
+            100,
+            147,
+            194,
+        ],
+        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
+    },
+    # NBU Lounge (empirical)
+    "nbu_lounge": {
+        "flip_signal": True,
+        "flip_window": True,
+        "window_samples": 646,  # empirically observed at NBU lounge
+        "block_stride": 1100,  # adjust if your coworkers logged a different hop
+        "transition_points_1b": [6, 53, 100, 147, 194],
+        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],
+    },
 }
-
-
-def _detect_start_edges(
-    signal: np.ndarray,
-    fs: int,
-    baud: int,
-    diff_thresh: float,
-    min_gap_bytes: bool = True,
-) -> List[int]:
-    """
-    Detect UART start-bit falling edges from an analog waveform using first-difference.
-
-    We gate edges so we don't re-trigger inside the same byte. If min_gap_bytes=True,
-    require at least ~1 byte (10 bits) spacing between accepted edges.
-    """
-    diff = np.diff(signal)
-    falling = np.where(diff < -abs(diff_thresh))[0]
-    spb = int(round(fs / baud))  # samples per bit
-    min_gap = 10 * spb if min_gap_bytes else spb
-
-    starts: List[int] = []
-    last = -min_gap
-    for idx in falling:
-        if idx - last >= min_gap:
-            starts.append(idx)
-            last = idx
-    return starts
-
-
-def _decode_uart_byte(
-    signal: np.ndarray, start_idx: int, fs: int, baud: int
-) -> Optional[int]:
-    """
-    Decode a single 8N1 UART byte starting from a *falling* start bit edge.
-    Returns 0..255 or None if start/stop checks fail.
-    """
-    spb = int(round(fs / baud))
-    mid = start_idx + spb // 2
-    if mid >= len(signal) or signal[mid] > 0:  # start bit should be low
-        return None
-
-    val = 0
-    for bit in range(8):
-        sample_point = start_idx + (bit + 1) * spb + spb // 2
-        if sample_point >= len(signal):
-            return None
-        bit_level = 1 if signal[sample_point] > 0 else 0
-        val |= bit_level << bit  # LSB first
-
-    stop_mid = start_idx + 9 * spb + spb // 2
-    if stop_mid < len(signal) and signal[stop_mid] < 0:  # stop bit should be high
-        return None
-    return val
 
 
 @dataclass
@@ -80,15 +65,9 @@ class DecodeStats:
 
 
 class WavSerialDecoder:
-    """
-    Decode Arduino serial bytes (8N1) embedded in .wav, then assemble 32-bit frame IDs
-    from 5x7-bit chunks (lab protocol). Includes lab findings:
-      - Site-specific flip option (NBU rooms),
-      - Known 5-byte frame, monotonic counter (+1 per frame),
-      - Robust start-edge spacing (≥1 byte),
-      - Frame-boundary realignment by maximizing monotonic run.
-    Also supports the lab's MATLAB **block sampler** path with fixed transition points
-    and offsets (no UART), which we call the *block method*.
+    """Decode frame IDs from mono WAV using a fixed-window, MATLAB-style block sampler.
+    The algorithm samples hard-coded bit tap positions inside each window and
+    concatenates five 7-bit bytes into a 35-bit counter. See `decode_by_block`.
     """
 
     def __init__(self, filepath: str) -> None:
@@ -96,12 +75,14 @@ class WavSerialDecoder:
         self.sample_rate: int = 0
         self.n_channels: int = 0
         self.sampwidth: int = 0
-        # audio as shape (N, C)
-        self.audio: np.ndarray = np.empty((0,), dtype=np.float32)
+        self.audio: np.ndarray = np.empty((0,), dtype=np.float32)  # mono
         self._read_wav()
 
     # ---------------------- I/O ----------------------
     def _read_wav(self) -> None:
+        """Read the WAV file into `self.audio` as float32 in [-1, 1].
+        Enforces mono input (raises if `n_channels != 1`).
+        """
         with contextlib.closing(wave.open(self.filepath, "rb")) as wf:
             self.sample_rate = wf.getframerate()
             self.n_channels = wf.getnchannels()
@@ -109,178 +90,150 @@ class WavSerialDecoder:
             n_frames = wf.getnframes()
             raw = wf.readframes(n_frames)
 
-        # Handle common widths; extend here if you encounter 24-bit
+        if self.n_channels != 1:
+            raise ValueError(f"Expected mono audio (1 channel), got {self.n_channels}")
+
         if self.sampwidth == 2:
             dtype = np.int16
             data = np.frombuffer(raw, dtype=dtype)
             norm = float(np.iinfo(dtype).max)
         elif self.sampwidth == 1:
             dtype = np.uint8
-            data = np.frombuffer(raw, dtype=dtype).astype(np.int16) - 128  # center
+            data = np.frombuffer(raw, dtype=dtype).astype(np.int16) - 128
             norm = 127.0
         else:
-            # Fallback: interpret as 16-bit
             dtype = np.int16
             data = np.frombuffer(raw, dtype=dtype)
             norm = float(np.iinfo(dtype).max)
 
-        # Expect mono (1 channel) audio for simplicity
-        if self.n_channels != 1:
-            raise ValueError(f"Expected mono audio (1 channel), got {self.n_channels}")
-        data = data.reshape(-1)
         self.audio = (data.astype(np.float32) / norm).astype(np.float32)
 
-    # ---------------------- Core decode ----------------------
-    def _decode_bytes_once(
-        self,
-        baud: int = 9600,
-        diff_thresh: Optional[float] = None,
-        invert: bool = False,
-    ) -> Tuple[List[int], int]:
-        sig = self.audio
-        sig = -sig if invert else sig
-        if diff_thresh is None:
-            # Make a small fraction of signal range; diff shrinks amplitude roughly
-            diff_thresh = 0.05 * (sig.max() - sig.min())
-            if diff_thresh <= 0:
-                diff_thresh = 0.01
-        starts = _detect_start_edges(
-            sig, self.sample_rate, baud, diff_thresh, min_gap_bytes=True
-        )
-        out: List[int] = []
-        for s in starts:
-            b = _decode_uart_byte(sig, s, self.sample_rate, baud)
-            if b is not None:
-                out.append(b)
-        return out, len(starts)
+    # ---------------------- Helpers ----------------------
+    def _get_cfg(self, site: str) -> Dict[str, object]:
+        """Return site config with 0-based indices and precomputed 7-bit offsets."""
+        cfg = BLOCK_PRESETS.get(site, BLOCK_PRESETS["jamail"]).copy()
+        cfg["trans"] = [x - 1 for x in cfg["transition_points_1b"]]
+        offs8 = [x - 1 for x in cfg["bit_offsets_1b"]]
+        cfg["offs7"] = offs8[:-1]
+        cfg["W"] = int(cfg["window_samples"])
+        cfg["stride"] = int(cfg["block_stride"])
+        return cfg
 
-    def decode_bytes(
-        self,
-        baud: int = 9600,
-        diff_thresh: Optional[float] = None,
-        site: Optional[str] = None,
-    ) -> Tuple[List[int], DecodeStats]:
+    def _normalize01(self, sig: np.ndarray) -> Optional[np.ndarray]:
+        """Normalize 1-D signal to [0,1]; return None if the signal is flat."""
+        s_min = float(sig.min())
+        s_max = float(sig.max())
+        if s_max <= s_min:
+            return None
+        return (sig - s_min) / (s_max - s_min)
+
+    def _binarize(self, sig01: np.ndarray, threshold: float) -> np.ndarray:
+        """Threshold normalized signal to {0,1} (uint8)."""
+        return (sig01 > threshold).astype(np.uint8)
+
+    def _maybe_flip(self, v: np.ndarray, do_flip: bool) -> np.ndarray:
+        """Reverse order if `do_flip` is True; no-op otherwise."""
+        return v[::-1] if do_flip else v
+
+    def _sample_window(
+        self, win: np.ndarray, trans: List[int], offs7: List[int]
+    ) -> Optional[List[int]]:
+        """Sample 5 bytes x 7 bits from `win`; return list of five values in [0,127].
+        Returns None if any tap would be out-of-range.
         """
-        Try normal and flipped polarity; pick the one yielding more *valid* bytes.
-        If a site preset is provided, respect its flip preference as a bias.
-        """
-        prefer_flip = SITE_PRESETS.get(site, {}).get("flip", None) if site else None
+        bytes5: List[int] = []
+        for t in trans:
+            try:
+                bits = [int(win[t + o]) for o in offs7]
+            except IndexError:
+                return None
+            bits = bits[::-1]  # bit-order flip (MSB..LSB) like MATLAB's flip(...,2)
+            bval = 0
+            for b in bits:
+                bval = (bval << 1) | b
+            bytes5.append(bval)
+        return bytes5
 
-        # Try both polarities
-        out_a, starts_a = self._decode_bytes_once(baud, diff_thresh, invert=False)
-        out_b, starts_b = self._decode_bytes_once(baud, diff_thresh, invert=True)
+    def _concat_bytes(self, bytes5: List[int]) -> int:
+        """Concatenate as b5‖b4‖b3‖b2‖b1 using 7 bits per byte → 35-bit integer."""
+        val = 0
+        for b in bytes5[::-1]:
+            val = (val << 7) | b
+        return val
 
-        # Choose according to site preference, else larger decoded count
-        if prefer_flip is True:
-            primary, starts, flipped = (out_b, starts_b, True)
-            secondary = out_a
-        elif prefer_flip is False:
-            primary, starts, flipped = (out_a, starts_a, False)
-            secondary = out_b
-        else:
-            if len(out_b) > len(out_a):
-                primary, starts, flipped = (out_b, starts_b, True)
-                secondary = out_a
+    def _longest_plus_one_span(self, vals: List[int]) -> int:
+        """Length of the longest contiguous run where successive deltas equal +1."""
+        if not vals:
+            return 0
+        best = cur = 1
+        for k in range(1, len(vals)):
+            if vals[k] - vals[k - 1] == 1:
+                cur += 1
+                if cur > best:
+                    best = cur
             else:
-                primary, starts, flipped = (out_a, starts_a, False)
-                secondary = out_b
+                cur = 1
+        return best
 
-        # If extremely few bytes, fall back to the other polarity
-        chosen = primary if len(primary) >= max(20, len(secondary)) else secondary
-        flipped = flipped if chosen is primary else not flipped
+    # ---------------------- Block sampler (MATLAB port) ----------------------
+    def decode_by_block(
+        self,
+        site: str = "jamail",
+        threshold: float = 0.5,
+    ) -> Tuple[List[int], DecodeStats]:
+        """Decode frame IDs with the MATLAB block method.
 
-        # Align to 5-byte frame boundary and compute stats
-        best_offset, span = self._find_best_frame_offset(chosen)
+        Steps:
+          1) Normalize audio to [0,1]; binarize at `threshold`.
+          2) Optionally flip the whole binary stream (site preset).
+          3) Scan for low (0) → take window of `W` samples; optionally flip window.
+          4) Within the window, sample 5x7 bits at fixed anchors/offsets.
+          5) Concatenate as b5‖b4‖b3‖b2‖b1 (7 bits each) to a 35-bit ID.
+          6) Advance by fixed stride; repeat. Flip final list to chronological order.
+        """
+        cfg = self._get_cfg(site)
+        sig01 = self._normalize01(self.audio)
+        if sig01 is None:
+            return [], DecodeStats(0, 0, bool(cfg["flip_signal"]), 0, 0)
+        bin_sig = self._binarize(sig01, threshold)
+        bin_sig = self._maybe_flip(bin_sig, bool(cfg["flip_signal"]))
+
+        N = bin_sig.size
+        frames: List[int] = []
+        starts = 0
+        i = 0
+        while i < N:
+            if bin_sig[i] == 1:
+                i += 1
+                continue
+            starts += 1
+            if i + cfg["W"] > N:
+                break
+            win = bin_sig[i : i + cfg["W"]]
+            win = self._maybe_flip(win, bool(cfg["flip_window"]))
+            bytes5 = self._sample_window(win, cfg["trans"], cfg["offs7"])
+            if bytes5 is None:
+                break
+            frames.append(self._concat_bytes(bytes5))
+            i += cfg["stride"]
+
+        frames = frames[::-1]  # restore chronological order
+        span = self._longest_plus_one_span(frames)
         stats = DecodeStats(
-            bytes_total=len(chosen),
-            starts_total=starts_a + starts_b,
-            flips=flipped,
-            best_offset=best_offset,
+            bytes_total=len(frames) * 5,
+            starts_total=starts,
+            flips=bool(cfg["flip_signal"]),
+            best_offset=0,
             monotonic_span=span,
         )
-        return chosen, stats
-
-    @staticmethod
-    def _find_best_frame_offset(byte_stream: List[int]) -> Tuple[int, int]:
-        """
-        Slide offsets 0..4 and pick the one that creates the longest *strictly
-        monotonic-by-1* run of reconstructed 32-bit counts.
-        Returns (best_offset, monotonic_span).
-        """
-
-        def counts_from_offset(off: int) -> List[int]:
-            counts: List[int] = []
-            i = off
-            while i + 4 < len(byte_stream):
-                val = 0
-                for j in range(5):
-                    val |= (byte_stream[i + j] & 0x7F) << (7 * j)
-                counts.append(val)
-                i += 5
-            return counts
-
-        best_off, best_span = 0, 0
-        for off in range(5):
-            cts = counts_from_offset(off)
-            if not cts:
-                continue
-            # longest consecutive +1 span
-            span = 1
-            curr = 1
-            for k in range(1, len(cts)):
-                if cts[k] - cts[k - 1] == 1:
-                    curr += 1
-                    span = max(span, curr)
-                else:
-                    curr = 1
-            if span > best_span:
-                best_span, best_off = span, off
-        return best_off, best_span
-
-    def reconstruct_counts(self, bytes_out: List[int], offset: int = 0) -> List[int]:
-        counts: List[int] = []
-        i = offset
-        while i + 4 < len(bytes_out):
-            val = 0
-            for j in range(5):
-                val |= (bytes_out[i + j] & 0x7F) << (7 * j)
-            counts.append(val)
-            i += 5
-        return counts
+        return frames, stats
 
     # ---------------------- High-level API ----------------------
     def parse_counts(
-        self,
-        baud: int = 9600,
-        diff_thresh: Optional[float] = None,
-        site: Optional[str] = None,
-        method: str = "auto",
+        self, site: str = "jamail", threshold: float = 0.5
     ) -> Tuple[List[int], DecodeStats]:
-        """Convenience: decode bytes → realign → counts, with site-specific hints."""
-        if method in ("uart", "auto"):
-            bytes_out, stats = self.decode_bytes(
-                baud=baud,
-                diff_thresh=diff_thresh,
-                site=site,
-            )
-            counts_uart = self.reconstruct_counts(bytes_out, offset=stats.best_offset)
-        else:
-            counts_uart, stats = [], DecodeStats(0, 0, False, 0, 0)
-
-        if method in ("block", "auto"):
-            counts_blk, stats_blk = self.decode_by_block(
-                site=site,
-            )
-        else:
-            counts_blk, stats_blk = [], DecodeStats(0, 0, False, 0, 0)
-
-        # Choose the better result: prefer longer monotonic span, then length
-        cand = [
-            (counts_uart, stats),
-            (counts_blk, stats_blk),
-        ]
-        cand.sort(key=lambda t: (t[1].monotonic_span, len(t[0])), reverse=True)
-        return cand[0]
+        """Decode with MATLAB-style block method only."""
+        return self.decode_by_block(site=site, threshold=threshold)
 
     # ---------------------- Utilities ----------------------
     def get_metadata(self) -> dict:
@@ -296,124 +249,12 @@ class WavSerialDecoder:
         dur = self.audio.shape[0] / self.sample_rate if self.sample_rate else 0.0
         return f"<WavSerialDecoder {self.filepath!r}: {self.n_channels}ch, {self.sample_rate}Hz, {dur:.2f}s>"
 
-    # ---------------------- Block sampler (MATLAB port) ----------------------
-    def decode_by_block(
-        self,
-        site: Optional[str] = None,
-        threshold: float = 0.5,
-    ) -> Tuple[List[int], DecodeStats]:
-        """
-        Port of the lab MATLAB method using fixed window and bit offsets.
-        Works on a binarized channel with optional global flip defined by site preset.
-        Steps:
-          1) Normalize channel to [0,1] and binarize with threshold
-          2) (Optional) flip full signal per site
-          3) Scan for low (0) start; on hit, take a window of `window_samples`
-          4) Within the window, sample bits at `transition_points + bit_offsets`
-          5) Build 5 bytes (MSB/LSB as in MATLAB), concatenate [b5..b1], to integer
-          6) Advance index by `block_stride`
-        Returns counts and simple stats (monotonic span computed from +1 deltas).
-        """
-        cfg = self._site_block_cfg(site)
-        sig = self.audio
-        # normalize to [0,1]
-        s_min, s_max = float(sig.min()), float(sig.max())
-        if s_max <= s_min:
-            return [], DecodeStats(0, 0, False, 0, 0)
-        sig01 = (sig - s_min) / (s_max - s_min)
-        bin_sig = (sig01 > threshold).astype(np.uint8)
-
-        if cfg["flip_signal"]:
-            bin_sig = bin_sig[::-1]
-
-        N = bin_sig.size
-        W = cfg["window_samples"]
-        stride = cfg["block_stride"]
-        trans = cfg["transition_points"]  # already 0-based
-        offs = cfg["bit_offsets"]  # already 0-based (8 items)
-
-        frames: List[int] = []
-        starts = 0
-        i = 0
-        while i < N:
-            if bin_sig[i] == 1:
-                i += 1
-                continue
-            # start at low
-            starts += 1
-            if i + W > N:
-                break
-            win = bin_sig[i : i + W]
-            if cfg["flip_window"]:
-                win = win[::-1]
-            # sample 5 bytes × 8 bits
-            bytes5 = []
-            for t in trans:
-                # MATLAB keeps 8 taps but drops the last bit (1:end-1) → 7-bit payload
-                bits = [int(win[t + o]) for o in offs[:-1]]  # drop last offset
-                bits = bits[::-1]  # MATLAB used flip(...,2) before conversion
-                # convert to integer from bit list (MSB first) → 7-bit value 0..127
-                bval = 0
-                for b in bits:
-                    bval = (bval << 1) | b
-                bytes5.append(bval)
-            # concat byte5..byte1 into a big integer (like MATLAB strcat order)
-            val = 0
-            for b in bytes5[::-1]:  # bytes5 = [b1..b5]; want [b5..b1]
-                val = (val << 7) | b  # concatenate 5×7-bit → 35-bit counter
-            frames.append(val)
-            i += stride
-
-        # MATLAB flips the final serial_id vector
-        frames = frames[::-1]
-
-        # compute monotonic +1 span
-        span = 1
-        cur = 1
-        for k in range(1, len(frames)):
-            if frames[k] - frames[k - 1] == 1:
-                cur += 1
-                span = max(span, cur)
-            else:
-                cur = 1
-
-        stats = DecodeStats(
-            bytes_total=len(frames) * 5,
-            starts_total=starts,
-            flips=cfg["flip_signal"],
-            best_offset=0,
-            monotonic_span=span,
-        )
-        return frames, stats
-
-    def _site_block_cfg(self, site: Optional[str]) -> Dict[str, object]:
-        # Defaults based on Jamail MATLAB code
-        if site == "nbu_sleep":
-            flip = True
-        elif site == "nbu_lounge":
-            flip = True
-        else:
-            flip = (
-                True  # Jamail script flipped full signal, then per-window flipped back
-            )
-        return {
-            "flip_signal": flip,
-            "flip_window": True,  # matches MATLAB: flip(binary_signal) then flip(window)
-            "window_samples": SITE_PRESETS.get(site or "jamail", {}).get(
-                "window_samples", 231
-            ),
-            "block_stride": 1100,
-            # Convert MATLAB 1-based to 0-based
-            "transition_points": [x - 1 for x in [6, 53, 100, 147, 194]],
-            "bit_offsets": [x - 1 for x in [4, 9, 14, 19, 23, 28, 33, 37]],
-        }
-
 
 if __name__ == "__main__":
-    dec = WavSerialDecoder(
-        "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/VideoTest03062025-03.wav"
-    )
-    counts, stats = dec.parse_counts(site="jamail", method="block")
+    audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/VideoTest03062025-03.wav"
+    site = "jamail"
+    decoder = WavSerialDecoder(audio)
+    counts, stats = decoder.parse_counts(site=site, threshold=0.5)
     print(stats)
     print(counts[:10])
     print(counts[-10:])
