@@ -349,9 +349,10 @@ class WavSerialDecoder:
             # sample 5 bytes × 8 bits
             bytes5 = []
             for t in trans:
-                bits = [int(win[t + o]) for o in offs]
+                # MATLAB keeps 8 taps but drops the last bit (1:end-1) → 7-bit payload
+                bits = [int(win[t + o]) for o in offs[:-1]]  # drop last offset
                 bits = bits[::-1]  # MATLAB used flip(...,2) before conversion
-                # convert to integer from bit list (MSB first)
+                # convert to integer from bit list (MSB first) → 7-bit value 0..127
                 bval = 0
                 for b in bits:
                     bval = (bval << 1) | b
@@ -359,7 +360,7 @@ class WavSerialDecoder:
             # concat byte5..byte1 into a big integer (like MATLAB strcat order)
             val = 0
             for b in bytes5[::-1]:  # bytes5 = [b1..b5]; want [b5..b1]
-                val = (val << 8) | b
+                val = (val << 7) | b  # concatenate 5×7-bit → 35-bit counter
             frames.append(val)
             i += stride
 
