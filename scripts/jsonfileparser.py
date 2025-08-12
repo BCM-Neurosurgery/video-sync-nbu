@@ -1,415 +1,238 @@
 #!/usr/bin/env python3
 """
-jsonfileparser.py
+jsonfileparser.py — minimal parser for the sync pipeline.
 
-Tiny, readable parser for Provenza Lab FLIR JSON sidecar files.
+What it returns (programmatic use)
+----------------------------------
+parse_json(path, prefer_serial=None) -> ParsedJSON, with:
+  - video_serial   : list[int]        # from chunk_serial_data (chosen camera column), leading -1s back-filled
+  - timestamps_ns  : list[int]        # corresponding timestamps (ns) for that same camera column
+  - measured_fps   : float            # robust FPS estimate from timestamp diffs
+  - plus small bits of context (segment_id, chosen_cam_serial, etc.)
 
-What it does
-------------
-- Loads one JSON file.
-- Validates required fields and consistent lengths.
-- Normalizes "real_times" into Python datetimes.
-- Exposes per-frame rows (timestamps, frame IDs, serial IDs).
-- Optionally back-fills leading -1 values in chunk_serial_data (per camera).
-- Provides handy summaries and CSV export.
+Assumptions
+-----------
+- JSON has keys: "serials", "timestamps", "chunk_serial_data".
+- Shapes are (num_frames x num_cameras). We only keep ONE camera column,
+  chosen by:
+    1) prefer_serial if provided and present, else
+    2) the column with the most non-negative serial IDs.
 
-Usage
------
-$ python jsonfileparser.py /path/to/TestVideo03062025_20250306_154133.json --summary
-$ python jsonfileparser.py /path/to/file.json --csv out.csv
-$ python jsonfileparser.py /path/to/file.json --no-fix-missing
-
-The module can also be imported and used programmatically.
-
-Design notes
-------------
-Columns in the per-frame arrays are assumed to be ordered the same way as the
-top-level "serials" array (one column per camera). This parser enforces shapes
-and keeps the association between camera index (0..2) and serial string.
+- Only *leading* -1 values in chunk_serial_data are back-filled.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 import argparse
-import csv
 import json
-import math
 import statistics
 
-# --------- Data containers ---------
+
+# ----------------- public container -----------------
 
 
 @dataclass(frozen=True)
-class CameraMeta:
-    """Metadata for one camera."""
-
-    serial: str
-    exposure_time_ms: Optional[float] = None
-    frame_rate_request_hz: Optional[float] = None
-    frame_rate_binning_hz: Optional[float] = None
-    info: Optional[Dict[str, Any]] = None
-
-
-@dataclass(frozen=True)
-class FrameRow:
-    """One video frame across all cameras."""
-
-    index: int
-    real_time: Optional[datetime]  # wall clock time, if present
-    frame_id: Optional[int]  # shared per-frame ID (if present)
-    timestamps_ns: Tuple[Optional[int], ...]  # len == num_cams
-    frame_id_abs: Tuple[Optional[int], ...]  # len == num_cams
-    serial_ids: Tuple[
-        Optional[int], ...
-    ]  # decoded Arduino IDs (chunk_serial_data), len == num_cams
-    serial_msg: Tuple[Optional[str], ...]  # raw serial msg strings, len == num_cams
-
-
-@dataclass
-class RecordingJSON:
-    """Parsed JSON with per-camera metadata and per-frame rows."""
-
+class ParsedJSON:
     path: Path
-    serials: Tuple[str, ...]
-    cameras: Tuple[CameraMeta, ...]
-    rows: List[FrameRow]
-    meta_info: Optional[Dict[str, Any]] = None
-
-    # ---------- Constructors ----------
-    @classmethod
-    def from_file(
-        cls, path: Path | str, *, fix_missing_serials: bool = True
-    ) -> "RecordingJSON":
-        path = Path(path)
-        with path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-
-        # Required keys we rely on
-        required: Tuple[str, ...] = (
-            "serials",
-            "real_times",
-            "timestamps",
-            "frame_id_abs",
-            "chunk_serial_data",
-            "serial_msg",
-        )
-        _ensure_keys(raw, required, context=str(path))
-
-        serials: Tuple[str, ...] = tuple(raw["serials"])
-        num_cams = len(serials)
-
-        # Optional fields
-        exposure_times = raw.get("exposure_times", [None] * num_cams)
-        frame_rates_req = raw.get("frame_rates_requested", [None] * num_cams)
-        frame_rates_bin = raw.get("frame_rates_binning", [None] * num_cams)
-        camera_info_map = raw.get("camera_info", {}) or {}
-
-        # Build camera meta in the exact serial order
-        cameras: List[CameraMeta] = []
-        for i, s in enumerate(serials):
-            cameras.append(
-                CameraMeta(
-                    serial=s,
-                    exposure_time_ms=_get_index_or_none(exposure_times, i),
-                    frame_rate_request_hz=_get_index_or_none(frame_rates_req, i),
-                    frame_rate_binning_hz=_get_index_or_none(frame_rates_bin, i),
-                    info=camera_info_map.get(s),
-                )
-            )
-
-        # Normalize arrays and shapes
-        real_times: List[Optional[datetime]] = _parse_datetimes(
-            raw.get("real_times", [])
-        )
-        timestamps: List[Tuple[Optional[int], ...]] = _normalize_2d(
-            raw["timestamps"], num_cams
-        )
-        frame_id_abs: List[Tuple[Optional[int], ...]] = _normalize_2d(
-            raw["frame_id_abs"], num_cams
-        )
-        serial_msg: List[Tuple[Optional[str], ...]] = _normalize_2d(
-            raw["serial_msg"], num_cams
-        )
-
-        # Some files also carry a per-frame shared "frame_id"
-        frame_id_shared: List[Optional[int]] = raw.get("frame_id") or [None] * len(
-            real_times
-        )
-        # Arduino per-camera serial IDs
-        chunk_serial_data: List[Tuple[Optional[int], ...]] = _normalize_2d(
-            raw["chunk_serial_data"], num_cams
-        )
-
-        # Shapes must match
-        n = _common_length(
-            real_times,
-            timestamps,
-            frame_id_abs,
-            serial_msg,
-            chunk_serial_data,
-            frame_id_shared,
-        )
-        if n == 0:
-            raise ValueError("No frames detected in JSON.")
-
-        # Align lengths  (truncate overly-long arrays to the shortest length to be robust)
-        real_times = real_times[:n]
-        timestamps = timestamps[:n]
-        frame_id_abs = frame_id_abs[:n]
-        serial_msg = serial_msg[:n]
-        chunk_serial_data = chunk_serial_data[:n]
-        frame_id_shared = frame_id_shared[:n]
-
-        # Optionally back-fill leading -1s in chunk_serial_data per camera
-        if fix_missing_serials:
-            chunk_serial_data = _backfill_leading_minus_ones(chunk_serial_data)
-
-        # Build row objects
-        rows: List[FrameRow] = []
-        for i in range(n):
-            rows.append(
-                FrameRow(
-                    index=i,
-                    real_time=real_times[i] if i < len(real_times) else None,
-                    frame_id=frame_id_shared[i] if i < len(frame_id_shared) else None,
-                    timestamps_ns=timestamps[i],
-                    frame_id_abs=frame_id_abs[i],
-                    serial_ids=chunk_serial_data[i],
-                    serial_msg=serial_msg[i],
-                )
-            )
-
-        return cls(
-            path=path,
-            serials=serials,
-            cameras=tuple(cameras),
-            rows=rows,
-            meta_info=raw.get("meta_info"),
-        )
-
-    # ---------- Convenience ----------
-    def fps_estimate(self) -> List[Optional[float]]:
-        """Estimate FPS per camera from timestamp deltas (nanoseconds)."""
-        num_cams = len(self.serials)
-        per_cam: List[Optional[float]] = []
-        for cam in range(num_cams):
-            ns = [
-                r.timestamps_ns[cam]
-                for r in self.rows
-                if r.timestamps_ns[cam] is not None
-            ]
-            if len(ns) < 2:
-                per_cam.append(None)
-                continue
-            diffs = [
-                b - a
-                for a, b in zip(ns, ns[1:])
-                if b is not None and a is not None and b > a
-            ]
-            if not diffs:
-                per_cam.append(None)
-                continue
-            mean_ns = statistics.mean(diffs)
-            per_cam.append(1e9 / mean_ns if mean_ns > 0 else None)
-        return per_cam
-
-    def to_csv(self, out_path: Path | str) -> Path:
-        """Write a wide CSV with one row per frame."""
-        out = Path(out_path)
-        num_cams = len(self.serials)
-        # Prepare headers
-        headers = [
-            "index",
-            "real_time",
-            "frame_id",
-        ]
-        for cam in range(num_cams):
-            s = self.serials[cam]
-            headers += [
-                f"ts_ns_{s}",
-                f"frame_id_abs_{s}",
-                f"serial_id_{s}",
-                f"serial_msg_{s}",
-            ]
-
-        with out.open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(headers)
-            for r in self.rows:
-                row = [r.index, _fmt_dt(r.real_time), r.frame_id]
-                for cam in range(num_cams):
-                    row += [
-                        r.timestamps_ns[cam],
-                        r.frame_id_abs[cam],
-                        r.serial_ids[cam],
-                        r.serial_msg[cam],
-                    ]
-                w.writerow(row)
-        return out
-
-    # ---------- Pretty printing ----------
-    def summary(self) -> str:
-        """Human-friendly one-paragraph summary."""
-        n = len(self.rows)
-        cams = ", ".join(self.serials)
-        fps = self.fps_estimate()
-        fps_str = ", ".join(
-            (
-                f"{self.serials[i]}: {fps[i]:.3f} Hz"
-                if fps[i]
-                else f"{self.serials[i]}: n/a"
-            )
-            for i in range(len(self.serials))
-        )
-        start = _fmt_dt(self.rows[0].real_time) if self.rows else "n/a"
-        stop = _fmt_dt(self.rows[-1].real_time) if self.rows else "n/a"
-        return (
-            f"{n} frames across {len(self.serials)} cameras [{cams}]. "
-            f"Real-time start: {start}, end: {stop}. "
-            f"FPS (est.): {fps_str}."
-        )
+    segment_id: str  # e.g., "TestVideo03062025_20250306_153829"
+    camera_serials: Tuple[str, ...]  # all serials in file
+    chosen_cam_index: int  # 0-based column used
+    chosen_cam_serial: str  # camera serial string (FLIR)
+    video_serial: List[int]  # per-frame serial IDs (after leading backfill)
+    timestamps_ns: List[int]  # per-frame timestamps (ns) for the same column
+    measured_fps: float  # estimated fps from timestamps
+    n_frames: int  # len(video_serial) == len(timestamps_ns)
 
 
-# --------- Helpers ---------
+# ----------------- public API -----------------
 
 
-def _ensure_keys(d: Dict[str, Any], keys: Iterable[str], *, context: str = "") -> None:
+def parse_json(path: str | Path, prefer_serial: Optional[str] = None) -> ParsedJSON:
+    """
+    Load a FLIR sidecar JSON and extract the minimal fields needed by the sync pipeline.
+
+    Parameters
+    ----------
+    path : str | Path
+        JSON path.
+    prefer_serial : Optional[str]
+        If provided and present in 'serials', use that camera column. Otherwise the
+        column with the most valid (>=0) serial IDs is used.
+
+    Returns
+    -------
+    ParsedJSON
+    """
+    path = Path(path)
+    raw = _load_json(path)
+    _ensure_keys(raw, ["serials", "timestamps", "chunk_serial_data"], context=str(path))
+
+    serials: List[str] = list(raw["serials"])
+    num_cams = len(serials)
+    if num_cams == 0:
+        raise ValueError("No cameras listed in 'serials'.")
+
+    # Normalize 2D arrays to (n_rows x num_cams)
+    timestamps = _normalize_2d(raw["timestamps"], num_cams)
+    chunks = _normalize_2d(raw["chunk_serial_data"], num_cams)
+
+    n = min(len(timestamps), len(chunks))
+    if n == 0:
+        raise ValueError("No frames in JSON (timestamps/chunk_serial_data empty).")
+    timestamps = timestamps[:n]
+    chunks = chunks[:n]
+
+    # Choose camera column
+    col_idx = _choose_column(serials, chunks, prefer_serial)
+
+    # Extract chosen column
+    ts_col = _col(timestamps, col_idx)
+    ch_col = _col(chunks, col_idx)
+
+    # Convert to ints and backfill leading -1s
+    ts_ns = [int(x) for x in ts_col if x is not None]
+    if len(ts_ns) != n:
+        # Keep it simple: require all timestamps for chosen column present
+        raise ValueError("Chosen camera column has missing timestamps.")
+    vid_serial = _backfill_leading_minus_ones([_to_int_or_minus1(x) for x in ch_col])
+
+    # FPS estimate (robust median of diffs, fall back to mean if needed)
+    diffs = [
+        b - a
+        for a, b in zip(ts_ns, ts_ns[1:])
+        if b is not None and a is not None and b > a
+    ]
+    if not diffs:
+        raise ValueError("Not enough timestamps to estimate FPS.")
+    try:
+        fps = 1e9 / statistics.median(diffs)
+    except statistics.StatisticsError:
+        fps = 1e9 / (sum(diffs) / len(diffs))
+
+    seg_id = path.stem  # "TestVideo03062025_20250306_153829"
+
+    return ParsedJSON(
+        path=path,
+        segment_id=seg_id,
+        camera_serials=tuple(serials),
+        chosen_cam_index=col_idx,
+        chosen_cam_serial=serials[col_idx],
+        video_serial=vid_serial,
+        timestamps_ns=ts_ns,
+        measured_fps=float(fps),
+        n_frames=n,
+    )
+
+
+# ----------------- helpers -----------------
+
+
+def _load_json(p: Path):
+    with p.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _ensure_keys(d: dict, keys: Sequence[str], *, context: str = ""):
     missing = [k for k in keys if k not in d]
     if missing:
         where = f" in {context}" if context else ""
         raise KeyError(f"Missing keys{where}: {', '.join(missing)}")
 
 
-def _get_index_or_none(seq: Sequence[Any], i: int) -> Optional[Any]:
-    try:
-        return seq[i]
-    except Exception:
-        return None
-
-
 def _normalize_2d(
-    matrix: Sequence[Sequence[Any]], width: int
-) -> List[Tuple[Optional[Any], ...]]:
-    """Ensure a list of rows, each a tuple of length == width, coercing missing entries to None."""
-    out: List[Tuple[Optional[Any], ...]] = []
+    matrix: Sequence[Sequence[object]], width: int
+) -> List[Tuple[Optional[object], ...]]:
+    out: List[Tuple[Optional[object], ...]] = []
     for row in matrix:
-        if row is None:
-            out.append(tuple([None] * width))
+        r = list(row) if row is not None else []
+        if len(r) < width:
+            r += [None] * (width - len(r))
+        elif len(r) > width:
+            r = r[:width]
+        out.append(tuple(r))
+    return out
+
+
+def _col(matrix: Sequence[Sequence[object]], j: int) -> List[Optional[object]]:
+    return [row[j] for row in matrix]
+
+
+def _choose_column(
+    serials: List[str],
+    chunks: List[Tuple[Optional[object], ...]],
+    prefer: Optional[str],
+) -> int:
+    if prefer and prefer in serials:
+        return serials.index(prefer)
+    # Count valid (>=0 int) entries per column; choose the max
+    num_cams = len(serials)
+    counts = [0] * num_cams
+    for col in range(num_cams):
+        c = 0
+        for row in chunks:
+            v = row[col]
+            if isinstance(v, int) and v >= 0:
+                c += 1
+        counts[col] = c
+    # Argmax with stable tie-break on lower index
+    best = max(range(num_cams), key=lambda i: counts[i])
+    return best
+
+
+def _to_int_or_minus1(x: Optional[object]) -> int:
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        return int(x)
+    return -1
+
+
+def _backfill_leading_minus_ones(col: List[int]) -> List[int]:
+    """Back-fill only leading -1s using the first valid value stepping backwards by 1."""
+    out = list(col)
+    # find first valid index
+    first_idx = next((i for i, v in enumerate(out) if v >= 0), None)
+    if first_idx is None:
+        return out
+    first_val = out[first_idx]
+    for i in range(first_idx - 1, -1, -1):
+        if out[i] == -1:
+            out[i] = first_val - (first_idx - i)
         else:
-            # Coerce to list, then pad/truncate
-            r = list(row)
-            if len(r) < width:
-                r = r + [None] * (width - len(r))
-            elif len(r) > width:
-                r = r[:width]
-            out.append(tuple(r))
+            break
     return out
 
 
-def _parse_datetimes(strings: Sequence[str]) -> List[Optional[datetime]]:
-    out: List[Optional[datetime]] = []
-    for s in strings:
-        if not s:
-            out.append(None)
-            continue
-        # Accept "YYYY-MM-DD HH:MM:SS.mmm" and "YYYY-MM-DD HH:MM:SS" (fallback)
-        try:
-            out.append(datetime.strptime(s, "%Y-%m-%d %H:%M:%S.%f"))
-        except ValueError:
-            try:
-                out.append(datetime.strptime(s, "%Y-%m-%d %H:%M:%S"))
-            except ValueError:
-                out.append(None)
-    return out
-
-
-def _common_length(*arrays: Sequence[Any]) -> int:
-    """Return the minimum length among sequences (ignoring Nones) to keep things robust."""
-    lens = [len(a) for a in arrays if a is not None]
-    return min(lens) if lens else 0
-
-
-def _fmt_dt(dt: Optional[datetime]) -> str:
-    return (
-        dt.isoformat(sep=" ", timespec="milliseconds")
-        if isinstance(dt, datetime)
-        else ""
-    )
-
-
-def _backfill_leading_minus_ones(
-    matrix: List[Tuple[Optional[int], ...]],
-) -> List[Tuple[Optional[int], ...]]:
-    """Fill leading -1s per camera using the first valid value and stepping backwards by 1 per frame.
-    Non-leading -1s are left as-is.
-    """
-    if not matrix:
-        return matrix
-    num_cams = len(matrix[0])
-    cols = [[row[c] for row in matrix] for c in range(num_cams)]
-
-    for c in range(num_cams):
-        col = cols[c]
-        # Find first index with a valid (>= 0) integer
-        first_idx = next(
-            (i for i, v in enumerate(col) if isinstance(v, int) and v >= 0), None
-        )
-        if first_idx is None:
-            # Nothing to do for this camera
-            continue
-        first_val = col[first_idx]
-        # Back-fill only the leading -1s before the first_idx
-        for i in range(first_idx - 1, -1, -1):
-            if col[i] == -1:
-                col[i] = first_val - (first_idx - i)
-            else:
-                break  # stop at the first non -1 we encounter before the valid run
-
-        cols[c] = col
-
-    # Re-assemble rows
-    filled = [tuple(cols[c][r] for c in range(num_cams)) for r in range(len(matrix))]
-    return filled
-
-
-# --------- CLI ---------
+# ----------------- tiny CLI (optional) -----------------
 
 
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Parse a FLIR JSON file."
+        description="Minimal JSON parser for the sync pipeline."
     )
     p.add_argument("json_path", type=str, help="Path to JSON file.")
     p.add_argument(
-        "--csv", type=str, default=None, help="Optional path to write a CSV export."
+        "--prefer-serial",
+        type=str,
+        default=None,
+        help="Prefer this camera serial if present.",
     )
-    p.add_argument(
-        "--summary", action="store_true", help="Print a short summary to stdout."
-    )
-    p.add_argument(
-        "--no-fix-missing",
-        action="store_true",
-        help="Do NOT back-fill leading -1 values in chunk_serial_data.",
-    )
+    p.add_argument("--summary", action="store_true", help="Print a short summary.")
     return p
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = _build_argparser().parse_args(argv)
-    rec = RecordingJSON.from_file(
-        args.json_path, fix_missing_serials=not args.no_fix_missing
-    )
-
+    ap = _build_argparser()
+    args = ap.parse_args(argv)
+    pj = parse_json(args.json_path, prefer_serial=args.prefer_serial)
     if args.summary:
-        print(rec.summary())
-
-    if args.csv:
-        out = rec.to_csv(args.csv)
-        print(f"Wrote {out}")
+        print(
+            f"{pj.segment_id}: {pj.n_frames} frames | chosen cam {pj.chosen_cam_serial} "
+            f"({pj.chosen_cam_index}) | fps≈{pj.measured_fps:.6f}"
+        )
 
 
 if __name__ == "__main__":
