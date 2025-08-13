@@ -1,3 +1,4 @@
+import os
 import wave
 import contextlib
 from dataclasses import dataclass
@@ -6,11 +7,20 @@ import numpy as np
 
 """
 Clean, MATLAB-style block decoder for frame IDs embedded in audio.
-- Mono WAV only (raises if not mono)
+Now supports WAV **and** MP3 (single enforced path for MP3 via pydub+ffmpeg).
+
+Dependencies
+------------
+- WAV: built-in `wave` (unchanged). Enforces **mono** WAV input.
+- MP3: `pydub` (Python package) **and** `ffmpeg` (system binary on PATH).
+  If either is missing, an informative error is raised.
+
+Decoding approach (unchanged)
+-----------------------------
 - Binarize @ 0.5
-- Global flip of full binary stream
+- Optional global flip of full binary stream (site preset)
 - For each detected low start, take a fixed window (default 231 samples)
-- Flip the window, sample 5x(8 taps), drop last tap → 7-bit per byte
+- Optional flip of the window; sample 5x(8 taps), drop last tap → 7-bit per byte
 - Concatenate bytes as [b5‖b4‖b3‖b2‖b1] (each 7-bit) → 35-bit counter
 - Advance by fixed stride (default 1100 samples)
 - Flip final vector to restore chronological order
@@ -34,13 +44,7 @@ BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
         "flip_window": True,
         "window_samples": 536,  # empirically observed at NBU sleep
         "block_stride": 1100,  # keep same unless you have a measured stride
-        "transition_points_1b": [
-            6,
-            53,
-            100,
-            147,
-            194,
-        ],
+        "transition_points_1b": [6, 53, 100, 147, 194],
         "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
     },
     # NBU Lounge (empirical)
@@ -65,9 +69,13 @@ class DecodeStats:
 
 
 class WavSerialDecoder:
-    """Decode frame IDs from mono WAV using a fixed-window, MATLAB-style block sampler.
-    The algorithm samples hard-coded bit tap positions inside each window and
-    concatenates five 7-bit bytes into a 35-bit counter. See `decode_by_block`.
+    """Decode frame IDs from mono audio (WAV or MP3) using a fixed-window, MATLAB-style sampler.
+
+    File handling
+    -------------
+    - `.wav`: loaded via Python's `wave` module; **must be mono** (raises otherwise).
+    - `.mp3`: loaded via **pydub + ffmpeg** (single enforced path). Any multi-channel MP3
+      is **downmixed to mono** (mean over channels) for decoding.
     """
 
     def __init__(self, filepath: str) -> None:
@@ -75,14 +83,39 @@ class WavSerialDecoder:
         self.sample_rate: int = 0
         self.n_channels: int = 0
         self.sampwidth: int = 0
-        self.audio: np.ndarray = np.empty((0,), dtype=np.float32)  # mono
-        self._read_wav()
+        self.audio: np.ndarray = np.empty(
+            (0,), dtype=np.float32
+        )  # mono float32 in [-1, 1]
+        self._read_audio()
 
-    # ---------------------- I/O ----------------------
-    def _read_wav(self) -> None:
-        """Read the WAV file into `self.audio` as float32 in [-1, 1].
-        Enforces mono input (raises if `n_channels != 1`).
+    # ---------------------- I/O (WAV + MP3) ----------------------
+    def _read_audio(self) -> None:
+        """Unified reader: WAV via `wave` (strict mono), MP3 via pydub+ffmpeg.
+        Produces self.audio as 1-D float32 mono in [-1, 1].
         """
+        ext = os.path.splitext(self.filepath)[1].lower()
+        if ext == ".wav":
+            self._read_wav_strict()
+        elif ext == ".mp3":
+            self._read_mp3_with_pydub()
+            # Downmix MP3 to mono for the decoder pipeline
+            if self.audio.ndim == 2:
+                self.audio = self.audio.mean(axis=1).astype(np.float32)
+                self.n_channels = 1
+            elif self.audio.ndim == 1:
+                self.n_channels = 1
+            else:
+                raise ValueError("Decoded MP3 has unexpected shape.")
+        else:
+            raise ValueError(
+                f"Unsupported format {ext}. Only .wav and .mp3 are supported."
+            )
+
+        # Final clamp (safety)
+        self.audio = np.clip(self.audio, -1.0, 1.0).astype(np.float32)
+
+    def _read_wav_strict(self) -> None:
+        """Original WAV reader; enforces mono input and converts to float32 in [-1, 1]."""
         with contextlib.closing(wave.open(self.filepath, "rb")) as wf:
             self.sample_rate = wf.getframerate()
             self.n_channels = wf.getnchannels()
@@ -91,7 +124,7 @@ class WavSerialDecoder:
             raw = wf.readframes(n_frames)
 
         if self.n_channels != 1:
-            raise ValueError(f"Expected mono audio (1 channel), got {self.n_channels}")
+            raise ValueError(f"Expected mono WAV (1 channel), got {self.n_channels}")
 
         if self.sampwidth == 2:
             dtype = np.int16
@@ -102,11 +135,55 @@ class WavSerialDecoder:
             data = np.frombuffer(raw, dtype=dtype).astype(np.int16) - 128
             norm = 127.0
         else:
+            # Fallback: treat as int16
             dtype = np.int16
             data = np.frombuffer(raw, dtype=dtype)
             norm = float(np.iinfo(dtype).max)
 
         self.audio = (data.astype(np.float32) / norm).astype(np.float32)
+
+    def _read_mp3_with_pydub(self) -> None:
+        """MP3 reader using pydub+ffmpeg (single enforced path). Raises if unavailable.
+
+        Sets:
+            self.sample_rate, self.n_channels, self.sampwidth, self.audio (shape (S, C) float32)
+        """
+        try:
+            from pydub import AudioSegment
+            from pydub.utils import which
+        except Exception as e:
+            raise ImportError(
+                "MP3 support requires 'pydub'. Install with: pip install pydub"
+            ) from e
+
+        ffmpeg_path = which("ffmpeg")
+        if not ffmpeg_path:
+            raise RuntimeError(
+                "MP3 decoding requires 'ffmpeg' on PATH. Install it (e.g., apt/yum/brew) "
+                "and ensure the 'ffmpeg' binary is discoverable."
+            )
+
+        try:
+            seg = AudioSegment.from_file(self.filepath)  # uses ffmpeg under the hood
+        except Exception as e:
+            raise RuntimeError(f"ffmpeg failed to decode MP3: {e}") from e
+
+        self.sample_rate = int(seg.frame_rate)
+        self.n_channels = int(seg.channels)
+        self.sampwidth = int(seg.sample_width)  # bytes per sample per channel
+
+        # Convert to float32 array in [-1, 1). pydub returns interleaved integer samples.
+        arr = np.array(seg.get_array_of_samples())
+        if self.n_channels > 1:
+            arr = arr.reshape(-1, self.n_channels)
+        else:
+            arr = arr.reshape(-1, 1)
+
+        bits = 8 * self.sampwidth
+        # Denominator for signed PCM to map to [-1, 1]
+        denom = float((2 ** (bits - 1)) - 1) if bits > 8 else 127.0
+        data = (arr.astype(np.float32) / denom).astype(np.float32)
+        self.audio = data  # (S, C) float32
 
     # ---------------------- Helpers ----------------------
     def _get_cfg(self, site: str) -> Dict[str, object]:
@@ -138,7 +215,7 @@ class WavSerialDecoder:
     def _sample_window(
         self, win: np.ndarray, trans: List[int], offs7: List[int]
     ) -> Optional[List[int]]:
-        """Sample 5 bytes x 7 bits from `win`; return list of five values in [0,127].
+        """Sample 5 bytes × 7 bits from `win`; return list of five values in [0,127].
         Returns None if any tap would be out-of-range.
         """
         bytes5: List[int] = []
@@ -251,7 +328,9 @@ class WavSerialDecoder:
 
 
 if __name__ == "__main__":
-    audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/VideoTest03062025-03.wav"
+    # Example usage (WAV path shown; MP3 also supported)
+    # audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/VideoTest03062025-03.wav"
+    audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/TRBD001_06-16-2025-03.mp3"
     site = "jamail"
     decoder = WavSerialDecoder(audio)
     counts, stats = decoder.parse_counts(site=site, threshold=0.5)
