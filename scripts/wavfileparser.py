@@ -1,29 +1,28 @@
 import os
+import csv
 import wave
 import contextlib
+import argparse
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 import numpy as np
 
 """
 Clean, MATLAB-style block decoder for frame IDs embedded in audio.
-Now supports WAV **and** MP3 (single enforced path for MP3 via pydub+ffmpeg).
+Supports WAV (strict mono) and MP3 (via pydub+ffmpeg). Adds CSV export of decoded serials.
 
-Dependencies
-------------
-- WAV: built-in `wave` (unchanged). Enforces **mono** WAV input.
-- MP3: `pydub` (Python package) **and** `ffmpeg` (system binary on PATH).
-  If either is missing, an informative error is raised.
+Usage
+-----
+python wav_serial_decoder_with_mp3_and_csv.py /path/to/audio.(wav|mp3) \
+    --site jamail \
+    --threshold 0.5 \
+    --csv out.csv
 
-Decoding approach (unchanged)
------------------------------
-- Binarize @ 0.5
-- Optional global flip of full binary stream (site preset)
-- For each detected low start, take a fixed window (default 231 samples)
-- Optional flip of the window; sample 5x(8 taps), drop last tap → 7-bit per byte
-- Concatenate bytes as [b5‖b4‖b3‖b2‖b1] (each 7-bit) → 35-bit counter
-- Advance by fixed stride (default 1100 samples)
-- Flip final vector to restore chronological order
+CSV format
+----------
+Columns: file,site,sample_rate,channels,index,serial
+Each row corresponds to one decoded serial value in chronological order.
 """
 
 # ---- Block presets (from lab MATLAB) ----
@@ -76,6 +75,10 @@ class WavSerialDecoder:
     - `.wav`: loaded via Python's `wave` module; **must be mono** (raises otherwise).
     - `.mp3`: loaded via **pydub + ffmpeg** (single enforced path). Any multi-channel MP3
       is **downmixed to mono** (mean over channels) for decoding.
+
+    Extras
+    ------
+    - `save_counts_csv(path, counts, site)` writes decoded serials to CSV.
     """
 
     def __init__(self, filepath: str) -> None:
@@ -215,7 +218,7 @@ class WavSerialDecoder:
     def _sample_window(
         self, win: np.ndarray, trans: List[int], offs7: List[int]
     ) -> Optional[List[int]]:
-        """Sample 5 bytes × 7 bits from `win`; return list of five values in [0,127].
+        """Sample 5 bytes x 7 bits from `win`; return list of five values in [0,127].
         Returns None if any tap would be out-of-range.
         """
         bytes5: List[int] = []
@@ -312,6 +315,32 @@ class WavSerialDecoder:
         """Decode with MATLAB-style block method only."""
         return self.decode_by_block(site=site, threshold=threshold)
 
+    def save_counts_csv(
+        self, out_path: str | Path, counts: List[int], site: str = ""
+    ) -> Path:
+        """Save decoded serials to CSV. Returns the output path.
+
+        CSV columns: file,site,sample_rate,channels,index,serial
+        """
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        meta = self.get_metadata()
+        with out.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["file", "site", "sample_rate", "channels", "index", "serial"])
+            for i, val in enumerate(counts):
+                w.writerow(
+                    [
+                        meta["filepath"],
+                        site,
+                        meta["sample_rate"],
+                        meta["channels"],
+                        i,
+                        int(val),
+                    ]
+                )
+        return out
+
     # ---------------------- Utilities ----------------------
     def get_metadata(self) -> dict:
         return {
@@ -327,13 +356,37 @@ class WavSerialDecoder:
         return f"<WavSerialDecoder {self.filepath!r}: {self.n_channels}ch, {self.sample_rate}Hz, {dur:.2f}s>"
 
 
-if __name__ == "__main__":
-    # Example usage (WAV path shown; MP3 also supported)
-    # audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/VideoTest03062025-03.wav"
-    audio = "/home/auto/CODE/utils/video-sync-nbu/data/jamil_exampe/AUDIO/TRBD001_06-16-2025-03.mp3"
-    site = "jamail"
-    decoder = WavSerialDecoder(audio)
-    counts, stats = decoder.parse_counts(site=site, threshold=0.5)
+def _main() -> None:
+    p = argparse.ArgumentParser(
+        description="Decode frame IDs from WAV/MP3 and optionally save CSV."
+    )
+    p.add_argument("audio", help="Path to input audio (.wav or .mp3)")
+    p.add_argument(
+        "--site", default="jamail", help="Site preset (jamail|nbu_sleep|nbu_lounge)"
+    )
+    p.add_argument(
+        "--threshold", type=float, default=0.5, help="Binarization threshold in [0,1]"
+    )
+    p.add_argument(
+        "--csv", dest="csv_out", help="If set, save decoded serials to this CSV path"
+    )
+    args = p.parse_args()
+
+    dec = WavSerialDecoder(args.audio)
+    counts, stats = dec.parse_counts(site=args.site, threshold=args.threshold)
+
+    # Console preview
     print(stats)
-    print(counts[:10])
-    print(counts[-10:])
+    if counts:
+        print("first 10:", counts[:10])
+        print("last 10 :", counts[-10:])
+    else:
+        print("No counts decoded.")
+
+    if args.csv_out:
+        out = dec.save_counts_csv(args.csv_out, counts, site=args.site)
+        print(f"Saved {len(counts)} rows to {out}")
+
+
+if __name__ == "__main__":
+    _main()
