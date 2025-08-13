@@ -21,8 +21,12 @@ python wav_serial_decoder_with_mp3_and_csv.py /path/to/audio.(wav|mp3) \
 
 CSV format
 ----------
-Columns: file,site,sample_rate,channels,index,serial
+Columns: file,site,sample_rate,channels,index,serial,start_sample,end_sample
 Each row corresponds to one decoded serial value in chronological order.
+
+*** Minimal update: ***
+- Along with each decoded frame, also record its start/end sample indices (in the
+  original, non-flipped signal). Indices are start inclusive, end exclusive.
 """
 
 # ---- Block presets (from lab MATLAB) ----
@@ -78,7 +82,7 @@ class WavSerialDecoder:
 
     Extras
     ------
-    - `save_counts_csv(path, counts, site)` writes decoded serials to CSV.
+    - `save_counts_csv(path, counts, site)` writes decoded serials + indices to CSV.
     """
 
     def __init__(self, filepath: str) -> None:
@@ -89,6 +93,8 @@ class WavSerialDecoder:
         self.audio: np.ndarray = np.empty(
             (0,), dtype=np.float32
         )  # mono float32 in [-1, 1]
+        # holds (start_sample, end_sample) for the last decode_by_block() call, chronological
+        self.frame_ranges: List[Tuple[int, int]] = []
         self._read_audio()
 
     # ---------------------- I/O (WAV + MP3) ----------------------
@@ -270,16 +276,25 @@ class WavSerialDecoder:
           4) Within the window, sample 5x7 bits at fixed anchors/offsets.
           5) Concatenate as b5‖b4‖b3‖b2‖b1 (7 bits each) to a 35-bit ID.
           6) Advance by fixed stride; repeat. Flip final list to chronological order.
+
+        *** Minimal update: also records per-frame sample indices (start inclusive, end exclusive)
+        into `self.frame_ranges` in chronological order. ***
         """
         cfg = self._get_cfg(site)
         sig01 = self._normalize01(self.audio)
         if sig01 is None:
+            # Reset frame ranges when nothing decoded
+            self.frame_ranges = []
             return [], DecodeStats(0, 0, bool(cfg["flip_signal"]), 0, 0)
         bin_sig = self._binarize(sig01, threshold)
-        bin_sig = self._maybe_flip(bin_sig, bool(cfg["flip_signal"]))
+        flipped = bool(cfg["flip_signal"])  # remember if we flipped the stream
+        bin_sig = self._maybe_flip(bin_sig, flipped)
 
         N = bin_sig.size
         frames: List[int] = []
+        ranges_tmp: List[Tuple[int, int]] = (
+            []
+        )  # (start_idx_current_space, end_idx_exclusive)
         starts = 0
         i = 0
         while i < N:
@@ -295,14 +310,23 @@ class WavSerialDecoder:
             if bytes5 is None:
                 break
             frames.append(self._concat_bytes(bytes5))
+            ranges_tmp.append((i, i + cfg["W"]))
             i += cfg["stride"]
 
+        # Map ranges back to original orientation, then reverse to chronological to match `frames`
+        if flipped:
+            mapped = [(N - e, N - s) for (s, e) in ranges_tmp]
+        else:
+            mapped = ranges_tmp
+
         frames = frames[::-1]  # restore chronological order
+        self.frame_ranges = mapped[::-1]
+
         span = self._longest_plus_one_span(frames)
         stats = DecodeStats(
             bytes_total=len(frames) * 5,
             starts_total=starts,
-            flips=bool(cfg["flip_signal"]),
+            flips=flipped,
             best_offset=0,
             monotonic_span=span,
         )
@@ -320,15 +344,28 @@ class WavSerialDecoder:
     ) -> Path:
         """Save decoded serials to CSV. Returns the output path.
 
-        CSV columns: file,site,sample_rate,channels,index,serial
+        CSV columns: file,site,sample_rate,channels,index,serial,start_sample,end_sample
         """
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         meta = self.get_metadata()
+        ranges = getattr(self, "frame_ranges", []) or []
         with out.open("w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["file", "site", "sample_rate", "channels", "index", "serial"])
+            w.writerow(
+                [
+                    "file",
+                    "site",
+                    "sample_rate",
+                    "channels",
+                    "index",
+                    "serial",
+                    "start_sample",
+                    "end_sample",
+                ]
+            )
             for i, val in enumerate(counts):
+                s, e = ranges[i] if i < len(ranges) else ("", "")
                 w.writerow(
                     [
                         meta["filepath"],
@@ -337,6 +374,8 @@ class WavSerialDecoder:
                         meta["channels"],
                         i,
                         int(val),
+                        s,
+                        e,
                     ]
                 )
         return out
@@ -380,6 +419,9 @@ def _main() -> None:
     if counts:
         print("first 10:", counts[:10])
         print("last 10 :", counts[-10:])
+        # Optional peek at ranges
+        print("ranges first 3:", dec.frame_ranges[:3])
+        print("ranges last 3 :", dec.frame_ranges[-3:])
     else:
         print("No counts decoded.")
 
