@@ -7,6 +7,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 import numpy as np
+import shutil
+import subprocess
 
 """
 Clean, MATLAB-style block decoder for frame IDs embedded in audio.
@@ -14,7 +16,7 @@ Supports WAV (strict mono) and MP3 (via pydub+ffmpeg). Adds CSV export of decode
 
 Usage
 -----
-python wav_serial_decoder_with_mp3_and_csv.py /path/to/audio.(wav|mp3) \
+python wavfileparser.py /path/to/audio.(wav|mp3) \
     --site jamail \
     --threshold 0.5 \
     --csv out.csv
@@ -24,10 +26,19 @@ CSV format
 Columns: file,site,sample_rate,channels,index,serial,start_sample,end_sample
 Each row corresponds to one decoded serial value in chronological order.
 
-*** Minimal update: ***
-- Along with each decoded frame, also record its start/end sample indices (in the
-  original, non-flipped signal). Indices are start inclusive, end exclusive.
+Recent additions
+----------------
+1) Per-frame sample ranges (start/end indices) recorded to CSV.
+2) ffmpeg-based splitter: --split-minutes K [--split-outdir DIR --split-suffix SFX]
+   Writes mono 16-bit WAV chunks <stem>_<suffix>NNN.wav and EXITS before decoding.
+3) **Size guards**:
+   - Hard stop for MP3 near ≥4GB (pydub limitation).
+   - Soft cap for any input via env VIDEOSYNC_DECODE_MAX_BYTES (default: 2 GiB).
 """
+
+# ---- Size guard thresholds ----
+MP3_PYDUB_SIZE_HARD_LIMIT = 4_000_000_000  # ~4GB; pydub/ffmpeg temp WAV header limit
+MAX_DECODE_BYTES_DEFAULT = 2 * 1024**3  # 2 GiB soft cap unless overridden by env
 
 # ---- Block presets (from lab MATLAB) ----
 BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
@@ -103,6 +114,7 @@ class WavSerialDecoder:
         Produces self.audio as 1-D float32 mono in [-1, 1].
         """
         ext = os.path.splitext(self.filepath)[1].lower()
+        self._size_guard(ext)
         if ext == ".wav":
             self._read_wav_strict()
         elif ext == ".mp3":
@@ -122,6 +134,37 @@ class WavSerialDecoder:
 
         # Final clamp (safety)
         self.audio = np.clip(self.audio, -1.0, 1.0).astype(np.float32)
+
+    def _size_guard(self, ext: str) -> None:
+        """Refuse to decode files that are too large to be handled reliably in-process.
+        - Hard stop for MP3 near 4GB (pydub limitation).
+        - Soft cap for any input (default 2 GiB). Override with env VIDEOSYNC_DECODE_MAX_BYTES.
+        Suggests using --split-minutes.
+        """
+        try:
+            fbytes = os.path.getsize(self.filepath)
+        except OSError:
+            return
+        # Env override
+        env = os.getenv("VIDEOSYNC_DECODE_MAX_BYTES")
+        try:
+            soft_cap = int(env) if env else MAX_DECODE_BYTES_DEFAULT
+        except Exception:
+            soft_cap = MAX_DECODE_BYTES_DEFAULT
+
+        if ext == ".mp3" and fbytes >= MP3_PYDUB_SIZE_HARD_LIMIT:
+            raise RuntimeError(
+                "Input MP3 is ~>=4GB; direct decoding is unsafe. "
+                "Run splitting first, e.g.: \n"
+                "  python wavfileparser.py <file>.mp3 --split-minutes 5\n"
+                "This writes <stem>_chunkNNN.wav files ready for decoding."
+            )
+        if fbytes >= soft_cap:
+            raise RuntimeError(
+                f"Input file is {fbytes} bytes, exceeding safe decode cap {soft_cap} bytes. "
+                "Split into chunks first, e.g.:\n"
+                "  python wavfileparser.py <file> --split-minutes 10"
+            )
 
     def _read_wav_strict(self) -> None:
         """Original WAV reader; enforces mono input and converts to float32 in [-1, 1]."""
@@ -277,8 +320,8 @@ class WavSerialDecoder:
           5) Concatenate as b5‖b4‖b3‖b2‖b1 (7 bits each) to a 35-bit ID.
           6) Advance by fixed stride; repeat. Flip final list to chronological order.
 
-        *** Minimal update: also records per-frame sample indices (start inclusive, end exclusive)
-        into `self.frame_ranges` in chronological order. ***
+        Also records per-frame sample indices (start inclusive, end exclusive)
+        into `self.frame_ranges` in chronological order.
         """
         cfg = self._get_cfg(site)
         sig01 = self._normalize01(self.audio)
@@ -395,6 +438,68 @@ class WavSerialDecoder:
         return f"<WavSerialDecoder {self.filepath!r}: {self.n_channels}ch, {self.sample_rate}Hz, {dur:.2f}s>"
 
 
+# ---------------------- ffmpeg-based splitter ----------------------
+def split_audio_file(
+    input_path: str | Path,
+    minutes: int,
+    outdir: str | Path | None = None,
+    suffix: str = "chunk",
+    mono: bool = True,
+) -> List[Path]:
+    """Split an audio file into K-minute chunks using ffmpeg segment muxer.
+    - Works for huge MP3/WAV without loading into memory.
+    - Outputs mono 16-bit WAV chunks named <stem>_<suffix>NNN.wav in outdir (default: input's dir).
+    Returns a sorted list of created Paths.
+    """
+    if minutes <= 0:
+        raise ValueError("minutes must be a positive integer")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH. Please install ffmpeg.")
+
+    inp = Path(input_path)
+    outd = Path(outdir) if outdir else inp.parent
+    outd.mkdir(parents=True, exist_ok=True)
+    stem = inp.stem
+    pattern = outd / f"{stem}_{suffix}%03d.wav"
+
+    # Clean up any existing matching chunks to avoid mixing old/new files
+    for old in outd.glob(f"{stem}_{suffix}[0-9][0-9][0-9].wav"):
+        try:
+            old.unlink()
+        except Exception:
+            pass
+
+    seg_seconds = int(minutes * 60)
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(inp),
+        "-f",
+        "segment",
+        "-segment_time",
+        str(seg_seconds),
+        "-reset_timestamps",
+        "1",
+    ]
+    if mono:
+        cmd += ["-ac", "1"]
+    # Write PCM 16-bit WAV to be friendly with the existing decoder
+    cmd += ["-c:a", "pcm_s16le", str(pattern)]
+
+    subprocess.run(cmd, check=True)
+
+    out_files = sorted(outd.glob(f"{stem}_{suffix}[0-9][0-9][0-9].wav"))
+    if not out_files:
+        raise RuntimeError("ffmpeg completed but produced no chunks (unexpected).")
+    return out_files
+
+
+# ---------------------- CLI ----------------------
 def _main() -> None:
     p = argparse.ArgumentParser(
         description="Decode frame IDs from WAV/MP3 and optionally save CSV."
@@ -409,7 +514,37 @@ def _main() -> None:
     p.add_argument(
         "--csv", dest="csv_out", help="If set, save decoded serials to this CSV path"
     )
+    p.add_argument(
+        "--split-minutes",
+        type=int,
+        help="Split the input into K-minute chunks and save WAVs (runs before decoding).",
+    )
+    p.add_argument(
+        "--split-outdir",
+        help="Optional directory to write split chunks (default: same directory as input).",
+    )
+    p.add_argument(
+        "--split-suffix",
+        default="chunk",
+        help="Suffix in output names, e.g., 'chunk' -> <name>_chunkNNN.wav",
+    )
     args = p.parse_args()
+
+    # If splitting is requested, do it first and exit early to avoid loading huge files.
+    if args.split_minutes:
+        outs = split_audio_file(
+            input_path=args.audio,
+            minutes=args.split_minutes,
+            outdir=args.split_outdir,
+            suffix=args.split_suffix,
+            mono=True,
+        )
+        print(f"Split into {len(outs)} file(s):")
+        for pth in outs[:10]:
+            print("  ", pth)
+        if len(outs) > 10:
+            print("  ...")
+        return
 
     dec = WavSerialDecoder(args.audio)
     counts, stats = dec.parse_counts(site=args.site, threshold=args.threshold)
