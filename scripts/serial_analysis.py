@@ -1,35 +1,30 @@
 #!/usr/bin/env python3
 """
-serial_basic_diag_pandas_drop_fmt.py — Pandas-based CLI to analyze discontinuities
-with **readable, columnized histograms**.
-
-Differences vs previous version:
-- Renamed "backward_step" -> **drop** (kept)
-- Histograms show **raw diff** values (kept)
-- NEW: Pretty, columnized histogram printing. Control columns via `--hist-cols` (default 2).
+serial_diag_cli_jsonparser.py — Diagnose discontinuities in integer sequences from:
+  • a CSV column (pandas), or
+  • a camera JSON via the provided JsonParser (chunk_serial_data, frame_id, frame_id_reconstructed).
 
 Categories (expect +1):
 - ok        : diff == +1
 - duplicate : diff == 0
-- forward   : diff > +1 (we still compute total_missing_ids = sum(diff-1))
+- forward   : diff > +1  (we also sum total_missing_ids = sum(diff-1))
 - drop      : diff < 0
 
-Usage examples:
-  python serial_basic_diag_pandas_drop_fmt.py data.csv                        # column 'serial'
-  python serial_basic_diag_pandas_drop_fmt.py data.csv --column frame_id
-  python serial_basic_diag_pandas_drop_fmt.py data.csv --hist-cols 1          # one entry per row
-  python serial_basic_diag_pandas_drop_fmt.py data.csv --out-text rep.txt --out-json rep.json
+Extras
+- Pretty, columnized histograms (use --hist-cols 1 for one bin per line)
+- Optional text/JSON reports
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from collections import Counter
-from typing import Dict, List, Optional, Sequence, Tuple
 import argparse
 import json
 import sys
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional, Sequence, Tuple
+from collections import Counter
 
 import pandas as pd
+from scripts.jsonfileparser import JsonParser
 
 # -----------------------------
 # Labels
@@ -73,15 +68,8 @@ class Analysis:
 # -----------------------------
 # I/O helpers
 # -----------------------------
-
-
 def load_series_from_csv(path: str, column: str = "serial") -> pd.Series:
-    """Load a single integer series from a CSV column using pandas.
-
-    - Accepts any delimiter pandas can infer.
-    - Coerces to numeric, drops non-numeric rows.
-    - Casts to ints for exact diff behavior.
-    """
+    """Load a single integer series from a CSV column using pandas."""
     df = pd.read_csv(path)
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found. Available: {list(df.columns)}")
@@ -91,24 +79,60 @@ def load_series_from_csv(path: str, column: str = "serial") -> pd.Series:
     return s.reset_index(drop=True)
 
 
+def load_series_from_json_with_parser(
+    path: str, field: str, cam_serial: str
+) -> pd.Series:
+    """Use the provided JsonParser to extract a per-camera series.
+
+    field: one of 'chunk_serial_data', 'frame_id', 'frame_id_reconstructed'
+    - 'frame_id_reconstructed' maps to JsonParser's 'frame_ids_reconstructed' column.
+    - 'frame_id' maps to raw frame_id.
+    - 'chunk_serial_data' maps directly and is zero-cleaned by your parser.
+    """
+    if JsonParser is None:
+        raise ImportError(
+            f"Could not import JsonParser: {_JSON_IMPORT_ERR}. Ensure jsonfileparser.py is on PYTHONPATH."
+        )
+
+    parser = JsonParser(path)
+    if cam_serial not in parser.get_camera_serials():
+        raise ValueError(
+            f"Camera serial {cam_serial!r} not found. Available: {parser.get_camera_serials()}"
+        )
+
+    df = parser.get_camera_df(cam_serial)
+    # df has: chunk_serial_data, frame_id, frame_ids_reconstructed
+    if field == "chunk_serial_data":
+        series = (
+            pd.to_numeric(df["chunk_serial_data"], errors="coerce")
+            .dropna()
+            .astype("int64")
+        )
+    elif field == "frame_id":
+        series = pd.to_numeric(df["frame_id"], errors="coerce").dropna().astype("int64")
+    elif field == "frame_id_reconstructed":
+        col = "frame_ids_reconstructed"
+        if col not in df.columns:
+            raise ValueError(f"Expected column '{col}' not found in camera dataframe")
+        series = pd.to_numeric(df[col], errors="coerce").dropna().astype("int64")
+    else:
+        raise ValueError(
+            "field must be one of: chunk_serial_data, frame_id, frame_id_reconstructed"
+        )
+
+    if series.size < 2:
+        raise ValueError("Fewer than 2 numeric values extracted from JSON field.")
+
+    return series.reset_index(drop=True)
+
+
 # -----------------------------
 # Core analysis
 # -----------------------------
-
-
 def classify_discontinuities(
     ids: Sequence[int], expect_step: int
 ) -> Tuple[Counter, Counter, Counter, List[StepEvent], int, int]:
-    """Walk once through the sequence and classify step types.
-
-    Returns:
-        counts: Counter of {OK, DUP, FWD, DROP}
-        fwd_hist: histogram of raw positive diffs (> +1)
-        drop_hist: histogram of raw negative diffs (< 0)
-        events: list of non-OK StepEvent
-        ok_steps: count of OK steps
-        total_steps: total transitions (len(ids)-1)
-    """
+    """Walk once through the sequence and classify step types."""
     counts: Counter = Counter()
     fwd_hist: Counter = Counter()
     drop_hist: Counter = Counter()
@@ -144,7 +168,6 @@ def longest_ok_span(ids: Sequence[int], expect_step: int) -> Tuple[Optional[int]
     """Return (start_index, length_in_steps) of the longest consecutive OK segment."""
     best_start: Optional[int] = None
     best_len = 0
-
     cur_start: Optional[int] = None
     cur_len = 0
 
@@ -184,7 +207,6 @@ def analyze(ids: Sequence[int], expect_step: int = 1, top_k: int = 5) -> Analysi
     top_forward = pick_top(events, FWD, top_k)
     top_drops = pick_top(events, DROP, top_k)
 
-    # total missing IDs only makes sense for forward jumps
     total_missing_ids = sum((e.diff - expect_step) for e in events if e.kind == FWD)
     longest_span = longest_ok_span(ids, expect_step)
 
@@ -207,26 +229,17 @@ def analyze(ids: Sequence[int], expect_step: int = 1, top_k: int = 5) -> Analysi
 # -----------------------------
 # Pretty printing helpers
 # -----------------------------
-
-
-def chunk(seq: List[str], n: int) -> List[List[str]]:
+def _chunk(seq: List[str], n: int) -> List[List[str]]:
     return [seq[i : i + n] for i in range(0, len(seq), n)]
 
 
 def format_histogram_grid(d: Dict[int, int], label: str, cols: int = 2) -> str:
-    """Render a histogram dict as neat, fixed columns.
-
-    Args:
-        d: mapping {diff: count}
-        label: section header line
-        cols: entries per row (e.g., 1 or 2)
-    """
     if not d:
         return ""
     items = [f"{k}:{v}" for k, v in sorted(d.items())]
-    rows = chunk(items, max(1, cols))
+    rows = _chunk(items, max(1, cols))
 
-    # compute width per column
+    # width per column
     ncols = max(len(r) for r in rows)
     colw = [0] * ncols
     for r in rows:
@@ -243,8 +256,6 @@ def format_histogram_grid(d: Dict[int, int], label: str, cols: int = 2) -> str:
 # -----------------------------
 # Presentation
 # -----------------------------
-
-
 def summarize_text(
     res: Analysis, *, include_tops: bool = True, hist_cols: int = 2
 ) -> str:
@@ -252,8 +263,7 @@ def summarize_text(
     add = lines.append
 
     add(
-        f"Values={res.n_values}  Steps={res.total_steps}  "
-        f"ok={res.ok_steps} ({res.ok_ratio:.2%})"
+        f"Values={res.n_values}  Steps={res.total_steps}  ok={res.ok_steps} ({res.ok_ratio:.2%})"
     )
     add("Counts: " + ", ".join(f"{k}={v}" for k, v in sorted(res.counts.items())))
 
@@ -293,19 +303,42 @@ def summarize_text(
 # -----------------------------
 # CLI
 # -----------------------------
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Analyze discontinuities (ok, duplicate, forward, drop) in a monotonically increasing "
-            "integer sequence from a CSV column (default column: 'serial')."
+            "integer sequence from a CSV column or a camera JSON via JsonParser."
         )
     )
-    p.add_argument("csv_path", help="Path to the CSV file")
+    p.add_argument("path", help="Path to the CSV or JSON file")
     p.add_argument(
-        "--column", default="serial", help="Column name to analyze (default: serial)"
+        "--input",
+        choices=["auto", "csv", "json"],
+        default="auto",
+        help="Treat input as csv/json (default: auto by extension)",
     )
+
+    # CSV options
+    p.add_argument(
+        "--column", default="serial", help="CSV column name (default: serial)"
+    )
+
+    # JSON options (via JsonParser)
+    p.add_argument(
+        "--field",
+        choices=["chunk_serial_data", "frame_id", "frame_id_reconstructed"],
+        default="chunk_serial_data",
+        help="JSON field to analyze",
+    )
+    p.add_argument(
+        "--cam-serial",
+        help="Camera serial string, e.g., '24253458' (required for JSON unless --list-cameras)",
+    )
+    p.add_argument(
+        "--list-cameras", action="store_true", help="Print JSON camera serials and exit"
+    )
+
+    # Analysis/reporting
     p.add_argument(
         "--expect-step",
         type=int,
@@ -333,25 +366,66 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _detect_input_kind(path: str, forced: str) -> str:
+    if forced != "auto":
+        return forced
+    lower = path.lower()
+    if lower.endswith(".csv"):
+        return "csv"
+    if lower.endswith(".json"):
+        return "json"
+    # default to csv if unknown
+    return "csv"
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
 
+    kind = _detect_input_kind(args.path, args.input)
+
     try:
-        series = load_series_from_csv(args.csv_path, args.column)
-        ids = series.astype(int).tolist()
+        if kind == "csv":
+            series = load_series_from_csv(args.path, args.column)
+            src_desc = f"CSV:{args.column}"
+        else:
+            # JSON MODE via JsonParser
+            if args.list_cameras:
+                if JsonParser is None:
+                    raise ImportError(
+                        f"Could not import JsonParser: {_JSON_IMPORT_ERR}. Ensure jsonfileparser.py is on PYTHONPATH."
+                    )
+                parser = JsonParser(args.path)
+                print(f"serials: {parser.get_camera_serials()}")
+                return 0
+
+            if not args.cam_serial:
+                raise ValueError(
+                    "--cam-serial is required for JSON input (use --list-cameras to see options)"
+                )
+
+            series = load_series_from_json_with_parser(
+                args.path, field=args.field, cam_serial=str(args.cam_serial)
+            )
+            src_desc = f"JSON:{args.field}:cam={args.cam_serial}"
     except Exception as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
 
     try:
+        ids = series.astype(int).tolist()
         result = analyze(ids, expect_step=args.expect_step, top_k=args.top)
     except Exception as e:
         print(f"[error] {e}", file=sys.stderr)
         return 3
 
-    report = summarize_text(
-        result, include_tops=True, hist_cols=max(1, int(args.hist_cols))
+    header = f"Source → {src_desc}"
+    report = (
+        header
+        + "\n"
+        + summarize_text(
+            result, include_tops=True, hist_cols=max(1, int(args.hist_cols))
+        )
     )
     print(report)
 
