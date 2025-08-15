@@ -30,17 +30,17 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from scripts.models import (
     AudioGroup,
-    Segment,
+    VideoGroup,
     DiscoveryResult,
 )
 
 __all__ = [
-    "Segment",
+    "VideoGroup",
     "AudioGroup",
     "DiscoveryResult",
     "FilePatterns",
     "AudioDiscoverer",
-    "SegmentDiscoverer",
+    "VideoDiscoverer",
     "Discoverer",
 ]
 
@@ -105,7 +105,7 @@ class FilePatterns:
         return ch, m.group("ext").lower()
 
     @classmethod
-    def segment_sort_key(cls, seg_id: str) -> Tuple[int, int, str]:
+    def videogroup_sort_key(cls, seg_id: str) -> Tuple[int, int, str]:
         """Sort by tail date/time if present; else push to end deterministically."""
         m = cls.RE_TAIL.search(seg_id)
         if m:
@@ -230,14 +230,14 @@ class AudioDiscoverer(_DirMixin):
         )
 
 
-class SegmentDiscoverer(_DirMixin):
+class VideoDiscoverer(_DirMixin):
     """Discovers JSON-defined segments and attaches MP4s by camera id."""
 
     def __init__(self, video_dir: Path, *, log: logging.Logger = logger):
         self.video_dir = video_dir
         self.log = log
 
-    def discover(self) -> List[Segment]:
+    def discover(self) -> List[VideoGroup]:
         self._ensure_exists(self.video_dir)
 
         # JSONs define segments
@@ -287,16 +287,16 @@ class SegmentDiscoverer(_DirMixin):
             vids_by_segment[seg_id][cam_id] = vp
 
         # Build segments for those with JSON
-        segments: List[Segment] = []
+        videogroups: List[VideoGroup] = []
         for seg_id, json_path in seg_for_json.items():
             cams = vids_by_segment.get(seg_id, {})
             if not cams:
                 self.log.warning(
                     "No MP4s found for segment %s (JSON: %s)", seg_id, json_path.name
                 )
-            segments.append(
-                Segment(
-                    segment_id=seg_id,
+            videogroups.append(
+                VideoGroup(
+                    group_id=seg_id,
                     json_path=json_path,
                     camera_files=dict(sorted(cams.items(), key=lambda kv: kv[0])),
                 )
@@ -311,9 +311,9 @@ class SegmentDiscoverer(_DirMixin):
             )
 
         # Sort chronologically by tail
-        segments.sort(key=lambda s: FilePatterns.segment_sort_key(s.segment_id))
-        self.log.info("Discovered %d segment(s).", len(segments))
-        return segments
+        videogroups.sort(key=lambda s: FilePatterns.videogroup_sort_key(s.group_id))
+        self.log.info("Discovered %d segment(s).", len(videogroups))
+        return videogroups
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ class Discoverer:
         log: logging.Logger = logger,
     ) -> None:
         self.audio = AudioDiscoverer(audio_dir, default_serial_channel, log=log)
-        self.segments = SegmentDiscoverer(video_dir, log=log)
+        self.segments = VideoDiscoverer(video_dir, log=log)
         self.log = log
 
     def run(self) -> DiscoveryResult:
@@ -347,8 +347,8 @@ def discover_audio(audio_dir: Path, default_serial_channel: int = 3) -> AudioGro
     return AudioDiscoverer(audio_dir, default_serial_channel).discover()
 
 
-def discover_segments(video_dir: Path) -> List[Segment]:
-    return SegmentDiscoverer(video_dir).discover()
+def discover_segments(video_dir: Path) -> List[VideoGroup]:
+    return VideoDiscoverer(video_dir).discover()
 
 
 def discover(
@@ -409,7 +409,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print("\nSegments:")
     for seg in res.segments:
-        print(f"  * {seg.segment_id}  JSON={seg.json_path.name}")
+        print(f"  * {seg.group_id}  JSON={seg.json_path.name}")
         for cam_id, mp4 in seg.camera_files.items():
             print(f"      cam {cam_id}: {mp4.name}")
 
