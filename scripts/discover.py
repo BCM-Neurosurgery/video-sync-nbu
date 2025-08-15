@@ -27,6 +27,8 @@ import argparse
 import logging
 import re
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
 from scripts.models import (
     AudioGroup,
@@ -53,6 +55,10 @@ if not logger.handlers:
     h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     logger.addHandler(h)
 logger.setLevel(logging.INFO)
+
+
+# Default timezone for segment timestamps
+DEFAULT_TZ = ZoneInfo("America/Chicago")
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +117,21 @@ class FilePatterns:
         if m:
             return int(m.group("date")), int(m.group("time")), seg_id
         return (10**12, 10**8, seg_id)
+
+    @classmethod
+    def parse_tail_datetime(
+        cls, seg_id: str, tz: ZoneInfo = DEFAULT_TZ
+    ) -> Optional[datetime]:
+        """
+        Parse '<...>_YYYYMMDD_HHMMSS' tail into a timezone-aware datetime.
+        Returns None if pattern not found.
+        """
+        m = cls.RE_TAIL.search(seg_id)
+        if not m:
+            return None
+        dt = datetime.strptime(m.group("date") + m.group("time"), "%Y%m%d%H%M%S")
+        # Assign the provided timezone (source filenames are local timestamps)
+        return dt.replace(tzinfo=tz)
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +315,12 @@ class VideoDiscoverer(_DirMixin):
                 self.log.warning(
                     "No MP4s found for segment %s (JSON: %s)", seg_id, json_path.name
                 )
+            # Parse YYYYMMDD_HHMMSS as America/Chicago datetime for timestamp field
+            ts = FilePatterns.parse_tail_datetime(seg_id, DEFAULT_TZ)
             videogroups.append(
                 VideoGroup(
                     group_id=seg_id,
+                    timestamp=ts,
                     json_path=json_path,
                     camera_files=dict(sorted(cams.items(), key=lambda kv: kv[0])),
                 )
