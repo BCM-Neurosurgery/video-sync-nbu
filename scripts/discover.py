@@ -26,13 +26,17 @@ from __future__ import annotations
 import argparse
 import logging
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+from scripts.models import (
+    AudioGroup,
+    Segment,
+    DiscoveryResult,
+)
 
 __all__ = [
     "Segment",
-    "AudioDiscovery",
+    "AudioGroup",
     "DiscoveryResult",
     "FilePatterns",
     "AudioDiscoverer",
@@ -49,51 +53,6 @@ if not logger.handlers:
     h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     logger.addHandler(h)
 logger.setLevel(logging.INFO)
-
-
-# ---------------------------------------------------------------------------
-# Data models
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Segment:
-    """A chunked n-minute recording segment defined by its JSON.
-
-    Attributes
-    ----------
-    segment_id: The shared BASE identifier, e.g. "Test_20250101_120000".
-    json_path: Path to <BASE>.json.
-    camera_files: Mapping {camera_id: Path to <BASE>.<CAM>.mp4}.
-    """
-
-    segment_id: str
-    json_path: Path
-    camera_files: Dict[int, Path] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class AudioDiscovery:
-    """Audio files discovered under the audio directory.
-
-    Attributes
-    ----------
-    files_by_channel: Mapping {channel: Path}.
-    all_files: All audio files seen (sorted), including non-matching.
-    serial_channel: The default serial channel if present, else None.
-    serial_path: Resolved path for the serial channel if present.
-    """
-
-    files_by_channel: Dict[int, Path]
-    all_files: List[Path]
-    serial_channel: Optional[int]
-    serial_path: Optional[Path]
-
-
-@dataclass(frozen=True)
-class DiscoveryResult:
-    """Full discovery result for audio + segments."""
-
-    audio: AudioDiscovery
-    segments: List[Segment]
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +142,7 @@ class AudioDiscoverer(_DirMixin):
         self.default_serial_channel = default_serial_channel
         self.log = log
 
-    def discover(self) -> AudioDiscovery:
+    def discover(self) -> AudioGroup:
         self._ensure_exists(self.audio_dir)
 
         candidates = sorted(
@@ -210,6 +169,22 @@ class AudioDiscoverer(_DirMixin):
                     files_by_channel[ch] = p
 
         files_by_channel = dict(sorted(files_by_channel.items(), key=lambda kv: kv[0]))
+
+        exts = {p.suffix.lower().lstrip(".") for p in files_by_channel.values()}
+        extension: Optional[str] = None
+        if len(exts) == 1:
+            (only_ext,) = tuple(exts)
+            if only_ext in ("wav", "mp3"):
+                extension = only_ext
+            else:
+                self.log.warning(
+                    "Unexpected audio extension encountered: %s.", only_ext
+                )
+        elif exts:
+            self.log.warning(
+                "Mixed audio extensions detected across channels: %s. Expected all three to match.",
+                ", ".join(sorted(exts)),
+            )
 
         if len(files_by_channel) != 3:
             ch_list = (
@@ -246,11 +221,12 @@ class AudioDiscoverer(_DirMixin):
                 self.default_serial_channel,
             )
 
-        return AudioDiscovery(
+        return AudioGroup(
             files_by_channel=files_by_channel,
             all_files=sorted(all_files),
             serial_channel=serial_channel,
             serial_path=serial_path,
+            extension=extension,
         )
 
 
@@ -367,7 +343,7 @@ class Discoverer:
 # ---------------------------------------------------------------------------
 # Helpers (public API for library use, preserving function names)
 # ---------------------------------------------------------------------------
-def discover_audio(audio_dir: Path, default_serial_channel: int = 3) -> AudioDiscovery:
+def discover_audio(audio_dir: Path, default_serial_channel: int = 3) -> AudioGroup:
     return AudioDiscoverer(audio_dir, default_serial_channel).discover()
 
 
