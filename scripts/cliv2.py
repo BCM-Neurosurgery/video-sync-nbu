@@ -365,22 +365,65 @@ def compute_clip_window_for_segment(
 def clip_program_audio(
     a1: Path, a2: Path, window: ClipWindow, out_dir: Path, tag: str
 ) -> Tuple[Path, Path]:
-    """TODO: implement with ffmpeg `atrim` (sample-accurate) and PCM output for safety.
-    This placeholder only prints intent and returns target paths.
     """
+    Trim the two program-audio files to a sample-accurate window using ffmpeg's
+    `atrim` filter and write lossless WAVs.
+    """
+    import shutil
+    import subprocess
+
+    def _run_atrim(in_path: Path, out_path: Path, start: int, end: int) -> None:
+        """Run ffmpeg with a sample-accurate atrim and write PCM WAV."""
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError("ffmpeg not found on PATH. Please install ffmpeg.")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        filter_expr = (
+            f"atrim=start_sample={start}:end_sample={end},asetpts=PTS-STARTPTS"
+        )
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-vn",
+            "-i",
+            str(in_path),
+            "-af",
+            filter_expr,
+            "-c:a",
+            "pcm_s16le",
+            str(out_path),
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            err_text = proc.stderr.decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                f"ffmpeg atrim failed for '{in_path}' → '{out_path}' "
+                f"(start={start}, end={end}).\n{err_text}"
+            )
+
+    # Sanity checks
+    if window.end <= window.start:
+        raise RuntimeError(
+            f"Invalid clip window: start={window.start}, end={window.end}"
+        )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     out_a1 = out_dir / f"{tag}.A1.wav"
     out_a2 = out_dir / f"{tag}.A2.wav"
+
+    _run_atrim(a1, out_a1, window.start, window.end)
+    _run_atrim(a2, out_a2, window.start, window.end)
+
     logger.info(
-        "[TODO] Clip A1/A2 samples [%d:%d) → %s, %s",
+        "Clipped A1/A2 samples [%d:%d) → %s, %s",
         window.start,
         window.end,
         out_a1.name,
         out_a2.name,
     )
-    # Example:
-    # ffmpeg -hide_banner -loglevel error -i "{a1}" -af atrim=start_sample={window.start}:end_sample={window.end} -c:a pcm_s16le "{out_a1}"
-    # ffmpeg -hide_banner -loglevel error -i "{a2}" -af atrim=start_sample={window.start}:end_sample={window.end} -c:a pcm_s16le "{out_a2}"
     return out_a1, out_a2
 
 
