@@ -28,6 +28,7 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
+
 from scripts.videofileparser import VideoFileParser
 from scripts.jsonfileparser import JsonParser
 
@@ -40,7 +41,7 @@ except Exception:
     _HAVE_PYDUB = False
 
 from scripts.models import (
-    CamJson,  # not used yet, but kept for completeness
+    CamJson,  # retained for completeness
     Json,
     Audio,
     SerialAudio,
@@ -74,7 +75,7 @@ DEFAULT_TZ = ZoneInfo("America/Chicago")
 
 
 # ---------------------------------------------------------------------------
-# Patterns
+# Filename Patterns & Utilities
 # ---------------------------------------------------------------------------
 class FilePatterns:
     """Centralizes filename parsing logic."""
@@ -91,9 +92,7 @@ class FilePatterns:
     @classmethod
     def parse_video_filename(cls, p: Path) -> Optional[Tuple[str, str]]:
         m = cls.RE_VIDEO.match(p.name)
-        if not m:
-            return None
-        return m.group("base"), m.group("cam")  # keep cam as string (serial)
+        return (m.group("base"), m.group("cam")) if m else None
 
     @classmethod
     def parse_json_filename(cls, p: Path) -> Optional[str]:
@@ -130,7 +129,7 @@ class FilePatterns:
 
 
 # ---------------------------------------------------------------------------
-# Small probes
+# Small probes & helpers
 # ---------------------------------------------------------------------------
 def _filesize_mb(p: Path) -> float:
     try:
@@ -157,11 +156,21 @@ def _probe_mp3(p: Path) -> Tuple[float, int]:
         return 0.0, 0
     try:
         seg = AudioSegment.from_file(p)
-        dur = len(seg) / 1000.0
-        sr = seg.frame_rate
-        return dur, sr
+        return len(seg) / 1000.0, seg.frame_rate
     except Exception:
         return 0.0, 0
+
+
+def _format_channels(channels: Iterable[int]) -> str:
+    return ", ".join(f"{ch:02d}" for ch in channels)
+
+
+def _safe_glob(directory: Path, patterns: Iterable[str]) -> List[Path]:
+    """Glob multiple patterns and return a single sorted list."""
+    results: List[Path] = []
+    for pat in patterns:
+        results.extend(directory.glob(pat))
+    return sorted({p for p in results if p.is_file()})
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +196,49 @@ class AudioDiscoverer(_DirMixin):
         self.default_serial_channel = default_serial_channel
         self.log = log
 
+    # ---- small helpers -----------------------------------------------------
+
+    def _collect_candidates(self) -> List[Path]:
+        self._ensure_exists(self.audio_dir)
+        return _safe_glob(self.audio_dir, ("*.wav", "*.mp3"))
+
+    def _choose_best_per_channel(self, candidates: List[Path]) -> Dict[int, Path]:
+        """Pick one file per channel, preferring WAV over MP3 when both exist."""
+        chosen: Dict[int, Path] = {}
+        for p in candidates:
+            parsed = FilePatterns.parse_audio_filename(p)
+            if not parsed:
+                self.log.warning("Skipping audio with unexpected name: %s", p.name)
+                continue
+            ch, ext = parsed
+            existing = chosen.get(ch)
+            if existing is None:
+                chosen[ch] = p
+            else:
+                if existing.suffix.lower() == ".mp3" and ext == "wav":
+                    chosen[ch] = p
+        return chosen
+
+    def _warn_if_channel_count_unexpected(self, chosen: Dict[int, Path]) -> None:
+        if len(chosen) != 3:
+            ch_list = _format_channels(chosen.keys()) or "none"
+            self.log.warning(
+                "Expected 3 audio files, found %d (channels: %s).",
+                len(chosen),
+                ch_list,
+            )
+
+    def _infer_shared_extension(self, paths: Iterable[Path]) -> Optional[str]:
+        exts = {p.suffix.lower().lstrip(".") for p in paths}
+        if len(exts) == 1 and exts <= {"wav", "mp3"}:
+            return next(iter(exts))
+        if exts:
+            self.log.warning(
+                "Mixed audio extensions detected across channels: %s.",
+                ", ".join(sorted(exts)),
+            )
+        return None
+
     def _build_audio_obj(self, ch: int, p: Path) -> Audio:
         ext = p.suffix.lower().lstrip(".")
         if ext == "wav":
@@ -205,73 +257,43 @@ class AudioDiscoverer(_DirMixin):
         )
 
     def _build_serial_audio_obj(self, ch: int, p: Path) -> SerialAudio:
-        base = self._build_audio_obj(ch, p)
-        # SerialAudio subclasses Audio; dataclass copying is straightforward:
+        a = self._build_audio_obj(ch, p)
         return SerialAudio(
-            path=base.path,
-            duration=base.duration,
-            file_size=base.file_size,
-            sample_rate=base.sample_rate,
-            extension=base.extension,
-            channel=base.channel,
+            path=a.path,
+            duration=a.duration,
+            file_size=a.file_size,
+            sample_rate=a.sample_rate,
+            extension=a.extension,
+            channel=a.channel,
         )
 
-    def discover(self) -> AudioGroup:
-        self._ensure_exists(self.audio_dir)
-
-        candidates = sorted(
-            [*self.audio_dir.glob("*.wav"), *self.audio_dir.glob("*.mp3")]
-        )
-
-        chosen_by_channel: Dict[int, Path] = {}
-        for p in candidates:
-            parsed = FilePatterns.parse_audio_filename(p)
-            if not parsed:
-                self.log.warning("Skipping audio with unexpected name: %s", p.name)
-                continue
-            ch, ext = parsed
-            existing = chosen_by_channel.get(ch)
-            if existing is None:
-                chosen_by_channel[ch] = p
-            else:
-                # Prefer WAV over MP3
-                if existing.suffix.lower() == ".mp3" and ext == "wav":
-                    chosen_by_channel[ch] = p
-
-        if len(chosen_by_channel) != 3:
-            ch_list = _format_channels(chosen_by_channel.keys()) or "none"
-            self.log.warning(
-                "Expected 3 audio files, found %d (channels: %s).",
-                len(chosen_by_channel),
-                ch_list,
-            )
-
-        # Shared extension (if uniform)
-        exts = {p.suffix.lower().lstrip(".") for p in chosen_by_channel.values()}
-        shared_ext: Optional[str] = None
-        if len(exts) == 1 and exts <= {"wav", "mp3"}:
-            shared_ext = next(iter(exts))
-        elif exts:
-            self.log.warning(
-                "Mixed audio extensions detected across channels: %s.",
-                ", ".join(sorted(exts)),
-            )
-
-        # Build Audio / SerialAudio objects
+    def _build_audio_map(
+        self, chosen: Dict[int, Path]
+    ) -> Tuple[Dict[int, Audio], Optional[SerialAudio]]:
         audios: Dict[int, Audio] = {}
         serial_audio: Optional[SerialAudio] = None
-        for ch, p in sorted(chosen_by_channel.items(), key=lambda kv: kv[0]):
+        for ch, p in sorted(chosen.items(), key=lambda kv: kv[0]):
             if ch == self.default_serial_channel:
                 serial_audio = self._build_serial_audio_obj(ch, p)
-                audios[ch] = serial_audio  # SerialAudio is an Audio
+                audios[ch] = serial_audio
             else:
                 audios[ch] = self._build_audio_obj(ch, p)
-
         if serial_audio is None:
             self.log.warning(
                 "Default serial channel %02d not found in AUDIO_DIR.",
                 self.default_serial_channel,
             )
+        return audios, serial_audio
+
+    # ---- public ------------------------------------------------------------
+
+    def discover(self) -> AudioGroup:
+        candidates = self._collect_candidates()
+        chosen_by_channel = self._choose_best_per_channel(candidates)
+        self._warn_if_channel_count_unexpected(chosen_by_channel)
+
+        shared_ext = self._infer_shared_extension(chosen_by_channel.values())
+        audios, serial_audio = self._build_audio_map(chosen_by_channel)
 
         return AudioGroup(
             audios=audios,
@@ -287,6 +309,54 @@ class VideoDiscoverer(_DirMixin):
         self.video_dir = video_dir
         self.log = log
 
+    # ---- scanning helpers --------------------------------------------------
+
+    def _index_jsons(self) -> Dict[str, Path]:
+        self._ensure_exists(self.video_dir)
+        json_by_seg: Dict[str, Path] = {}
+        for jp in _safe_glob(self.video_dir, ("*.json",)):
+            seg_id = FilePatterns.parse_json_filename(jp)
+            if not seg_id:
+                self.log.warning("Skipping JSON with unexpected name: %s", jp.name)
+                continue
+            if seg_id in json_by_seg:
+                self.log.warning(
+                    "Duplicate JSON for %s; keeping first: %s (ignoring %s)",
+                    seg_id,
+                    json_by_seg[seg_id].name,
+                    jp.name,
+                )
+                continue
+            json_by_seg[seg_id] = jp
+        if not json_by_seg:
+            self.log.warning(
+                "No valid segment JSON files found under %s", self.video_dir
+            )
+        return json_by_seg
+
+    def _index_mp4s(self) -> Dict[str, Dict[str, Path]]:
+        vids_by_seg: Dict[str, Dict[str, Path]] = {}
+        for vp in _safe_glob(self.video_dir, ("*.mp4",)):
+            parsed = FilePatterns.parse_video_filename(vp)
+            if not parsed:
+                self.log.warning("Skipping MP4 with unexpected name: %s", vp.name)
+                continue
+            seg_id, cam_serial = parsed
+            vids_by_seg.setdefault(seg_id, {})
+            if cam_serial in vids_by_seg[seg_id]:
+                self.log.warning(
+                    "Duplicate MP4 for %s cam %s; keeping first: %s (ignoring %s)",
+                    seg_id,
+                    cam_serial,
+                    vids_by_seg[seg_id][cam_serial].name,
+                    vp.name,
+                )
+                continue
+            vids_by_seg[seg_id][cam_serial] = vp
+        return vids_by_seg
+
+    # ---- metadata helpers --------------------------------------------------
+
     def _extract_video_meta(self, mp4_path: Path) -> tuple[float, str, float]:
         """Return (duration_sec, 'WxH', fps). On failure, return zeros/empty."""
         try:
@@ -299,21 +369,36 @@ class VideoDiscoverer(_DirMixin):
             )
             return 0.0, "", 0.0
 
+    def _build_videos_for_seg(
+        self, cams: Dict[str, Path], ts: Optional[datetime]
+    ) -> List[Video]:
+        videos: List[Video] = []
+        for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
+            dur, res, fps = self._extract_video_meta(mp4_path)
+            videos.append(
+                Video(
+                    path=mp4_path,
+                    cam_serial=str(cam_serial),
+                    timestamp=ts,
+                    duration=dur,
+                    resolution=res,
+                    frame_rate=fps,
+                )
+            )
+        return videos
+
     def _extract_cam_jsons(
         self, json_path: Path, ts: Optional[datetime]
     ) -> tuple[list[str], dict[str, CamJson]]:
         """
         Use JsonParser to populate per-camera CamJson objects.
 
-        Returns:
-            (cam_serials, cam_jsons_map)
+        Returns: (cam_serials_as_strings, cam_jsons_map_by_serial)
         """
         cam_jsons: dict[str, CamJson] = {}
         try:
             jp = JsonParser(str(json_path))
-            # The parser returns the serials in the same order as columns
-            # e.g., ['24253445','24253458','24253463']
-            parser_serials = jp.get_camera_serials()
+            parser_serials = jp.get_camera_serials()  # e.g., [24253445, ...]
             cam_serials = [str(s) for s in parser_serials]
 
             for s in parser_serials:
@@ -354,89 +439,36 @@ class VideoDiscoverer(_DirMixin):
             self.log.warning("Failed to parse JSON %s: %s", json_path.name, e)
             return [], {}
 
+    def _build_json_wrapper(
+        self, json_path: Path, ts: Optional[datetime]
+    ) -> Tuple[Json, List[str], Dict[str, CamJson]]:
+        cam_serials_from_json, cam_jsons = self._extract_cam_jsons(json_path, ts)
+        json_wrap = Json(
+            cam_serials=cam_serials_from_json or None,
+            timestamp=ts,
+            path=json_path,
+            cam_jsons=cam_jsons,
+        )
+        return json_wrap, cam_serials_from_json, cam_jsons
+
+    # ---- public ------------------------------------------------------------
+
     def discover(self) -> List[VideoGroup]:
-        self._ensure_exists(self.video_dir)
+        json_by_seg = self._index_jsons()
+        vids_by_seg = self._index_mp4s()
 
-        # JSONs define segments
-        json_by_seg: Dict[str, Path] = {}
-        for jp in sorted(self.video_dir.glob("*.json")):
-            if not jp.is_file():
-                continue
-            seg_id = FilePatterns.parse_json_filename(jp)
-            if not seg_id:
-                self.log.warning("Skipping JSON with unexpected name: %s", jp.name)
-                continue
-            if seg_id in json_by_seg:
-                self.log.warning(
-                    "Duplicate JSON for %s; keeping first: %s (ignoring %s)",
-                    seg_id,
-                    json_by_seg[seg_id].name,
-                    jp.name,
-                )
-                continue
-            json_by_seg[seg_id] = jp
-
-        if not json_by_seg:
-            self.log.warning(
-                "No valid segment JSON files found under %s", self.video_dir
-            )
-
-        # MP4s grouped by (BASE -> {cam_serial -> Path})
-        vids_by_seg: Dict[str, Dict[str, Path]] = {}
-        for vp in sorted(self.video_dir.glob("*.mp4")):
-            if not vp.is_file():
-                continue
-            parsed = FilePatterns.parse_video_filename(vp)
-            if not parsed:
-                self.log.warning("Skipping MP4 with unexpected name: %s", vp.name)
-                continue
-            seg_id, cam_serial = parsed
-            vids_by_seg.setdefault(seg_id, {})
-            if cam_serial in vids_by_seg[seg_id]:
-                self.log.warning(
-                    "Duplicate MP4 for %s cam %s; keeping first: %s (ignoring %s)",
-                    seg_id,
-                    cam_serial,
-                    vids_by_seg[seg_id][cam_serial].name,
-                    vp.name,
-                )
-                continue
-            vids_by_seg[seg_id][cam_serial] = vp
-
-        # Build VideoGroup list for segments that have JSONs
         videogroups: List[VideoGroup] = []
         for seg_id, json_path in json_by_seg.items():
             ts = FilePatterns.parse_tail_datetime(seg_id, DEFAULT_TZ)
             cams = vids_by_seg.get(seg_id, {})
 
-            videos: List[Video] = []
-            for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
-                dur, res, fps = self._extract_video_meta(mp4_path)
-                videos.append(
-                    Video(
-                        path=mp4_path,
-                        cam_serial=str(cam_serial),
-                        timestamp=ts,
-                        duration=dur,
-                        resolution=res,
-                        frame_rate=fps,
-                    )
-                )
-
-            cam_serials_from_json, cam_jsons = self._extract_cam_jsons(json_path, ts)
-
-            # Build Json wrapper for the segment (cam_jsons left empty for now)
-            json_wrap = Json(
-                cam_serials=cam_serials_from_json or None,
-                timestamp=ts,
-                path=json_path,
-                cam_jsons=cam_jsons,
-            )
-
+            videos = self._build_videos_for_seg(cams, ts)
             if not videos:
                 self.log.warning(
                     "No MP4s found for segment %s (JSON: %s)", seg_id, json_path.name
                 )
+
+            json_wrap, _, _ = self._build_json_wrapper(json_path, ts)
 
             videogroups.append(
                 VideoGroup(
@@ -482,18 +514,21 @@ class Discoverer:
         self.video = VideoDiscoverer(video_dir, log=log)
         self.log = log
 
+    def _compute_shared_cam_serials(
+        self, groups: List[VideoGroup]
+    ) -> Optional[List[str]]:
+        if not groups:
+            return None
+        sets = [set(vg.cam_serials or []) for vg in groups if vg.cam_serials]
+        if not sets:
+            return None
+        inter = set.intersection(*sets) if len(sets) > 1 else next(iter(sets))
+        return sorted(inter) if inter else None
+
     def run(self) -> AudioVideoSession:
         audiogroup = self.audio.discover()
         videogroups = self.video.discover()
-
-        # Compute shared cam serials across all groups (intersection)
-        shared: Optional[List[str]] = None
-        if videogroups:
-            sets = [set(vg.cam_serials or []) for vg in videogroups if vg.cam_serials]
-            if sets:
-                inter = set.intersection(*sets) if len(sets) > 1 else next(iter(sets))
-                shared = sorted(inter) if inter else None
-
+        shared = self._compute_shared_cam_serials(videogroups)
         return AudioVideoSession(
             audiogroup=audiogroup,
             videogroups=videogroups,
@@ -521,28 +556,9 @@ def discover(
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# CLI presentation helpers
 # ---------------------------------------------------------------------------
-def _format_channels(channels: Iterable[int]) -> str:
-    return ", ".join(f"{ch:02d}" for ch in channels)
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Discover audio (AUDIO_DIR) and chunked segments (VIDEO_DIR).",
-    )
-    ap.add_argument("--audio-dir", type=Path, required=True)
-    ap.add_argument("--video-dir", type=Path, required=True)
-    ap.add_argument("--serial-channel", type=int, default=3)
-
-    args = ap.parse_args(argv)
-
-    session = discover(
-        args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
-    )
-
-    # Pretty print
-    ag = session.audiogroup
+def _print_audiogroup(ag: AudioGroup) -> None:
     print("\nAudioGroup:")
     for ch in sorted(ag.audios.keys()):
         a = ag.audios[ch]
@@ -557,8 +573,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if ag.shared_extension:
         print(f"  shared_extension: {ag.shared_extension}")
 
+
+def _print_videogroups(vgs: List[VideoGroup]) -> None:
     print("\nVideoGroups:")
-    for vg in session.videogroups:
+    for vg in vgs:
         ts = vg.timestamp.isoformat() if vg.timestamp else "None"
         print(f"  * {vg.group_id}  ts={ts}  JSON={vg.json.path.name}")
         if vg.videos:
@@ -567,10 +585,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         if vg.cam_serials:
             print(f"      cam_serials: {', '.join(vg.cam_serials)}")
 
-    if session.shared_cam_serials:
-        print(
-            f"\nShared cam serials across groups: {', '.join(session.shared_cam_serials)}"
-        )
+
+def _print_shared(shared: Optional[List[str]]) -> None:
+    if shared:
+        print(f"\nShared cam serials across groups: {', '.join(shared)}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Discover audio (AUDIO_DIR) and chunked segments (VIDEO_DIR).",
+    )
+    ap.add_argument("--audio-dir", type=Path, required=True)
+    ap.add_argument("--video-dir", type=Path, required=True)
+    ap.add_argument("--serial-channel", type=int, default=3)
+
+    args = ap.parse_args(argv)
+
+    session = discover(
+        args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
+    )
+
+    _print_audiogroup(session.audiogroup)
+    _print_videogroups(session.videogroups)
+    _print_shared(session.shared_cam_serials)
 
     return 0
 
