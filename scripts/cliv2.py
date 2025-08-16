@@ -119,7 +119,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
 def build_serial_index(
     a3_path: Path, out_index: Path, *, site: str = "jamail", threshold: float = 0.5
 ) -> Path:
-    """Decode A3 once and persist mapping: serial → representative sample index (block midpoint).
+    """Decode A3 once and persist mapping: serial → block START sample.
     TODO: if you prefer Parquet/SQLite, change the persistence layer below.
     """
     logger.info("Decoding serial audio (A3): %s", a3_path)
@@ -134,7 +134,7 @@ def build_serial_index(
         getattr(stats, "monotonic_span", 0),
     )
 
-    # Map serial → midpoint sample (first occurrence wins)
+    # Map serial → START sample (first occurrence wins)
     mapping: Dict[int, int] = {}
     ranges = getattr(dec, "frame_ranges", []) or []
     for i, s in enumerate(frames):
@@ -142,11 +142,11 @@ def build_serial_index(
             continue
         if i < len(ranges) and ranges[i] != ("", ""):
             start, end = ranges[i]
-            mid = int((int(start) + int(end)) // 2)
+            s_start = int(start)
         else:
             # Fallback: approximate by uniform spacing (rare)
-            mid = i
-        mapping.setdefault(int(s), mid)
+            s_start = i
+        mapping.setdefault(int(s), s_start)
 
     out_index.parent.mkdir(parents=True, exist_ok=True)
     with out_index.open("w", encoding="utf-8") as f:
