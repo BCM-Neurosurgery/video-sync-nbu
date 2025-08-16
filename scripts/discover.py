@@ -29,6 +29,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
 from scripts.videofileparser import VideoFileParser
+from scripts.jsonfileparser import JsonParser
 
 # Try optional MP3 probe (pydub)
 try:
@@ -298,6 +299,61 @@ class VideoDiscoverer(_DirMixin):
             )
             return 0.0, "", 0.0
 
+    def _extract_cam_jsons(
+        self, json_path: Path, ts: Optional[datetime]
+    ) -> tuple[list[str], dict[str, CamJson]]:
+        """
+        Use JsonParser to populate per-camera CamJson objects.
+
+        Returns:
+            (cam_serials, cam_jsons_map)
+        """
+        cam_jsons: dict[str, CamJson] = {}
+        try:
+            jp = JsonParser(str(json_path))
+            # The parser returns the serials in the same order as columns
+            # e.g., ['24253445','24253458','24253463']
+            parser_serials = jp.get_camera_serials()
+            cam_serials = [str(s) for s in parser_serials]
+
+            for s in parser_serials:
+                s_str = str(s)
+                try:
+                    raw_serials = jp.get_chunk_serial_list(s)
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_chunk_serial_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    raw_serials = None
+
+                try:
+                    raw_frame_ids = jp.get_frame_ids_list(s)
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_frame_ids_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    raw_frame_ids = None
+
+                cam_jsons[s_str] = CamJson(
+                    cam_serial=s_str,
+                    timestamp=ts,
+                    path=json_path,
+                    raw_serials=raw_serials,
+                    raw_frame_ids=raw_frame_ids,
+                )
+
+            return cam_serials, cam_jsons
+
+        except Exception as e:
+            self.log.warning("Failed to parse JSON %s: %s", json_path.name, e)
+            return [], {}
+
     def discover(self) -> List[VideoGroup]:
         self._ensure_exists(self.video_dir)
 
@@ -367,14 +423,14 @@ class VideoDiscoverer(_DirMixin):
                     )
                 )
 
-            cam_serials = [v.cam_serial for v in videos] if videos else []
+            cam_serials_from_json, cam_jsons = self._extract_cam_jsons(json_path, ts)
 
             # Build Json wrapper for the segment (cam_jsons left empty for now)
             json_wrap = Json(
-                cam_serials=cam_serials or None,
+                cam_serials=cam_serials_from_json or None,
                 timestamp=ts,
                 path=json_path,
-                cam_jsons={},  # could be populated by a separate JSON parser later
+                cam_jsons=cam_jsons,
             )
 
             if not videos:
@@ -388,7 +444,9 @@ class VideoDiscoverer(_DirMixin):
                     timestamp=ts,
                     json=json_wrap,
                     videos=videos or None,
-                    cam_serials=cam_serials or None,
+                    cam_serials=(
+                        sorted({v.cam_serial for v in videos}) if videos else None
+                    ),
                 )
             )
 
