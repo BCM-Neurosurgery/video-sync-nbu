@@ -28,6 +28,7 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
+from scripts.videofileparser import VideoFileParser
 
 # Try optional MP3 probe (pydub)
 try:
@@ -37,7 +38,6 @@ try:
 except Exception:
     _HAVE_PYDUB = False
 
-# Import your dataclasses
 from scripts.models import (
     CamJson,  # not used yet, but kept for completeness
     Json,
@@ -286,6 +286,18 @@ class VideoDiscoverer(_DirMixin):
         self.video_dir = video_dir
         self.log = log
 
+    def _extract_video_meta(self, mp4_path: Path) -> tuple[float, str, float]:
+        """Return (duration_sec, 'WxH', fps). On failure, return zeros/empty."""
+        try:
+            vp = VideoFileParser(str(mp4_path))
+            w, h = vp.resolution
+            return vp.duration, f"{w}x{h}", vp.fps
+        except Exception as e:
+            self.log.warning(
+                "ffprobe failed for %s: %s; leaving meta blank.", mp4_path.name, e
+            )
+            return 0.0, "", 0.0
+
     def discover(self) -> List[VideoGroup]:
         self._ensure_exists(self.video_dir)
 
@@ -341,17 +353,17 @@ class VideoDiscoverer(_DirMixin):
             ts = FilePatterns.parse_tail_datetime(seg_id, DEFAULT_TZ)
             cams = vids_by_seg.get(seg_id, {})
 
-            # Build Video objects (meta placeholders)
             videos: List[Video] = []
             for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
+                dur, res, fps = self._extract_video_meta(mp4_path)
                 videos.append(
                     Video(
                         path=mp4_path,
                         cam_serial=str(cam_serial),
                         timestamp=ts,
-                        duration=0.0,  # placeholder – probe via ffprobe if desired
-                        resolution="",  # placeholder
-                        frame_rate=0.0,  # placeholder
+                        duration=dur,
+                        resolution=res,
+                        frame_rate=fps,
                     )
                 )
 
