@@ -349,6 +349,54 @@ def compute_clip_window_for_segment(
     margin_samples: int,
     audio_len_samples: int,
 ) -> Optional[ClipWindow]:
+    """
+    Compute the **sample-accurate audio window** for a video segment using the
+    first and last *valid* serials in that segment and an affine mapping
+    (``sample ≈ alpha·serial + beta``).
+
+    The function returns a **clamped** window `[start, end)` that lies inside the
+    actual recorder file, along with **diagnostic** values `pad_head` and
+    `pad_tail` indicating how many samples would be *missing* at the head/tail
+    if we attempted to use the *unclamped* ideal window. **No padding is added
+    here**—callers may choose to synthesize silence later if required.
+
+    Parameters
+    ----------
+    serials : Sequence[int]
+        Per-frame serial values for the segment (e.g., from JSON). Non-positive
+        values (≤0) are treated as invalid/missing and ignored when locating
+        the endpoints.
+    fit : FitResult
+        Affine map from serial → audio sample (``predict(s)`` returns a sample
+        index in the recorder timeline).
+    margin_samples : int
+        Safety margin (in samples) applied to both sides of the raw window
+        before clamping. Use roughly one serial block in samples.
+    audio_len_samples : int
+        Total length of the underlying recorder file in samples; used to clamp
+        the window to `[0, audio_len_samples)` and compute diagnostic padding.
+
+    Returns
+    -------
+    Optional[ClipWindow]
+        ``ClipWindow(start, end, pad_head, pad_tail)`` if the segment contains
+        at least one valid serial; otherwise ``None``.
+
+    Notes
+    -----
+    Algorithm steps:
+      1) Find the first/last **positive** serial in ``serials`` → ``s_first``, ``s_last``.
+      2) Compute the **raw** window in samples using the fit and margin:
+         ``start_raw = floor(predict(s_first) - margin)``
+         ``end_raw   = ceil (predict(s_last)  + margin)``
+      3) Derive diagnostic padding relative to the recorder bounds:
+         ``pad_head = max(0, -start_raw)``,
+         ``pad_tail = max(0, end_raw - audio_len_samples)``
+      4) Clamp to the recorder timeline:
+         ``start = max(0, start_raw)``,
+         ``end   = min(audio_len_samples, end_raw)``
+      5) Return the clamped window and diagnostics.
+    """
     pair = first_last_valid_serial(serials)
     if not pair:
         return None
