@@ -32,6 +32,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import shutil
+import subprocess
 
 # --- Your modules (import paths per discover.py) ---
 from scripts.discover import discover as run_discover
@@ -478,18 +480,113 @@ def clip_program_audio(
 def mux_video_audio(
     mp4_in: Path, a1_clip: Path, a2_clip: Path, fps: Optional[float], out_path: Path
 ) -> Path:
-    """TODO: implement with ffmpeg; CFR recommended to match clipped audio duration.
-    If VFR desired, build PTS from JSON separately.
     """
+    Mux one MP4 video with two mono program-audio clips into an MP4.
+
+    Behavior
+    --------
+    - If `fps` is provided, the video is **re-encoded** to a constant frame rate (CFR)
+      using libx264 at that fps. This is the safest way to keep A/V in lock-step
+      with your sample-accurate audio trims. We use `-vsync cfr`, output `-r`, and
+      `-shortest` so the mux stops at the shortest input (typically the audio).
+    - If `fps` is None, the video stream is **copied** (`-c:v copy`) and only audio
+      is re-encoded to AAC. This preserves any source VFR timing; only use this if
+      your upstream PTS are already correct.
+
+    Inputs
+    ------
+    mp4_in   : Path to the source MP4 (video stream 0:v:0 is used).
+    a1_clip  : Path to clipped program-audio for channel A1 (e.g., WAV).
+    a2_clip  : Path to clipped program-audio for channel A2 (e.g., WAV).
+               If you only have one program channel, pass the same file for both.
+    fps      : Target CFR (e.g., 30.0). If None, video is copied (no CFR enforcement).
+    out_path : Destination MP4 (parent dirs are created).
+
+    Returns
+    -------
+    Path to the output file on success.
+
+    Raises
+    ------
+    FileNotFoundError if ffmpeg is not found.
+    RuntimeError if ffmpeg returns a non-zero exit code.
+    """
+    # Preconditions
+    if shutil.which("ffmpeg") is None:
+        raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Base command: inputs + stream mapping (video + two audio tracks)
+    cmd = [
+        "ffmpeg",
+        "-y",  # overwrite out_path if it exists
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(mp4_in),
+        "-i",
+        str(a1_clip),
+        "-i",
+        str(a2_clip),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-map",
+        "2:a:0",
+    ]
+
+    if fps is not None:
+        # Enforce CFR by re-encoding video. Keep this conservative & fast.
+        cmd += [
+            "-r",
+            f"{fps:.6f}",  # output frame rate
+            "-vsync",
+            "cfr",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    else:
+        # Preserve original video stream/timestamps
+        cmd += ["-c:v", "copy"]
+
+    # Encode audio to AAC (WAV/FLAC/etc. will be transcoded)
+    cmd += [
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",  # stop when the shortest stream ends (usually audio)
+        "-movflags",
+        "+faststart",
+        str(out_path),
+    ]
+
     logger.info(
-        "[TODO] Mux %s + (A1,A2) at CFR fps=%.6f → %s",
+        "Muxing %s with A1=%s, A2=%s %s → %s",
         mp4_in.name,
-        (fps or 0.0),
+        a1_clip.name,
+        a2_clip.name,
+        f"(CFR {fps:.6f} fps)" if fps is not None else "(copy video)",
         out_path.name,
     )
-    # Example CFR:
-    # ffmpeg -hide_banner -loglevel error -r {fps} -i "{mp4_in}" -i "{a1_clip}" -i "{a2_clip}" -map 0:v:0 -map 1:a:0 -map 2:a:0 -c:v copy -c:a aac -shortest "{out_path}"
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "ffmpeg failed during mux:\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+
     return out_path
 
 
