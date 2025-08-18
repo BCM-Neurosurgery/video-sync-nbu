@@ -6,13 +6,16 @@ serial_diag_cli_jsonparser.py — Diagnose discontinuities in integer sequences 
 
 Categories (expect +1):
 - ok        : diff == +1
-- duplicate : diff == 0
+- duplicate : diff == 0                 (adjacent equal values)
 - forward   : diff > +1  (we also sum total_missing_ids = sum(diff-1))
 - drop      : diff < 0
 
 Extras
 - Pretty, columnized histograms (use --hist-cols 1 for one bin per line)
 - Optional text/JSON reports
+- Reports:
+    1) Adjacent-duplicate events (value -> how many times it repeated immediately)
+    2) Values that appear in ≥2 non-consecutive groups (a “group” is a maximal block of the same value)
 """
 from __future__ import annotations
 
@@ -64,6 +67,17 @@ class Analysis:
     top_forward_jumps: List[StepEvent]
     top_drops: List[StepEvent]
 
+    # 1) Adjacent duplicates (value repeated immediately)
+    duplicate_value_hist: Dict[int, int]  # value -> number of adjacent-duplicate events
+
+    # 2) Non-consecutive group repeats
+    # A group is a maximal block of identical values; if a value occurs in ≥2 groups, it's a non-consecutive repeat.
+    group_count_by_value: Dict[int, int]  # value -> #groups it appears in
+    crossgroup_repeat_values: Dict[
+        int, int
+    ]  # value -> #groups (only values with >=2 groups)
+    n_crossgroup_repeat_unique: int  # how many unique values appear in ≥2 groups
+
 
 # -----------------------------
 # I/O helpers
@@ -89,11 +103,6 @@ def load_series_from_json_with_parser(
     - 'frame_id' maps to raw frame_id.
     - 'chunk_serial_data' maps directly and is zero-cleaned by your parser.
     """
-    if JsonParser is None:
-        raise ImportError(
-            f"Could not import JsonParser: {_JSON_IMPORT_ERR}. Ensure jsonfileparser.py is on PYTHONPATH."
-        )
-
     parser = JsonParser(path)
     if cam_serial not in parser.get_camera_serials():
         raise ValueError(
@@ -101,7 +110,6 @@ def load_series_from_json_with_parser(
         )
 
     df = parser.get_camera_df(cam_serial)
-    # df has: chunk_serial_data, frame_id, frame_ids_reconstructed
     if field == "chunk_serial_data":
         series = (
             pd.to_numeric(df["chunk_serial_data"], errors="coerce")
@@ -196,8 +204,25 @@ def pick_top(events: List[StepEvent], kind: str, top_k: int) -> List[StepEvent]:
     return filtered[:top_k]
 
 
+def group_blocks(ids: Sequence[int]) -> List[Tuple[int, int, int]]:
+    """
+    Return list of groups as (value, start_index, end_index), where each group
+    is a maximal block of identical consecutive values.
+    """
+    if not ids:
+        return []
+    groups: List[Tuple[int, int, int]] = []
+    start = 0
+    for i in range(1, len(ids)):
+        if ids[i] != ids[i - 1]:
+            groups.append((ids[i - 1], start, i - 1))
+            start = i
+    groups.append((ids[-1], start, len(ids) - 1))
+    return groups
+
+
 def analyze(ids: Sequence[int], expect_step: int = 1, top_k: int = 5) -> Analysis:
-    """Run the basic discontinuity analysis and return a structured result."""
+    """Run the discontinuity analysis + duplicate stats (adjacent and non-consecutive groups)."""
     if len(ids) < 2:
         raise ValueError("Need at least two values to analyze.")
 
@@ -206,9 +231,19 @@ def analyze(ids: Sequence[int], expect_step: int = 1, top_k: int = 5) -> Analysi
     )
     top_forward = pick_top(events, FWD, top_k)
     top_drops = pick_top(events, DROP, top_k)
-
     total_missing_ids = sum((e.diff - expect_step) for e in events if e.kind == FWD)
     longest_span = longest_ok_span(ids, expect_step)
+
+    # 1) Adjacent-duplicate histogram (value -> number of times value repeated immediately)
+    duplicate_value_hist = Counter(e.prev for e in events if e.kind == DUP)
+
+    # 2) Non-consecutive group repeats
+    groups = group_blocks(ids)
+    group_count_by_value: Dict[int, int] = Counter(
+        g[0] for g in groups
+    )  # value -> #groups
+    crossgroup_repeat_values = {v: c for v, c in group_count_by_value.items() if c >= 2}
+    n_crossgroup_repeat_unique = len(crossgroup_repeat_values)
 
     return Analysis(
         n_values=len(ids),
@@ -223,6 +258,10 @@ def analyze(ids: Sequence[int], expect_step: int = 1, top_k: int = 5) -> Analysi
         longest_ok_segment=longest_span,
         top_forward_jumps=top_forward,
         top_drops=top_drops,
+        duplicate_value_hist=dict(duplicate_value_hist),
+        group_count_by_value=dict(group_count_by_value),
+        crossgroup_repeat_values=crossgroup_repeat_values,
+        n_crossgroup_repeat_unique=n_crossgroup_repeat_unique,
     )
 
 
@@ -238,14 +277,12 @@ def format_histogram_grid(d: Dict[int, int], label: str, cols: int = 2) -> str:
         return ""
     items = [f"{k}:{v}" for k, v in sorted(d.items())]
     rows = _chunk(items, max(1, cols))
-
     # width per column
     ncols = max(len(r) for r in rows)
     colw = [0] * ncols
     for r in rows:
         for j, cell in enumerate(r):
             colw[j] = max(colw[j], len(cell))
-
     lines = [f"{label}:"]
     for r in rows:
         padded = [s.ljust(colw[j]) for j, s in enumerate(r)]
@@ -266,6 +303,30 @@ def summarize_text(
         f"Values={res.n_values}  Steps={res.total_steps}  ok={res.ok_steps} ({res.ok_ratio:.2%})"
     )
     add("Counts: " + ", ".join(f"{k}={v}" for k, v in sorted(res.counts.items())))
+
+    # Adjacent duplicates summary
+    if res.counts.get(DUP, 0) > 0:
+        add(f"Adjacent duplicate events: {res.counts[DUP]}")
+        dup_block = format_histogram_grid(
+            res.duplicate_value_hist,
+            "Adjacent-duplicate values (value:count)",
+            cols=hist_cols,
+        )
+        if dup_block:
+            add(dup_block)
+
+    # Non-consecutive group repeats
+    if res.n_crossgroup_repeat_unique:
+        add(
+            f"Values repeating in non-consecutive groups: {res.n_crossgroup_repeat_unique} unique value(s)"
+        )
+        cross_block = format_histogram_grid(
+            res.crossgroup_repeat_values,
+            "Non-consecutive group repeats (value:#groups)",
+            cols=hist_cols,
+        )
+        if cross_block:
+            add(cross_block)
 
     if res.forward_diff_hist:
         add(f"Total missing IDs (from forward jumps): {res.total_missing_ids}")
@@ -391,10 +452,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             # JSON MODE via JsonParser
             if args.list_cameras:
-                if JsonParser is None:
-                    raise ImportError(
-                        f"Could not import JsonParser: {_JSON_IMPORT_ERR}. Ensure jsonfileparser.py is on PYTHONPATH."
-                    )
                 parser = JsonParser(args.path)
                 print(f"serials: {parser.get_camera_serials()}")
                 return 0
