@@ -1,5 +1,5 @@
 # videofileparser.py
-# Minimal OOP wrapper around ffprobe to get duration (s), FPS, and resolution.
+# Minimal OOP wrapper around ffprobe to get duration (s), FPS, resolution, and frame_count.
 # Requires FFmpeg's ffprobe to be installed and available on PATH.
 
 from __future__ import annotations
@@ -13,13 +13,14 @@ from typing import Optional, Tuple
 
 class VideoFileParser:
     """
-    Parse a video file for duration (seconds), FPS, and resolution using ffprobe.
+    Parse a video file for duration (seconds), FPS, resolution, and total frame count using ffprobe.
 
     Usage:
         p = VideoFileParser("path/to/video.mp4")
-        print(p.duration)     # float seconds
-        print(p.fps)          # float frames per second
-        print(p.resolution)   # (width, height)
+        print(p.duration)      # float seconds
+        print(p.fps)           # float frames per second
+        print(p.resolution)    # (width, height)
+        print(p.frame_count)   # int total frames
     """
 
     def __init__(self, path: str) -> None:
@@ -33,6 +34,7 @@ class VideoFileParser:
         self._fps: Optional[float] = None
         self._width: Optional[int] = None
         self._height: Optional[int] = None
+        self._frame_count: Optional[int] = None
 
         self._probe()
 
@@ -51,6 +53,11 @@ class VideoFileParser:
     def resolution(self) -> Tuple[int, int]:
         assert self._width is not None and self._height is not None
         return (self._width, self._height)
+
+    @property
+    def frame_count(self) -> int:
+        assert self._frame_count is not None
+        return self._frame_count
 
     # --- Internal helpers ---------------------------------------------------
     def _probe(self) -> None:
@@ -104,6 +111,18 @@ class VideoFileParser:
             raise RuntimeError("Could not determine FPS from ffprobe output.")
         self._fps = fps
 
+        # Frame count: prefer nb_frames; otherwise compute round(duration * fps)
+        nb_frames_raw = stream.get("nb_frames")
+        frame_count = 0
+        if nb_frames_raw not in (None, "", "N/A"):
+            try:
+                frame_count = int(nb_frames_raw)
+            except Exception:
+                frame_count = 0
+        if frame_count <= 0:
+            raise RuntimeError("Could not determine frame count from ffprobe output.")
+        self._frame_count = frame_count
+
     @staticmethod
     def _parse_rate(rate: Optional[str]) -> float:
         """Convert a rate like '30000/1001' or '30' into a float FPS."""
@@ -132,5 +151,6 @@ if __name__ == "__main__":
         print("Duration (s):", p.duration)
         print("FPS:", p.fps)
         print("Resolution:", p.resolution)
+        print("Frame count:", p.frame_count)
     else:
         print("Usage: python videofileparser.py <video.mp4>")
