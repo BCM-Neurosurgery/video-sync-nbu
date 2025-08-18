@@ -785,7 +785,7 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
                 continue
 
             # CFR fps so that video duration == audio clip duration
-            n_frames = len(cj.raw_serials)
+            n_frames = v.frame_count
             fps = n_frames / max(1e-9, (window.end - window.start) / fs)
 
             tag = f"{vg.group_id}.serial{cam_serial}"
