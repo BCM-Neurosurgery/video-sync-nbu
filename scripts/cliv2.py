@@ -289,6 +289,72 @@ def ransac_affine(
     iters: int = 1000,
     min_inliers: int = 20,
 ) -> FitResult:
+    """
+    Robustly fit an affine map y ≈ α·x + β between serial/frame indices and audio
+    sample indices using a simple RANSAC followed by least-squares on the inliers.
+
+    This is typically used to align camera-derived indices (e.g., frame IDs or
+    decoded chunk serials) to audio sample positions in the serial channel.
+
+    Parameters
+    ----------
+    anchors : List[Anchor]
+        Collection of correspondence points. Each `Anchor` must expose:
+          - `serial` (x): camera-side index (e.g., frame ID or chunk-serial)
+          - `audio_sample` (y): matching audio sample index (integer or float)
+        At least two anchors are required.
+    tau_samples : float, default=3200.0
+        Inlier threshold in *audio samples*. A residual |y - (αx + β)| ≤ `tau_samples`
+        is treated as an inlier during RANSAC. (Example: at 48 kHz, 3200 samples ≈ 66.7 ms.)
+    iters : int, default=1000
+        Number of RANSAC iterations. Each iteration samples two anchors to
+        hypothesize (α, β), then counts inliers under `tau_samples`.
+    min_inliers : int, default=20
+        Minimum absolute number of inliers required for a "strong" model. The
+        implementation also requires at least 50% of all anchors to be inliers.
+        If this is not met, a warning is logged and the fit proceeds with the
+        best model found.
+
+    Returns
+    -------
+    FitResult
+        Dataclass summarizing the fit with fields:
+          - `alpha` : float
+                Slope (samples per serial unit). If x is frame ID, then
+                α ≈ sample_rate / fps.
+          - `beta` : float
+                Intercept at x = 0 (samples).
+          - `inliers` : int
+                Number of inliers used in the final least-squares refit.
+          - `total` : int
+                Total number of anchors provided.
+          - `rmse` : float
+                Root-mean-square error over the inlier set (in samples).
+
+    Notes
+    -----
+    - The RANSAC hypothesis uses two random distinct anchors; vertical models
+      (Δx = 0) are skipped.
+    - After selecting the best inlier set, parameters (α, β) are recomputed
+      via closed-form least squares on those inliers.
+    - For reproducibility, set `random.seed(...)` in the caller before invoking.
+    - A warning is emitted if the best consensus set is "weak" (too few inliers).
+
+    Raises
+    ------
+    AssertionError
+        If fewer than two anchors are provided.
+
+    Examples
+    --------
+    >>> # anchors: serial -> audio_sample
+    >>> anchors = [Anchor(serial=0, audio_sample=1000),
+    ...            Anchor(serial=10, audio_sample=58000),
+    ...            Anchor(serial=20, audio_sample=115000)]
+    >>> fit = ransac_affine(anchors, tau_samples=2000, iters=500)
+    >>> fit.alpha, fit.beta  # doctest: +SKIP
+    (approx_sample_per_serial, approx_intercept)
+    """
     import random
 
     assert len(anchors) >= 2, "Not enough anchors to fit."
