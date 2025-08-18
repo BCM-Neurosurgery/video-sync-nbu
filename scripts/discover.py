@@ -357,24 +357,24 @@ class VideoDiscoverer(_DirMixin):
 
     # ---- metadata helpers --------------------------------------------------
 
-    def _extract_video_meta(self, mp4_path: Path) -> tuple[float, str, float]:
-        """Return (duration_sec, 'WxH', fps). On failure, return zeros/empty."""
+    def _extract_video_meta(self, mp4_path: Path) -> tuple[float, str, float, int]:
+        """Return (duration_sec, 'WxH', fps, frame_count). On failure, return zeros/empty."""
         try:
             vp = VideoFileParser(str(mp4_path))
             w, h = vp.resolution
-            return vp.duration, f"{w}x{h}", vp.fps
+            return vp.duration, f"{w}x{h}", vp.fps, vp.frame_count
         except Exception as e:
             self.log.warning(
                 "ffprobe failed for %s: %s; leaving meta blank.", mp4_path.name, e
             )
-            return 0.0, "", 0.0
+            return 0.0, "", 0.0, 0
 
     def _build_videos_for_seg(
         self, cams: Dict[str, Path], ts: Optional[datetime]
     ) -> List[Video]:
         videos: List[Video] = []
         for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
-            dur, res, fps = self._extract_video_meta(mp4_path)
+            dur, res, fps, frame_count = self._extract_video_meta(mp4_path)
             videos.append(
                 Video(
                     path=mp4_path,
@@ -383,6 +383,7 @@ class VideoDiscoverer(_DirMixin):
                     duration=dur,
                     resolution=res,
                     frame_rate=fps,
+                    frame_count=frame_count,
                 )
             )
         return videos

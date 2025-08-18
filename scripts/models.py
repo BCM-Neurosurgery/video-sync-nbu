@@ -117,6 +117,7 @@ class Video:
     duration: length in seconds
     resolution: video resolution (e.g. "1920x1080")
     frame_rate: frames per second (e.g. 30.0)
+    frame_count: total number of frames
     """
 
     path: Path
@@ -125,6 +126,7 @@ class Video:
     duration: float
     resolution: str
     frame_rate: float
+    frame_count: int
 
 
 @dataclass(frozen=True)
