@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import shutil
 import subprocess
+import csv
 
 # --- Your modules (import paths per discover.py) ---
 from scripts.discover import discover as run_discover
@@ -121,14 +122,17 @@ def cmd_discover(args: argparse.Namespace) -> int:
 def build_serial_index(
     a3_path: Path, out_index: Path, *, site: str = "jamail", threshold: float = 0.5
 ) -> Path:
-    """Decode A3 once and persist mapping: serial → block START sample.
-    TODO: if you prefer Parquet/SQLite, change the persistence layer below.
+    """Decode A3 once and persist per-block rows using decoder ranges.
+
+    CSV columns
+    -----------
+    serial,start_sample,end_sample
+    (one row per decoded block; mirrors wavfileparser.save_counts_csv)
     """
     logger.info("Decoding serial audio (A3): %s", a3_path)
     dec = WavSerialDecoder(str(a3_path))
-    frames, stats = dec.decode_by_block(
-        site=site, threshold=threshold
-    )  # returns List[int], sets dec.frame_ranges
+    frames, stats = dec.decode_by_block(site=site, threshold=threshold)
+
     logger.info(
         "Decoded %d serials (bytes_total=%d, longest_monotone=%d)",
         len(frames),
@@ -136,24 +140,20 @@ def build_serial_index(
         getattr(stats, "monotonic_span", 0),
     )
 
-    # Map serial → START sample (first occurrence wins)
-    mapping: Dict[int, int] = {}
-    ranges = getattr(dec, "frame_ranges", []) or []
-    for i, s in enumerate(frames):
-        if s is None or s <= 0:
-            continue
-        if i < len(ranges) and ranges[i] != ("", ""):
-            start, end = ranges[i]
-            s_start = int(start)
-        else:
-            # Fallback: approximate by uniform spacing (rare)
-            s_start = i
-        mapping.setdefault(int(s), s_start)
+    # Prefer `frame_ranges` (as in wavfileparser); fall back to `ranges` if present.
+    ranges = getattr(dec, "frame_ranges", None) or getattr(dec, "ranges", None) or []
 
     out_index.parent.mkdir(parents=True, exist_ok=True)
-    with out_index.open("w", encoding="utf-8") as f:
-        json.dump({str(k): int(v) for k, v in mapping.items()}, f)
-    logger.info("Wrote serial index with %d keys → %s", len(mapping), out_index)
+    with out_index.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["serial", "start_sample", "end_sample"])
+        for i, val in enumerate(frames):
+            s, e = ranges[i] if i < len(ranges) else ("", "")
+            # Guard in case `val` can be None
+            serial = "" if val is None else int(val)
+            w.writerow([serial, s, e])
+
+    logger.info("Wrote serial CSV with %d rows → %s", len(frames), out_index)
     return out_index
 
 
@@ -174,9 +174,27 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def load_serial_index(path: Path) -> Dict[int, int]:
-    with path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
-    return {int(k): int(v) for k, v in raw.items()}
+    """
+    Load a CSV with columns: serial,start_sample,end_sample
+    Returns a mapping {serial: start_sample}, first occurrence wins.
+    """
+    mapping: Dict[int, int] = {}
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                serial_str = (row.get("serial") or "").strip()
+                start_str = (row.get("start_sample") or "").strip()
+                if not serial_str or not start_str:
+                    continue
+                serial = int(serial_str)
+                start_sample = int(start_str)
+                # keep the first occurrence
+                mapping.setdefault(serial, start_sample)
+            except (ValueError, TypeError, KeyError):
+                # skip malformed rows
+                continue
+    return mapping
 
 
 # ---------------------------------------------------------------------------
