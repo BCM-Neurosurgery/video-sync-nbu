@@ -35,6 +35,7 @@ class CamJson:
     path: The file path to this camera's JSON file.
     raw_serials: List of original chunk serial data
     raw_frame_ids: List of original frame ids
+    fixed_serials: List of fixed chunk serial data
     """
 
     cam_serial: Optional[str]
@@ -42,6 +43,7 @@ class CamJson:
     path: Optional[Path]
     raw_serials: Optional[List[int]]
     raw_frame_ids: Optional[List[int]]
+    fixed_serials: Optional[List[int]]
 
 
 @dataclass(frozen=True)

@@ -426,12 +426,24 @@ class VideoDiscoverer(_DirMixin):
                     )
                     raw_frame_ids = None
 
+                try:
+                    fixed_serials = jp.get_fixed_chunk_serial_list(s)
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_fixed_chunk_serial_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    fixed_serials = None
+
                 cam_jsons[s_str] = CamJson(
                     cam_serial=s_str,
                     timestamp=ts,
                     path=json_path,
                     raw_serials=raw_serials,
                     raw_frame_ids=raw_frame_ids,
+                    fixed_serials=fixed_serials,
                 )
 
             return cam_serials, cam_jsons
