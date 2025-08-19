@@ -235,8 +235,58 @@ def label_frames(serials: Sequence[int], frame_ids: Sequence[int]) -> List[str]:
 def collect_anchors(
     index_map: Dict[int, int], session, *, min_k: int = 3, min_span_ratio: float = 0.05
 ) -> List[Anchor]:
-    """Traverse all segments/cameras and build NORMAL-only anchors.
-    `session` is scripts.models.AudioVideoSession from discover().
+    """Build a list of audio/video alignment anchors from all segments/cameras.
+
+    This traverses every VideoGroup in `session` and, for each Video in that group,
+    looks up the corresponding CamJson (via `vg.json.cam_jsons[cam_serial]`). From
+    that CamJson it expects:
+      • `fixed_serials`: per-frame serial IDs after any fixing/cleanup
+      • `raw_frame_ids`: per-frame frame IDs as recorded
+    It labels each frame with `label_frames(serials, frame_ids)` and keeps only
+    frames labeled "NORMAL". For each kept frame whose serial `s` exists in
+    `index_map`, it emits an Anchor:
+        Anchor(serial=s,
+               audio_sample=index_map[s],
+               cam_serial=str(v.cam_serial),
+               segment_id=vg.group_id)
+
+    Parameters
+    ----------
+    index_map : Dict[int, int]
+        Mapping from decoded serial ID (from the serial audio channel) to the
+        corresponding audio sample index (start index of each block).
+        Keys and values must be integers.
+    session : scripts.models.AudioVideoSession
+        Result of `discover(...)`. Must contain `videogroups`, each with a `json`
+        that has `cam_jsons: Dict[str, CamJson]`, and each `CamJson` provides
+        `fixed_serials` and `raw_frame_ids`.
+    min_k : int, default 3
+        If a camera yields fewer than `min_k` candidate anchors in its segment,
+        a warning is logged. This does not prevent anchors from being returned.
+    min_span_ratio : float, default 0.05
+        Heuristic span check. Let `s_vals` be the kept serials for a cam/segment
+        and `span = max(s_vals) - min(s_vals)`. If `span` is smaller than
+        `max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1)))`, a warning
+        is logged to flag poor coverage (e.g., all anchors clumped together).
+
+    Returns
+    -------
+    List[Anchor]
+        One Anchor per kept frame (NORMAL + present in `index_map`), across all
+        segments and cameras. The list may be empty if no valid anchors exist.
+
+    Notes
+    -----
+    • This function does *not* deduplicate anchors across segments/cameras.
+      Multiple segments containing the same serial will yield multiple anchors.
+    • It assumes `fixed_serials` and `raw_frame_ids` are 1:1 aligned and of the
+      same length for a given CamJson.
+    • Logging:
+        - Warns if CamJson is missing or lacks required arrays.
+        - Warns if a cam/segment yields < `min_k` anchors.
+        - Warns if the serial span heuristic indicates low coverage.
+      Finally logs the total anchors collected and segment count.
+
     """
     anchors: List[Anchor] = []
     for vg in session.videogroups:
