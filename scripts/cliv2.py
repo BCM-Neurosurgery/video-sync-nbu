@@ -29,9 +29,9 @@ import argparse
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 import shutil
 import subprocess
 import csv
@@ -52,10 +52,18 @@ logger.setLevel(logging.INFO)
 # --- Small data holders ---
 @dataclass
 class Anchor:
+    """Represents a synchronization anchor point.
+
+    Attributes
+    ----------
+    frame_id: the actual frame id starting from 0 that exists in video
+    """
+
     serial: int
     audio_sample: int
     cam_serial: str
     segment_id: str
+    frame_id: int
 
 
 @dataclass
@@ -76,6 +84,15 @@ class ClipWindow:
     end: int
     pad_head: int
     pad_tail: int
+
+
+@dataclass
+class MatchedWindow:
+    fid0: int
+    fid1: int
+    s0: int
+    s1: int
+    fps: float  # CFR computed from anchors (frames / audio duration)
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +352,7 @@ def collect_anchors(
                         audio_sample=int(index_map[int(s)]),
                         cam_serial=cam_serial,
                         segment_id=vg.group_id,
+                        frame_id=serials.index(int(s)),
                     )
                 )
 
@@ -770,7 +788,133 @@ def cmd_fit(args: argparse.Namespace) -> int:
         )
     )
     logger.info("Saved fit → %s", args.out_fit)
+    if getattr(args, "out_anchors", None):
+        Path(args.out_anchors).write_text(
+            json.dumps([asdict(a) for a in anchors], indent=2)
+        )
+        logger.info("Saved anchors → %s (%d rows)", args.out_anchors, len(anchors))
     return 0
+
+
+def compute_window_from_anchors(
+    anchors_for_video: List[dict],
+    fs: int,
+    audio_len_samples: int,
+    *,
+    margin_samples: int = 0,
+) -> MatchedWindow:
+    if not anchors_for_video:
+        raise RuntimeError("No anchors for this video")
+
+    anchors_for_video = sorted(anchors_for_video, key=lambda a: int(a["frame_id"]))
+    a_start, a_end = anchors_for_video[0], anchors_for_video[-1]
+
+    fid0, fid1 = int(a_start["frame_id"]), int(a_end["frame_id"])
+    if fid1 < fid0:
+        fid0, fid1 = fid1, fid0
+
+    s0, s1 = int(a_start["audio_sample"]), int(a_end["audio_sample"])
+    if s1 < s0:
+        s0, s1 = s1, s0
+
+    if margin_samples:
+        _s0, _s1 = s0, s1
+        s0 = max(0, s0 - margin_samples)
+        s1 = min(audio_len_samples, s1 + margin_samples)
+        logger.debug(
+            "Applied margins: samples [%d:%d) → [%d:%d) (+/-%d)",
+            _s0,
+            _s1,
+            s0,
+            s1,
+            margin_samples,
+        )
+
+    n_frames = fid1 - fid0 + 1
+    if n_frames <= 0:
+        raise RuntimeError(f"Invalid frame span: [{fid0}, {fid1}]")
+
+    audio_dur_sec = (s1 - s0) / float(fs)
+    if audio_dur_sec <= 0:
+        raise RuntimeError(f"Invalid audio sample span: [{s0}, {s1}] @ fs={fs}")
+
+    fps = n_frames / audio_dur_sec
+
+    logger.info(
+        "Matched window: frames [%d..%d] (n=%d), samples [%d..%d) (%.3fs), CFR=%.6f fps",
+        fid0,
+        fid1,
+        n_frames,
+        s0,
+        s1,
+        audio_dur_sec,
+        fps,
+    )
+    return MatchedWindow(fid0=fid0, fid1=fid1, s0=s0, s1=s1, fps=fps)
+
+
+def clip_video_by_frames(
+    mp4_in: Path,
+    n0: int,
+    n1: int,
+    fps: float,
+    out_path: Path,
+) -> Path:
+    """
+    Extract frames in [n0, n1] inclusive using trim's start_frame/end_frame,
+    reset PTS to 0, and re-encode CFR at `fps`. Drops source audio.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
+    if n1 < n0:
+        raise RuntimeError(f"Invalid frame window: [{n0}, {n1}]")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # trim uses end_frame as EXCLUSIVE → add +1 to include n1
+    end_frame_excl = n1 + 1
+    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl},setpts=PTS-STARTPTS"
+    dur_sec = (n1 - n0 + 1) / float(fps)
+    logger.info(
+        "Video trim %s → frames [%d..%d] @ %.6f fps (≈%.3fs) → %s",
+        mp4_in.name,
+        n0,
+        n1,
+        fps,
+        dur_sec,
+        out_path.name,
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(mp4_in),
+        "-vf",
+        vf,
+        "-an",
+        "-vsync",
+        "cfr",
+        "-r",
+        f"{float(fps):.6f}",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(out_path),
+    ]
+    logger.debug("FFmpeg (video-trim) cmd: %s", " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "ffmpeg failed during video frame-trim:\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+    return out_path
 
 
 def cmd_sync_segments(args: argparse.Namespace) -> int:
@@ -782,7 +926,6 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
     ag = sess.audiogroup
     vgs = sess.videogroups
 
-    # Select program audios (all channels except the serial channel)
     assert ag.serial_audio is not None, "No serial channel found."
     serial_ch = ag.serial_audio.channel
     prog_channels = [ch for ch in sorted(ag.audios.keys()) if ch != serial_ch]
@@ -794,56 +937,73 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
         else Path(ag.audios[prog_channels[0]].path)
     )
 
-    # Audio sample rate & length from the serial channel (shared recorder clock)
     fs = int(ag.serial_audio.sample_rate)
     audio_len_samples = int(fs * float(ag.serial_audio.duration))
 
-    # Load fit parameters
-    params = json.loads(Path(args.fit).read_text())
-    fit = FitResult(
-        alpha=float(params["alpha"]),
-        beta=float(params["beta"]),
-        inliers=int(params.get("inliers", 0)),
-        total=int(params.get("total", 0)),
-        rmse=float(params.get("rmse", 0.0)),
-    )
+    if not getattr(args, "anchors", None):
+        raise ValueError("--anchors is required for anchor-driven sync.")
+    try:
+        anchors_all = json.loads(Path(args.anchors).read_text())
+    except Exception as e:
+        raise RuntimeError(f"Failed to load anchors JSON ({args.anchors}): {e}") from e
 
     out_audio = Path(args.out_audio)
     out_video = Path(args.out_video)
 
+    total_videos = sum(len(vg.videos or []) for vg in vgs)
+    logger.info(
+        "Starting anchor-driven sync: %d segments, %d videos, fs=%d Hz",
+        len(vgs),
+        total_videos,
+        fs,
+    )
+    logger.info("Loaded %d anchors (global).", len(anchors_all))
+
+    produced = 0
     for vg in vgs:
         if not vg.videos:
             logger.warning("%s: no videos.", vg.group_id)
             continue
+
+        logger.info("Segment %s: %d videos", vg.group_id, len(vg.videos))
         for v in vg.videos:
             cam_serial = str(v.cam_serial)
-            cj = vg.json.cam_jsons.get(cam_serial)
-            if not cj or not cj.fixed_serials:
-                logger.warning(
-                    "%s cam %s: missing JSON serials.", vg.group_id, cam_serial
-                )
-                continue
-
-            window = compute_clip_window_for_segment(
-                cj.fixed_serials,
-                fit,
-                margin_samples=args.margin,
-                audio_len_samples=audio_len_samples,
-            )
-            if not window:
-                logger.warning("%s cam %s: no valid window.", vg.group_id, cam_serial)
-                continue
-
-            # CFR fps so that video duration == audio clip duration
-            n_frames = v.frame_count
-            fps = n_frames / max(1e-9, (window.end - window.start) / fs)
-
             tag = f"{vg.group_id}.serial{cam_serial}"
-            a1_clip, a2_clip = clip_program_audio(a1, a2, window, out_audio, tag)
-            out_path = out_video / f"{tag}_synced.mp4"
-            mux_video_audio(Path(v.path), a1_clip, a2_clip, fps, out_path)
 
-    logger.info("Sync complete (placeholders used for trims/mux; fill TODOs).")
+            cand = [
+                a
+                for a in anchors_all
+                if a.get("segment_id") == vg.group_id
+                and a.get("cam_serial") == cam_serial
+            ]
+            if not cand:
+                logger.warning("No anchors for %s cam %s", vg.group_id, cam_serial)
+                continue
+            logger.info("%s: %d anchors", tag, len(cand))
+
+            # Compute matched window (anchors only)
+            mw = compute_window_from_anchors(
+                anchors_for_video=cand,
+                fs=fs,
+                audio_len_samples=audio_len_samples,
+                margin_samples=0,  # keep as-is
+            )
+
+            # 1) Clip program audio to [s0, s1)
+            awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
+            a1_clip, a2_clip = clip_program_audio(a1, a2, awindow, out_audio, tag)
+
+            # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
+            clip_mp4 = out_video / f"{tag}_clip.mp4"
+            clip_video_by_frames(Path(v.path), mw.fid0, mw.fid1, mw.fps, clip_mp4)
+
+            # 3) Mux: copy video, add program audio
+            out_path = out_video / f"{tag}_synced.mp4"
+            logger.info("Mux → %s", out_path.name)
+            mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
+            produced += 1
+
+    logger.info("Anchor-driven sync complete. Wrote %d files.", produced)
     return 0
 
 
@@ -887,6 +1047,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--tau", type=float, default=3200.0)
     f.add_argument("--iters", type=int, default=1000)
     f.add_argument("--min-inliers", type=int, default=20)
+    f.add_argument("--out-anchors", help="Path to write anchors JSON")
     f.set_defaults(func=cmd_fit)
 
     s = sub.add_parser(
@@ -896,6 +1057,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--audio-dir", required=True)
     s.add_argument("--video-dir", required=True)
     s.add_argument("--serial-channel", type=int, default=3)
+    s.add_argument("--anchors", help="Path to anchors JSON saved during 'fit'")
     s.add_argument("--fit", required=True)
     s.add_argument("--out-audio", required=True)
     s.add_argument("--out-video", required=True)
