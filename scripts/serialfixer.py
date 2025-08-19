@@ -92,8 +92,8 @@ class CamJsonSerialFixer(SerialFixer):
     Rationale
     ---------
     - gap=2   : classic midpoint correction.
-    - gap=129 : enforces long interior runs bounded by endpoints spaced by 129.
-                (Interior length is 128.) This matches use cases where camera
+    - gap=130 : enforces long interior runs bounded by endpoints spaced by 130.
+                (Interior length is 129.) This matches use cases where camera
                 metadata should be strictly +1 within larger spans.
 
     Examples
@@ -104,7 +104,7 @@ class CamJsonSerialFixer(SerialFixer):
 
     def fix(self, series: List[int]) -> List[int]:
         s = list(series)
-        for gap in (2, 129):
+        for gap in (2, 130):
             s = self.fix_midpoints_gap(s, gap)
         return s
 
