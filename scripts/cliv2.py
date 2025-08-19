@@ -245,14 +245,14 @@ def collect_anchors(
         for v in vg.videos:
             cam_serial = str(v.cam_serial)
             cj = vg.json.cam_jsons.get(cam_serial)
-            if not cj or not cj.raw_serials or not cj.raw_frame_ids:
+            if not cj or not cj.fixed_serials or not cj.raw_frame_ids:
                 logger.warning(
-                    "%s cam %s: missing raw serials/frame_ids in JSON",
+                    "%s cam %s: missing fixed serials/frame_ids in JSON",
                     vg.group_id,
                     cam_serial,
                 )
                 continue
-            serials = list(cj.raw_serials)
+            serials = list(cj.fixed_serials)
             frame_ids = list(cj.raw_frame_ids)
             labels = label_frames(serials, frame_ids)
 
@@ -768,14 +768,14 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
         for v in vg.videos:
             cam_serial = str(v.cam_serial)
             cj = vg.json.cam_jsons.get(cam_serial)
-            if not cj or not cj.raw_serials:
+            if not cj or not cj.fixed_serials:
                 logger.warning(
                     "%s cam %s: missing JSON serials.", vg.group_id, cam_serial
                 )
                 continue
 
             window = compute_clip_window_for_segment(
-                cj.raw_serials,
+                cj.fixed_serials,
                 fit,
                 margin_samples=args.margin,
                 audio_len_samples=audio_len_samples,
