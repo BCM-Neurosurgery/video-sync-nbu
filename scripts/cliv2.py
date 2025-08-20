@@ -565,23 +565,38 @@ def compute_clip_window_for_segment(
 
 
 def clip_program_audio(
-    a1: Path, a2: Path, window: ClipWindow, out_dir: Path, tag: str
+    a1: Path,
+    a2: Path,
+    window: "ClipWindow",
+    out_dir: Path,
+    tag: str,
+    out_fs: Optional[int] = None,
+    serial_fs: int = 48000,
 ) -> Tuple[Path, Path]:
     """
-    Trim the two program-audio files to a sample-accurate window using ffmpeg's
-    `atrim` filter and write lossless WAVs.
+    Trim A1/A2 to the serial-defined window. `window.start/end` are in SERIAL samples.
+    We convert to seconds and trim by time, then (optionally) resample to `out_fs`.
     """
-    import shutil
-    import subprocess
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not found on PATH.")
+    if window.end <= window.start:
+        raise RuntimeError(
+            f"Invalid clip window: start={window.start}, end={window.end}"
+        )
+    if out_fs is not None and (not isinstance(out_fs, int) or out_fs <= 0):
+        raise ValueError(f"out_fs must be a positive int (Hz), got {out_fs!r}")
 
-    def _run_atrim(in_path: Path, out_path: Path, start: int, end: int) -> None:
-        """Run ffmpeg with a sample-accurate atrim and write PCM WAV."""
-        if shutil.which("ffmpeg") is None:
-            raise RuntimeError("ffmpeg not found on PATH. Please install ffmpeg.")
+    # Convert serial samples → seconds
+    start_sec = window.start / float(serial_fs)
+    end_sec = window.end / float(serial_fs)
 
+    def _run_trim(in_path: Path, out_path: Path) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        filter_expr = (
-            f"atrim=start_sample={start}:end_sample={end},asetpts=PTS-STARTPTS"
+        base = f"atrim=start={start_sec:.9f}:end={end_sec:.9f},asetpts=PTS-STARTPTS"
+        filt = (
+            base
+            if out_fs is None
+            else f"{base},aresample=sample_rate={out_fs}:resampler=soxr"
         )
         cmd = [
             "ffmpeg",
@@ -593,36 +608,29 @@ def clip_program_audio(
             "-i",
             str(in_path),
             "-af",
-            filter_expr,
+            filt,
             "-c:a",
             "pcm_s16le",
             str(out_path),
         ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if proc.returncode != 0:
-            err_text = proc.stderr.decode("utf-8", errors="ignore")
-            raise RuntimeError(
-                f"ffmpeg atrim failed for '{in_path}' → '{out_path}' "
-                f"(start={start}, end={end}).\n{err_text}"
-            )
-
-    # Sanity checks
-    if window.end <= window.start:
-        raise RuntimeError(
-            f"Invalid clip window: start={window.start}, end={window.end}"
+        proc = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg trim failed for '{in_path}':\n{proc.stderr}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_a1 = out_dir / f"{tag}.A1.wav"
     out_a2 = out_dir / f"{tag}.A2.wav"
-
-    _run_atrim(a1, out_a1, window.start, window.end)
-    _run_atrim(a2, out_a2, window.start, window.end)
+    _run_trim(a1, out_a1)
+    _run_trim(a2, out_a2)
 
     logger.info(
-        "Clipped A1/A2 samples [%d:%d) → %s, %s",
-        window.start,
-        window.end,
+        "Clipped A1/A2 to t=[%.6f, %.6f) s (serial_fs=%d)%s → %s, %s",
+        start_sec,
+        end_sec,
+        serial_fs,
+        f", out_fs={out_fs}" if out_fs else "",
         out_a1.name,
         out_a2.name,
     )
@@ -861,8 +869,17 @@ def clip_video_by_frames(
     out_path: Path,
 ) -> Path:
     """
-    Extract frames in [n0, n1] inclusive using trim's start_frame/end_frame,
-    reset PTS to 0, and re-encode CFR at `fps`. Drops source audio.
+    Extract frames in [n0, n1] inclusive by index and re-encode at true CFR `fps`
+    without dropping/duplicating frames.
+
+    Implementation details
+    ----------------------
+    - We use trim with start_frame/end_frame (end is exclusive) to select frames.
+    - We then set constant timestamps via setpts=N/(fps*TB) so each output frame
+        is spaced at exactly 1/fps seconds starting at t=0.
+    - We DO NOT use output "-r" (which would resample and change frame count).
+    - We pass "-vsync vfr" to avoid implicit CFR resampling by the muxer.
+    - Source audio is dropped ("-an").
     """
     if shutil.which("ffmpeg") is None:
         raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
@@ -873,18 +890,9 @@ def clip_video_by_frames(
 
     # trim uses end_frame as EXCLUSIVE → add +1 to include n1
     end_frame_excl = n1 + 1
-    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl},setpts=PTS-STARTPTS"
-    dur_sec = (n1 - n0 + 1) / float(fps)
-    logger.info(
-        "Video trim %s → frames [%d..%d] @ %.6f fps (≈%.3fs) → %s",
-        mp4_in.name,
-        n0,
-        n1,
-        fps,
-        dur_sec,
-        out_path.name,
-    )
-
+    # Trim frames and set constant PTS so duration = N / fps with exactly N frames
+    # Note: setpts uses N = output frame index within the filter chain
+    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl}," f"setpts=(N/{fps:.9f})/TB"
     cmd = [
         "ffmpeg",
         "-y",
@@ -895,17 +903,31 @@ def clip_video_by_frames(
         str(mp4_in),
         "-vf",
         vf,
-        "-an",
+        # Avoid implicit frame duplication/drop; PTS already enforces CFR
         "-vsync",
-        "cfr",
-        "-r",
-        f"{float(fps):.6f}",
+        "vfr",
+        "-an",
         "-c:v",
         "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
         "-pix_fmt",
         "yuv420p",
         str(out_path),
     ]
+
+    dur_sec = (n1 - n0 + 1) / float(fps)
+    logger.info(
+        "Video trim %s → frames [%d..%d] @ %.6f fps (≈%.3fs) → %s",
+        mp4_in.name,
+        n0,
+        n1,
+        fps,
+        dur_sec,
+        out_path.name,
+    )
     logger.debug("FFmpeg (video-trim) cmd: %s", " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -938,6 +960,7 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
     )
 
     fs = int(ag.serial_audio.sample_rate)
+    logger.info("Audio sample rate: %d Hz", fs)
     audio_len_samples = int(fs * float(ag.serial_audio.duration))
 
     if not getattr(args, "anchors", None):
@@ -991,7 +1014,9 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
 
             # 1) Clip program audio to [s0, s1)
             awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
-            a1_clip, a2_clip = clip_program_audio(a1, a2, awindow, out_audio, tag)
+            a1_clip, a2_clip = clip_program_audio(
+                a1, a2, awindow, out_audio, tag, out_fs=fs, serial_fs=fs
+            )
 
             # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
             clip_mp4 = out_video / f"{tag}_clip.mp4"
