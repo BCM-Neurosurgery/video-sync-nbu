@@ -1,7 +1,9 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple, Iterable
+import numpy as np
+from tqdm import tqdm
 
 
 class SerialFixer(ABC):
@@ -25,8 +27,53 @@ class SerialFixer(ABC):
 
     @abstractmethod
     def fix(self, series: List[int]) -> List[int]:
-        """Return a new list with this strategy’s fixes applied."""
+        """Return a new list with this strategy's fixes applied."""
         raise NotImplementedError
+
+    @staticmethod
+    def apply_gap_passes(series: List[int], gaps: Iterable[int]) -> List[int]:
+        """Apply fix_midpoints_gap for each gap (left→right, one pass each)."""
+        s = list(series)
+        for gap in tqdm(gaps):
+            s = SerialFixer.fix_midpoints_gap(s, gap)
+        return s
+
+    @staticmethod
+    def drop_zeros(series: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Remove all elements equal to 0.
+
+        Returns
+        -------
+        (filtered, kept_indices)
+            filtered: series with zeros removed
+            kept_indices: indices in the original series that were kept
+        """
+        kept_vals: List[int] = []
+        kept_idx: List[int] = []
+        for i, v in enumerate(series):
+            if v != 0:
+                kept_vals.append(v)
+                kept_idx.append(i)
+        return kept_vals, kept_idx
+
+    @staticmethod
+    def cascade_then_drop(
+        series: List[int], gaps: Iterable[int]
+    ) -> Tuple[List[int], List[int]]:
+        """
+        Run gap passes, then drop zeros and decreases ONCE.
+        Returns (filtered_values, kept_original_indices_after_cascade).
+        """
+        # 1) Midpoint gap passes
+        s = SerialFixer.apply_gap_passes(series, gaps)
+
+        # 2) Drop zeros (record indices relative to original)
+        s_no0, keep1 = SerialFixer.drop_zeros(s)
+        if not s_no0:
+            return [], []
+
+        return s_no0, keep1
 
     @staticmethod
     def fix_midpoints_gap(series: List[int], gap: int) -> List[int]:
@@ -87,7 +134,7 @@ class SerialFixer(ABC):
 
 class CamJsonSerialFixer(SerialFixer):
     """
-    Camera JSON strategy: apply gap fixes in this order: [2, 129].
+    Camera JSON strategy: apply gap fixes in this order: [2, 130].
 
     Rationale
     ---------
@@ -95,11 +142,6 @@ class CamJsonSerialFixer(SerialFixer):
     - gap=130 : enforces long interior runs bounded by endpoints spaced by 130.
                 (Interior length is 129.) This matches use cases where camera
                 metadata should be strictly +1 within larger spans.
-
-    Examples
-    --------
-    >>> CamJsonSerialFixer().fix([5, 6, 6, 8])
-    [5, 6, 7, 8]
     """
 
     def fix(self, series: List[int]) -> List[int]:
@@ -111,47 +153,35 @@ class CamJsonSerialFixer(SerialFixer):
 
 class AudioSerialFixer(SerialFixer):
     """
-    Audio strategy: apply a cascade of gap fixes for k = 2..10 (inclusive).
-
-    This progressively tightens the interior constraints from short to longer
-    windows, each in a single pass.
-
-    Examples
-    --------
-    >>> AudioSerialFixer().fix([5, 6, 6, 8, 9, 10, 11])
-    [5, 6, 7, 8, 9, 10, 11]
-    >>> AudioSerialFixer().fix([2, 3, 5, 5, 5, 7])
-    [2, 3, 4, 5, 6, 7]
+    Audio strategy:
+      1) Midpoint gap passes (k = 2..10).
+      2) Drop zeros.
+      3) Drop decreases.
     """
+
+    GAPS = range(2, 20)
 
     def fix(self, series: List[int]) -> List[int]:
-        s = list(series)
-        for gap in range(2, 11):
-            s = self.fix_midpoints_gap(s, gap)
-        return s
+        vals, _ = SerialFixer.cascade_then_drop(series, gaps=self.GAPS)
+        return vals
 
 
-def fix_csv(argv: Optional[List[str]] = None) -> None:
+def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
     """
-    CLI: read CSV (serial,start_sample,end_sample), apply sliding-window fixes
-    sequentially for gaps 2, 3, 4, 5 (one pass each), and write '<stem>-fixed.csv'.
+    CLI: read CSV (serial,start_sample,end_sample), run AudioSerialFixer pipeline ONCE
+    (gap passes 2..10 → drop zeros → drop decreases), filter rows accordingly,
+    and write '<stem>-fixed.csv'.
 
     Usage
     -----
     python script.py input.csv
     python script.py input.csv -o /path/to/out.csv
-
-    Notes
-    -----
-    - This CLI currently applies a conservative default (gaps 2..5).
-      If you want the AudioSerialFixer (2..10) or CamJsonSerialFixer ([2,129]),
-      call those classes directly in your pipeline code.
     """
     import argparse
     import pandas as pd
 
     p = argparse.ArgumentParser(
-        description="Fix 'serial' column using sliding-window rules"
+        description="Fix 'serial' via midpoint gap passes (2..10), then drop zeros/decreases (once)."
     )
     p.add_argument(
         "csv", type=Path, help="Input CSV with columns: serial,start_sample,end_sample"
@@ -183,20 +213,26 @@ def fix_csv(argv: Optional[List[str]] = None) -> None:
             f"ERROR: missing required columns: {sorted(missing)}. Found: {list(df.columns)}"
         )
 
-    # Ensure integer-like serials
+    # Ensure integer-like serials (vectorized conversion is faster)
     try:
-        serial_list = [int(x) for x in df["serial"].tolist()]
+        serials = df["serial"].astype("int64").to_numpy()
     except Exception as exc:
         raise SystemExit("ERROR: column 'serial' must contain integers.") from exc
 
-    s = serial_list
-    for gap in range(2, 11):
-        s = SerialFixer.fix_midpoints_gap(s, gap)
+    # Single pipeline: gap passes → drop zeros → drop decreases, ONCE.
+    fixer = AudioSerialFixer()
+    final_vals, kept_idx = SerialFixer.cascade_then_drop(
+        serials.tolist(), gaps=fixer.GAPS
+    )
 
-    df["serial"] = s
+    # Filter DataFrame to match the kept positions and assign fixed values.
+    df = df.iloc[kept_idx].copy()
+    df.reset_index(drop=True, inplace=True)
+    df.loc[:, "serial"] = final_vals
+
     df.to_csv(out_path, index=False)
     print(str(out_path))
 
 
 if __name__ == "__main__":
-    fix_csv()
+    fix_audio_csv()
