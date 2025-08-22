@@ -20,13 +20,10 @@ class SerialFixer(ABC):
         ...
         s[R-1] = s[L] + (k - 1)
     Endpoints L and R are never changed by this rule.
-
-    Subclasses implement a `fix()` strategy by choosing which gaps to apply
-    (and in what order), typically chaining multiple passes.
     """
 
     @abstractmethod
-    def fix(self, series: List[int]) -> List[int]:
+    def fix(self, series: List[int]) -> Tuple[List[int], List[int]]:
         """Return a new list with this strategy's fixes applied."""
         raise NotImplementedError
 
@@ -40,65 +37,63 @@ class SerialFixer(ABC):
 
     @staticmethod
     def drop_zeros(series: List[int]) -> Tuple[List[int], List[int]]:
-        """
-        Remove all elements equal to 0.
+        """Remove all elements equal to 0. Returns (filtered, kept_indices)."""
+        if not series:
+            return [], []
+        arr = np.asarray(series)
+        keep_mask = arr != 0
+        kept_idx = np.nonzero(keep_mask)[0]
+        return arr[keep_mask].tolist(), kept_idx.tolist()
 
-        Returns
-        -------
-        (filtered, kept_indices)
-            filtered: series with zeros removed
-            kept_indices: indices in the original series that were kept
+    @staticmethod
+    def drop_consecutive_duplicates(series: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Drop elements that are equal to their immediate predecessor (keep the first).
+        Readable for-loop implementation.
         """
         kept_vals: List[int] = []
         kept_idx: List[int] = []
+        prev = None
         for i, v in enumerate(series):
-            if v != 0:
+            if prev is None or v != prev:
+                kept_vals.append(v)
+                kept_idx.append(i)
+                prev = v
+        return kept_vals, kept_idx
+
+    @staticmethod
+    def drop_min_outlier(series: List[int]) -> Tuple[List[int], List[int]]:
+        """Drop elements s[i] such that s[i] < s[0]/10. Returns (filtered, kept_indices)."""
+        if not series:
+            return [], []
+        m = series[0]
+        thr = m / 10.0
+        kept_vals: List[int] = []
+        kept_idx: List[int] = []
+        for i, v in enumerate(series):
+            if v >= thr:
                 kept_vals.append(v)
                 kept_idx.append(i)
         return kept_vals, kept_idx
 
     @staticmethod
-    def cascade_then_drop(
-        series: List[int], gaps: Iterable[int]
-    ) -> Tuple[List[int], List[int]]:
-        """
-        Run gap passes, then drop zeros and decreases ONCE.
-        Returns (filtered_values, kept_original_indices_after_cascade).
-        """
-        # 1) Midpoint gap passes
-        s = SerialFixer.apply_gap_passes(series, gaps)
-
-        # 2) Drop zeros (record indices relative to original)
-        s_no0, keep1 = SerialFixer.drop_zeros(s)
-        if not s_no0:
+    def drop_max_outlier(series: List[int]) -> Tuple[List[int], List[int]]:
+        """Drop elements s[i] such that s[i] > s[-1] * 10. Returns (filtered, kept_indices)."""
+        if not series:
             return [], []
-
-        return s_no0, keep1
+        M = series[-1]
+        thr = M * 10.0
+        kept_vals: List[int] = []
+        kept_idx: List[int] = []
+        for i, v in enumerate(series):
+            if v <= thr:
+                kept_vals.append(v)
+                kept_idx.append(i)
+        return kept_vals, kept_idx
 
     @staticmethod
     def fix_midpoints_gap(series: List[int], gap: int) -> List[int]:
-        """
-        Apply one left→right pass of the sliding-window rule for a given gap.
-
-        Parameters
-        ----------
-        series : List[int]
-            Input integer sequence.
-        gap : int
-            Neighbor span k (>= 2). Enforces a +1 interior when s[R]-s[L] == k.
-
-        Returns
-        -------
-        List[int]
-            A new list with corrections applied for this single pass.
-
-        Examples
-        --------
-        >>> SerialFixer.fix_midpoints_gap([1, 99, 3, 4], 2)
-        [1, 2, 3, 4]
-        >>> SerialFixer.fix_midpoints_gap([5, 6, 6, 8], 3)
-        [5, 6, 7, 8]
-        """
+        """Apply one left→right pass of the sliding-window rule for a given gap."""
         if gap < 2:
             return list(series)
 
@@ -109,7 +104,6 @@ class SerialFixer(ABC):
         s = list(series)  # work on a copy
 
         # i indexes the first interior element; L=i-1, R=i+(gap-1)
-        # Valid i: 1 .. n-gap
         for i in range(1, n - gap + 1):
             L = i - 1
             R = i + (gap - 1)
@@ -133,16 +127,7 @@ class SerialFixer(ABC):
 
 
 class CamJsonSerialFixer(SerialFixer):
-    """
-    Camera JSON strategy: apply gap fixes in this order: [2, 130].
-
-    Rationale
-    ---------
-    - gap=2   : classic midpoint correction.
-    - gap=130 : enforces long interior runs bounded by endpoints spaced by 130.
-                (Interior length is 129.) This matches use cases where camera
-                metadata should be strictly +1 within larger spans.
-    """
+    """Camera JSON strategy: apply gap fixes in this order: [2, 130]."""
 
     def fix(self, series: List[int]) -> List[int]:
         s = list(series)
@@ -154,23 +139,56 @@ class CamJsonSerialFixer(SerialFixer):
 class AudioSerialFixer(SerialFixer):
     """
     Audio strategy:
-      1) Midpoint gap passes (k = 2..10).
+      1) Midpoint gap passes (k = 2..19).
       2) Drop zeros.
-      3) Drop decreases.
+      3) Drop consecutive duplicates.
+      4) Drop min/max outliers.
     """
 
     GAPS = range(2, 20)
 
-    def fix(self, series: List[int]) -> List[int]:
-        vals, _ = SerialFixer.cascade_then_drop(series, gaps=self.GAPS)
-        return vals
+    def fix(self, series: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Pipeline for audio: gap passes → drop zeros → drop consecutive duplicates
+                            → drop min outliers → drop max outliers.
+        Returns (filtered_values, kept_original_indices_after_pipeline).
+        """
+        # 1) Midpoint gap passes
+        s = SerialFixer.apply_gap_passes(series, self.GAPS)
+        if not s:
+            return [], []
+
+        # 2) Drop zeros
+        s2, k1 = SerialFixer.drop_zeros(s)
+        if not s2:
+            return [], []
+
+        # 3) Drop consecutive duplicates (keep first of each run)
+        s3, k2 = SerialFixer.drop_consecutive_duplicates(s2)
+        if not s3:
+            return [], []
+        idx3 = [k1[i] for i in k2]
+
+        # 4) Drop min outliers
+        s4, k3 = SerialFixer.drop_min_outlier(s3)
+        if not s4:
+            return [], []
+        idx4 = [idx3[i] for i in k3]
+
+        # 5) Drop max outliers
+        s5, k4 = SerialFixer.drop_max_outlier(s4)
+        if not s5:
+            return [], []
+        idx5 = [idx4[i] for i in k4]
+
+        return s5, idx5
 
 
 def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
     """
     CLI: read CSV (serial,start_sample,end_sample), run AudioSerialFixer pipeline ONCE
-    (gap passes 2..10 → drop zeros → drop decreases), filter rows accordingly,
-    and write '<stem>-fixed.csv'.
+    (gap passes 2..19 → drop zeros → drop duplicates → drop min/max outliers),
+    filter rows accordingly, and write '<stem>-fixed.csv'.
 
     Usage
     -----
@@ -181,7 +199,7 @@ def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
     import pandas as pd
 
     p = argparse.ArgumentParser(
-        description="Fix 'serial' via midpoint gap passes (2..10), then drop zeros/decreases (once)."
+        description="Fix 'serial' via gap passes (2..19), then drop zeros, duplicates, and min/max outliers."
     )
     p.add_argument(
         "csv", type=Path, help="Input CSV with columns: serial,start_sample,end_sample"
@@ -213,17 +231,14 @@ def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
             f"ERROR: missing required columns: {sorted(missing)}. Found: {list(df.columns)}"
         )
 
-    # Ensure integer-like serials (vectorized conversion is faster)
+    # Ensure integer-like serials
     try:
         serials = df["serial"].astype("int64").to_numpy()
     except Exception as exc:
         raise SystemExit("ERROR: column 'serial' must contain integers.") from exc
 
-    # Single pipeline: gap passes → drop zeros → drop decreases, ONCE.
     fixer = AudioSerialFixer()
-    final_vals, kept_idx = SerialFixer.cascade_then_drop(
-        serials.tolist(), gaps=fixer.GAPS
-    )
+    final_vals, kept_idx = fixer.fix(serials.tolist())
 
     # Filter DataFrame to match the kept positions and assign fixed values.
     df = df.iloc[kept_idx].copy()
