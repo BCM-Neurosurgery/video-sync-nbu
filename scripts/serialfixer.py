@@ -62,33 +62,78 @@ class SerialFixer(ABC):
         return kept_vals, kept_idx
 
     @staticmethod
-    def drop_min_outlier(series: List[int]) -> Tuple[List[int], List[int]]:
-        """Drop elements s[i] such that s[i] < s[0]/10. Returns (filtered, kept_indices)."""
+    def keep_increase_seq(series: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Keep a strictly increasing subsequence by using the last kept value as an anchor.
+        If s[i] < last_kept, skip until a future s[j] > last_kept; append only those > anchor.
+
+        Returns
+        -------
+        (filtered, kept_indices)
+        """
         if not series:
             return [], []
-        m = series[0]
-        thr = m / 10.0
         kept_vals: List[int] = []
         kept_idx: List[int] = []
-        for i, v in enumerate(series):
-            if v >= thr:
+        # Always keep the first element as the initial anchor
+        anchor = series[0]
+        kept_vals.append(anchor)
+        kept_idx.append(0)
+        for i in range(1, len(series)):
+            v = series[i]
+            if v > anchor:
                 kept_vals.append(v)
                 kept_idx.append(i)
+                anchor = v  # advance anchor
+            # else: v <= anchor → skip
+        return kept_vals, kept_idx
+
+    @staticmethod
+    def drop_min_outlier(series: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Relative-downside outlier filter:
+        walk the list and skip s[i] if s[i] < s[i-1] / 5.
+        The comparison uses the immediate predecessor in the ORIGINAL sequence.
+        Keeps the first element by definition.
+
+        Returns (filtered_values, kept_indices).
+        """
+        if not series:
+            return [], []
+        kept_vals: List[int] = [series[0]]
+        kept_idx: List[int] = [0]
+        prev = series[0]
+        for i in range(1, len(series)):
+            v = series[i]
+            if v >= prev / 5.0:
+                kept_vals.append(v)
+                kept_idx.append(i)
+            # else: drop v
+            prev = v  # always advance to the immediate predecessor in the original sequence
         return kept_vals, kept_idx
 
     @staticmethod
     def drop_max_outlier(series: List[int]) -> Tuple[List[int], List[int]]:
-        """Drop elements s[i] such that s[i] > s[-1] * 10. Returns (filtered, kept_indices)."""
+        """
+        Relative-upside outlier filter:
+        walk the list and skip s[i] if s[i] > s[i-1] * 10.
+        The comparison uses the immediate predecessor in the ORIGINAL sequence.
+        Keeps the first element by definition.
+
+        Returns (filtered_values, kept_indices).
+        """
         if not series:
             return [], []
-        M = series[-1]
-        thr = M * 10.0
-        kept_vals: List[int] = []
-        kept_idx: List[int] = []
-        for i, v in enumerate(series):
-            if v <= thr:
+        kept_vals: List[int] = [series[0]]
+        kept_idx: List[int] = [0]
+        prev = series[0]
+        for i in range(1, len(series)):
+            v = series[i]
+            if v <= prev * 5.0:
                 kept_vals.append(v)
                 kept_idx.append(i)
+            # else: drop v
+            prev = v  # always advance to the immediate predecessor in the original sequence
         return kept_vals, kept_idx
 
     @staticmethod
