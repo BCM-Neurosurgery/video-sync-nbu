@@ -170,6 +170,84 @@ class SerialFixer(ABC):
 
         return s
 
+    def fix_midpoints_gap_fast(series: List[int], gap: int) -> List[int]:
+        """
+        Same semantics as fix_midpoints_gap (one left→right pass for a single gap),
+        but faster: operate on diff and use sliding window sums.
+        """
+        s = np.asarray(series, dtype=np.int64)
+        n = len(s)
+        if gap < 2 or n < gap + 1:
+            return s.tolist()
+
+        diff = np.diff(s)  # length n-1
+        is_one = diff == 1  # boolean view for "already perfect"
+
+        # Initialize sliding-window sums for the first [0:gap) block
+        sum_diff = int(diff[:gap].sum())  # equals s[gap]-s[0]
+        sum_one = int(is_one[:gap].sum())
+
+        # L runs over left endpoints of diff windows
+        # this ensures R = L + gap is always less than n
+        for L in range(0, n - gap):
+            # Endpoint condition: s[L+gap]-s[L] == gap  <=>  sum_diff == gap
+            # Need a write only if interior not already all ones (sum_one != gap)
+            if sum_diff == gap and sum_one != gap:
+                # Rewrite the whole interior block to +1 in one shot
+                diff[L : L + gap] = 1
+                is_one[L : L + gap] = True
+                # Current window now perfect
+                sum_diff = gap
+                sum_one = gap
+
+            # Slide window: remove diff[L], add diff[L+gap]
+            if L + gap < len(diff):
+                sum_diff = sum_diff - int(diff[L]) + int(diff[L + gap])
+                sum_one = sum_one - int(is_one[L]) + int(is_one[L + gap])
+
+        # Reconstruct s from s[0] and the (possibly modified) diffs
+        out = np.empty_like(s)
+        out[0] = s[0]
+        out[1:] = s[0] + np.cumsum(diff)
+        return out.tolist()
+
+    def apply_gap_passes_fast(series: List[int], gaps: Iterable[int]) -> List[int]:
+        """
+        Faster replacement for SerialFixer.apply_gap_passes(series, gaps) that preserves
+        the exact left→right, gap-by-gap semantics.
+        """
+        s = np.asarray(series, dtype=np.int64)
+        n = len(s)
+        if n < 3:
+            return s.tolist()
+
+        # Work on 'diff' directly and rebuild once at the end
+        diff = np.diff(s)
+
+        for gap in tqdm(gaps):
+            if gap < 2 or n < gap + 1:
+                continue
+
+            is_one = diff == 1
+            sum_diff = int(diff[:gap].sum())
+            sum_one = int(is_one[:gap].sum())
+
+            for L in range(0, n - gap):
+                if sum_diff == gap and sum_one != gap:
+                    diff[L : L + gap] = 1
+                    is_one[L : L + gap] = True
+                    sum_diff = gap
+                    sum_one = gap
+
+                if L + gap < len(diff):
+                    sum_diff = sum_diff - int(diff[L]) + int(diff[L + gap])
+                    sum_one = sum_one - int(is_one[L]) + int(is_one[L + gap])
+
+        out = np.empty(n, dtype=np.int64)
+        out[0] = s[0]
+        out[1:] = s[0] + np.cumsum(diff)
+        return out.tolist()
+
 
 class CamJsonSerialFixer(SerialFixer):
     """Camera JSON strategy: apply gap fixes in this order: [2, 130]."""
@@ -199,7 +277,7 @@ class AudioSerialFixer(SerialFixer):
         Returns (filtered_values, kept_original_indices_after_pipeline).
         """
         # 1) Midpoint gap passes
-        s = SerialFixer.apply_gap_passes(series, self.GAPS)
+        s = SerialFixer.apply_gap_passes_fast(series, self.GAPS)
         if not s:
             return [], []
 
