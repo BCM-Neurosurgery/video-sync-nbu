@@ -137,6 +137,47 @@ class SerialFixer(ABC):
         return kept_vals, kept_idx
 
     @staticmethod
+    def drop_midpoints_gap(series: List[int], gap: int) -> Tuple[List[int], List[int]]:
+        """
+        One left→right pass over windows of size `gap` (k >= 2), with the same
+        endpoint condition as fix_midpoints_gap/_fast:
+            L = i-1, R = i+(gap-1), require s[R] - s[L] == gap.
+        For each such window, drop any INTERIOR element s[j] (i <= j <= R-1) that is
+            - ≥ 5x both endpoints, or
+            - ≤ (1/5)x both endpoints.
+        Returns (filtered_values, kept_indices) w.r.t. the ORIGINAL series.
+        """
+        s = np.asarray(series, dtype=np.int64)
+        n = len(s)
+        if gap < 2 or n < gap + 1:
+            return list(series), list(range(n))
+
+        keep = np.ones(n, dtype=bool)
+
+        # Slide i so that L=i-1 and R=i+(gap-1) are valid
+        for i in range(1, n - gap + 1):
+            L = i - 1
+            R = i + (gap - 1)
+
+            # Same endpoint-span gate as the "fix" rule
+            if s[R] - s[L] != gap:
+                continue
+
+            lo_ep = int(min(s[L], s[R]))
+            hi_ep = int(max(s[L], s[R]))
+
+            # Consider only interior indices i..R-1
+            for j in range(i, R):
+                v = int(s[j])
+                # Drop if >= 5× both endpoints or <= 1/5× both endpoints
+                if (v >= 5 * hi_ep) or (v * 5 <= lo_ep):
+                    keep[j] = False
+
+        kept_idx = np.nonzero(keep)[0].tolist()
+        kept_vals = s[keep].tolist()
+        return kept_vals, kept_idx
+
+    @staticmethod
     def fix_midpoints_gap(series: List[int], gap: int) -> List[int]:
         """Apply one left→right pass of the sliding-window rule for a given gap."""
         if gap < 2:
@@ -292,19 +333,13 @@ class AudioSerialFixer(SerialFixer):
             return [], []
         idx3 = [k1[i] for i in k2]
 
-        # 4) Drop min outliers
-        s4, k3 = SerialFixer.drop_min_outlier(s3)
+        # 4) Drop midpoints outliers
+        s4, k3 = SerialFixer.drop_midpoints_gap(s3, 2)
         if not s4:
             return [], []
         idx4 = [idx3[i] for i in k3]
 
-        # 5) Drop max outliers
-        s5, k4 = SerialFixer.drop_max_outlier(s4)
-        if not s5:
-            return [], []
-        idx5 = [idx4[i] for i in k4]
-
-        return s5, idx5
+        return s4, idx4
 
 
 def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
