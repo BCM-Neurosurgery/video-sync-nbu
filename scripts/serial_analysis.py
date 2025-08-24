@@ -425,7 +425,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--out-text",
         default=None,
-        help="Write a text report to this path (optional; single series modes only)",
+        help="Write a text report to this path (optional; for CSV input, defaults to <csv path with .txt> next to the CSV)",
     )
     p.add_argument(
         "--out-json",
@@ -554,8 +554,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 hist_cols=args.hist_cols,
             )
             print(report)
-            if args.out_text:
-                _write_text(Path(args.out_text), report)
+
+            # Default: same directory/name as CSV, but with .txt
+            out_text_path = (
+                Path(args.out_text)
+                if args.out_text
+                else Path(args.path).with_suffix(".txt")
+            )
+            _write_text(out_text_path, report)
+
             if args.out_json:
                 ids = series.astype(int).tolist()
                 result = analyze(ids, expect_step=args.expect_step, top_k=args.top)
