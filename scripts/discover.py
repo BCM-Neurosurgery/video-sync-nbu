@@ -16,6 +16,11 @@ Assumptions
 
 This script is metadata-light: WAV sample_rate/duration are probed via the
 standard library; MP3/video metadata fall back to placeholders.
+
+Update
+------
+- If --segment-id is provided, the script returns exactly one VideoGroup
+  for that segment, including all cameras found. No camera-serial filter.
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ except Exception:
     _HAVE_PYDUB = False
 
 from scripts.models import (
-    CamJson,  # retained for completeness
+    CamJson,
     Json,
     Audio,
     SerialAudio,
@@ -54,6 +59,7 @@ from scripts.models import (
 __all__ = [
     "discover_audio",
     "discover_segments",
+    "discover_segment",
     "discover",
     "FilePatterns",
     "AudioDiscoverer",
@@ -394,13 +400,13 @@ class VideoDiscoverer(_DirMixin):
         """
         Use JsonParser to populate per-camera CamJson objects.
 
-        Returns: (cam_serials_as_strings, cam_jsons_map_by_serial)
+        Returns: (cam_serials_as_strings_in_json, cam_jsons_map_by_serial)
         """
         cam_jsons: dict[str, CamJson] = {}
         try:
             jp = JsonParser(str(json_path))
             parser_serials = jp.get_camera_serials()  # e.g., [24253445, ...]
-            cam_serials = [str(s) for s in parser_serials]
+            cam_serials_all = [str(s) for s in parser_serials]
 
             for s in parser_serials:
                 s_str = str(s)
@@ -437,6 +443,17 @@ class VideoDiscoverer(_DirMixin):
                     )
                     fixed_serials = None
 
+                try:
+                    fixed_frame_ids = jp.get_fixed_frame_ids_list(s)
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_fixed_frame_ids_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    fixed_frame_ids = None
+
                 cam_jsons[s_str] = CamJson(
                     cam_serial=s_str,
                     timestamp=ts,
@@ -444,9 +461,10 @@ class VideoDiscoverer(_DirMixin):
                     raw_serials=raw_serials,
                     raw_frame_ids=raw_frame_ids,
                     fixed_serials=fixed_serials,
+                    fixed_frame_ids=fixed_frame_ids,
                 )
 
-            return cam_serials, cam_jsons
+            return cam_serials_all, cam_jsons
 
         except Exception as e:
             self.log.warning("Failed to parse JSON %s: %s", json_path.name, e)
@@ -464,7 +482,46 @@ class VideoDiscoverer(_DirMixin):
         )
         return json_wrap, cam_serials_from_json, cam_jsons
 
-    # ---- public ------------------------------------------------------------
+    # ---- public: fast single-segment path (no cam filter) -----------------
+
+    def discover_one(self, segment_id: str) -> Optional[VideoGroup]:
+        """
+        Build a single VideoGroup for a given segment_id, including all cameras.
+        Avoids a full directory scan.
+        """
+        self._ensure_exists(self.video_dir)
+
+        # JSON for this segment
+        json_matches = list(self.video_dir.glob(f"{segment_id}.json"))
+        if not json_matches:
+            self.log.warning("No JSON found for segment %s", segment_id)
+            return None
+        json_path = json_matches[0]
+
+        ts = FilePatterns.parse_tail_datetime(segment_id, DEFAULT_TZ)
+
+        # All MP4s for this segment
+        cams: Dict[str, Path] = {}
+        for vp in self.video_dir.glob(f"{segment_id}.*.mp4"):
+            parsed = FilePatterns.parse_video_filename(vp)
+            if parsed:
+                _, cam = parsed
+                if cam not in cams:  # keep first if duplicates
+                    cams[cam] = vp
+
+        videos = self._build_videos_for_seg(cams, ts)
+
+        json_wrap, _, _ = self._build_json_wrapper(json_path, ts)
+
+        return VideoGroup(
+            group_id=segment_id,
+            timestamp=ts,
+            json=json_wrap,
+            videos=videos or None,
+            cam_serials=(sorted({v.cam_serial for v in videos}) if videos else None),
+        )
+
+    # ---- public: full directory path --------------------------------------
 
     def discover(self) -> List[VideoGroup]:
         json_by_seg = self._index_jsons()
@@ -560,6 +617,10 @@ def discover_segments(video_dir: Path) -> List[VideoGroup]:
     return VideoDiscoverer(video_dir).discover()
 
 
+def discover_segment(video_dir: Path, segment_id: str) -> Optional[VideoGroup]:
+    return VideoDiscoverer(video_dir).discover_one(segment_id)
+
+
 def discover(
     audio_dir: Path, video_dir: Path, default_serial_channel: int = 3
 ) -> AudioVideoSession:
@@ -611,11 +672,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Discover audio (AUDIO_DIR) and chunked segments (VIDEO_DIR).",
     )
-    ap.add_argument("--audio-dir", type=Path, required=True)
-    ap.add_argument("--video-dir", type=Path, required=True)
+    # Make audio-dir optional (required only for full discovery)
+    ap.add_argument("--audio-dir", type=Path, help="Directory containing audio files")
+    ap.add_argument(
+        "--video-dir", type=Path, required=True, help="Directory with JSON/MP4 files"
+    )
     ap.add_argument("--serial-channel", type=int, default=3)
 
+    # Fast single-segment option
+    ap.add_argument(
+        "--segment-id",
+        type=str,
+        help="Exact segment BASE like 'TRBD001_20250715_143011'",
+    )
+
     args = ap.parse_args(argv)
+
+    # Fast path: just one VideoGroup (no audio scan, all cameras included)
+    if args.segment_id:
+        vg = VideoDiscoverer(args.video_dir).discover_one(args.segment_id)
+        if not vg:
+            logger.error("Nothing found for segment %s", args.segment_id)
+            return 1
+        _print_videogroups([vg])
+        return 0
+
+    # Full discovery path requires audio-dir
+    if not args.audio_dir:
+        logger.error("--audio-dir is required when not using --segment-id")
+        return 2
 
     session = discover(
         args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel

@@ -5,7 +5,10 @@ from datetime import datetime
 from scripts.utils import (
     replace_zeros,
 )
-from scripts.serialfixer import CamJsonSerialFixer
+from scripts.serialfixer import (
+    CamJsonSerialFixer,
+    FrameIDFixer,
+)
 
 
 class JsonParser:
@@ -104,6 +107,12 @@ class JsonParser:
         for frame_ids in self.dic["frame_id"]:
             res.append(frame_ids[cam_idx])
         return res
+
+    def get_fixed_frame_ids_list(self, cam_serial):
+        frameids = self.get_frame_ids_list(cam_serial)
+        fixer = FrameIDFixer()
+        fixed = fixer.fix(frameids)
+        return fixed
 
     def get_unique_frame_ids(self):
         """

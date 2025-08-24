@@ -36,6 +36,7 @@ class CamJson:
     raw_serials: List of original chunk serial data
     raw_frame_ids: List of original frame ids
     fixed_serials: List of fixed chunk serial data
+    fixed_frame_ids: List of wrapped frame ids
     """
 
     cam_serial: Optional[str]
@@ -44,6 +45,7 @@ class CamJson:
     raw_serials: Optional[List[int]]
     raw_frame_ids: Optional[List[int]]
     fixed_serials: Optional[List[int]]
+    fixed_frame_ids: Optional[List[int]]
 
 
 @dataclass(frozen=True)
