@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import logging
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 from collections import Counter
@@ -425,7 +425,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--out-text",
         default=None,
-        help="Write a text report to this path (optional; for CSV input, defaults to <csv path with .txt> next to the CSV)",
+        help=(
+            "Write a text report to this path. "
+            "For CSV input, defaults to saving next to the CSV with the same name but .txt."
+        ),
     )
     p.add_argument(
         "--out-json",
@@ -476,10 +479,15 @@ def _process_json_all_cameras(
     json_path: Path, *, expect_step: int, top: int, hist_cols: int
 ) -> int:
     """Process all cameras in the JSON; write per-camera text files for chunk_serial_data and frame_id."""
-    parser = JsonParser(str(json_path))
-    cams = parser.get_camera_serials()
+    try:
+        parser = JsonParser(str(json_path))
+        cams = parser.get_camera_serials()
+    except Exception as e:
+        logging.error(f"{json_path.name}: {e}")
+        return 2
+
     if not cams:
-        print(f"[error] No cameras found in {json_path.name}", file=sys.stderr)
+        logging.error(f"No cameras found in {json_path.name}")
         return 2
 
     written = 0
@@ -502,12 +510,10 @@ def _process_json_all_cameras(
                 f"{json_path.stem}.{cam_str}-chunk-serial.txt"
             )
             _write_text(out_chunk, rep_chunk)
+            logging.info(f"Analysis written to {out_chunk}")
             written += 1
         except Exception as e:
-            print(
-                f"[warn] {json_path.name} cam={cam_str} chunk_serial_data: {e}",
-                file=sys.stderr,
-            )
+            logging.warning(f"{json_path.name} cam={cam_str} chunk_serial_data: {e}")
 
         # frame_id
         try:
@@ -523,16 +529,14 @@ def _process_json_all_cameras(
             )
             out_frame = json_path.with_name(f"{json_path.stem}.{cam_str}-frame-id.txt")
             _write_text(out_frame, rep_frame)
+            logging.info(f"Analysis written to {out_frame}")
             written += 1
         except Exception as e:
-            print(
-                f"[warn] {json_path.name} cam={cam_str} frame_id: {e}",
-                file=sys.stderr,
-            )
+            logging.warning(f"{json_path.name} cam={cam_str} frame_id: {e}")
 
     if written == 0:
         return 3
-    print(f"Wrote {written} report(s) next to {json_path.name}")
+    logging.info(f"{written} report(s) written next to {json_path.name}")
     return 0
 
 
@@ -540,9 +544,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     kind = _detect_input_kind(args.path, args.input)
 
-    # CSV mode (unchanged)
+    # CSV mode
     if kind == "csv":
         try:
             series = load_series_from_csv(args.path, args.column)
@@ -553,7 +559,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 top=args.top,
                 hist_cols=args.hist_cols,
             )
-            print(report)
 
             # Default: same directory/name as CSV, but with .txt
             out_text_path = (
@@ -562,15 +567,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 else Path(args.path).with_suffix(".txt")
             )
             _write_text(out_text_path, report)
+            logging.info(f"Serial Analysis written to {out_text_path}")
 
             if args.out_json:
                 ids = series.astype(int).tolist()
                 result = analyze(ids, expect_step=args.expect_step, top_k=args.top)
                 with open(args.out_json, "w", encoding="utf-8") as f:
                     json.dump(asdict(result), f, indent=2)
+                logging.info(f"JSON report written to {args.out_json}")
+
             return 0
         except Exception as e:
-            print(f"[error] {e}", file=sys.stderr)
+            logging.error(str(e))
             return 2
 
     # JSON mode
@@ -578,10 +586,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.list_cameras:
         try:
             parser = JsonParser(str(json_path))
-            print(f"serials: {parser.get_camera_serials()}")
+            logging.info(f"serials: {parser.get_camera_serials()}")
             return 0
         except Exception as e:
-            print(f"[error] {e}", file=sys.stderr)
+            logging.error(str(e))
             return 2
 
     # Default behavior: process ALL cameras if --cam-serial not provided
@@ -605,20 +613,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             top=args.top,
             hist_cols=args.hist_cols,
         )
-        print(report)
 
         if args.out_text:
-            _write_text(Path(args.out_text), report)
+            outp = Path(args.out_text)
+            _write_text(outp, report)
+            logging.info(f"Serial analysis written to {outp}")
+        else:
+            logging.info(
+                "Serial analysis complete (no text file requested; use --out-text to save)."
+            )
 
         if args.out_json:
             ids = series.astype(int).tolist()
             result = analyze(ids, expect_step=args.expect_step, top_k=args.top)
             with open(args.out_json, "w", encoding="utf-8") as f:
                 json.dump(asdict(result), f, indent=2)
+            logging.info(f"JSON report written to {args.out_json}")
 
         return 0
     except Exception as e:
-        print(f"[error] {e}", file=sys.stderr)
+        logging.error(str(e))
         return 3
 
 
