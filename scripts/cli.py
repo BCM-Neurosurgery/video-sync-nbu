@@ -258,7 +258,7 @@ def collect_anchors(
     looks up the corresponding CamJson (via `vg.json.cam_jsons[cam_serial]`). From
     that CamJson it expects:
       • `fixed_serials`: per-frame serial IDs after any fixing/cleanup
-      • `raw_frame_ids`: per-frame frame IDs as recorded
+      • `fixed_frame_ids`: per-frame frame IDs as recorded
     It labels each frame with `label_frames(serials, frame_ids)` and keeps only
     frames labeled "NORMAL". For each kept frame whose serial `s` exists in
     `index_map`, it emits an Anchor:
@@ -276,7 +276,7 @@ def collect_anchors(
     session : scripts.models.AudioVideoSession
         Result of `discover(...)`. Must contain `videogroups`, each with a `json`
         that has `cam_jsons: Dict[str, CamJson]`, and each `CamJson` provides
-        `fixed_serials` and `raw_frame_ids`.
+        `fixed_serials` and `fixed_frame_ids`.
     min_k : int, default 3
         If a camera yields fewer than `min_k` candidate anchors in its segment,
         a warning is logged. This does not prevent anchors from being returned.
@@ -296,7 +296,7 @@ def collect_anchors(
     -----
     • This function does *not* deduplicate anchors across segments/cameras.
       Multiple segments containing the same serial will yield multiple anchors.
-    • It assumes `fixed_serials` and `raw_frame_ids` are 1:1 aligned and of the
+    • It assumes `fixed_serials` and `fixed_frame_ids` are 1:1 aligned and of the
       same length for a given CamJson.
     • Logging:
         - Warns if CamJson is missing or lacks required arrays.
@@ -312,7 +312,7 @@ def collect_anchors(
         for v in vg.videos:
             cam_serial = str(v.cam_serial)
             cj = vg.json.cam_jsons.get(cam_serial)
-            if not cj or not cj.fixed_serials or not cj.raw_frame_ids:
+            if not cj or not cj.fixed_serials or not cj.fixed_frame_ids:
                 logger.warning(
                     "%s cam %s: missing fixed serials/frame_ids in JSON",
                     vg.group_id,
@@ -320,7 +320,7 @@ def collect_anchors(
                 )
                 continue
             serials = list(cj.fixed_serials)
-            frame_ids = list(cj.raw_frame_ids)
+            frame_ids = list(cj.fixed_frame_ids)
             labels = label_frames(serials, frame_ids)
 
             # Build anchors: NORMAL frames with serial present in index_map
