@@ -318,6 +318,7 @@ class AudioPadder:
                 pass
             else:
                 # Gap detected: plan insertion after row i
+                # M: number of missing serials
                 M = delta_s - 1
                 # Number of audio samples to insert as padding
                 S = int(max(0, round(delta_s * P - D)))
@@ -326,7 +327,7 @@ class AudioPadder:
                         EditOp(
                             insert_after_sample=end_i,  # original timeline anchor
                             insert_len_samples=S,
-                            note=f"gap Δserial={delta_s} around serial {s_i}->{s_j}",
+                            note=f"gap delta_serial={delta_s} around serial {s_i}->{s_j}",
                         )
                     )
                 else:
