@@ -4,67 +4,109 @@ from pathlib import Path
 import logging
 import pandas as pd
 
-
 logger = logging.getLogger("audio_serial_fixer")
+REQUIRED_COLS = {"serial", "start_sample", "end_sample"}
 
 
 class AudioSerialFixer(SerialFixer):
     """
-    Audio strategy (simplified):
-      • Only run midpoint gap passes (k = 2..19) on the 'serial' column.
+    Audio strategy:
+      • Run midpoint gap passes (k = 2..19) on 'serial'.
+      • Then keep rows by consecutive-sequence rule.
     """
 
     GAPS = range(2, 20)
 
     def fix_csv(
         self,
-        csv: Union[str, Path, "pd.DataFrame"],
-    ) -> "pd.DataFrame":
+        csv: Union[str, Path, pd.DataFrame],
+    ) -> pd.DataFrame:
         """
-        Load CSV/DataFrame, verify it has exactly the columns:
-        ['serial', 'start_sample', 'end_sample'], apply midpoint gap passes to
-        'serial', and return a DataFrame with the same rows and fixed serials.
+        Load CSV/DataFrame, verify schema == {serial,start_sample,end_sample},
+        apply midpoint gap passes to 'serial', then filter rows via
+        keep_consecutive_seq; return the fixed DataFrame.
         """
-        # Normalize input → DataFrame
-        if isinstance(csv, (str, Path)):
-            df = pd.read_csv(csv)
-        else:
-            df = csv.copy()
+        df = self._load_csv_like(csv)
+        self._validate_schema(df)
 
-        # Strict schema check: exactly 3 required columns (order can vary)
-        required = {"serial", "start_sample", "end_sample"}
-        cols = list(df.columns)
-        if len(cols) != 3 or set(cols) != required:
-            raise ValueError(
-                f"Input must have exactly these 3 columns: {sorted(required)}; found: {cols}"
-            )
-
-        # Ensure integer-like input for the fixer, then apply gap passes
+        # Apply midpoint gap passes to the serial column
         try:
-            series = (
+            serial = (
                 pd.to_numeric(df["serial"], errors="raise").astype("int64").tolist()
             )
         except Exception as exc:
             raise ValueError("Column 'serial' must be integer-like.") from exc
 
-        fixed = SerialFixer.apply_gap_passes_fast(series, self.GAPS)
+        fixed_serial = SerialFixer.apply_gap_passes_fast(serial, self.GAPS)
+        df_fixed = df.copy()
+        df_fixed.loc[:, "serial"] = fixed_serial
 
-        df_out = df.copy()
-        df_out.loc[:, "serial"] = fixed
-        return df_out
+        # Filter rows by the consecutive-sequence rule
+        return self.keep_consecutive_seq(df_fixed)
+
+    # --- helpers & sequence filter ---
+
+    @staticmethod
+    def _load_csv_like(obj: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
+        """Load a CSV path or copy a DataFrame."""
+        if isinstance(obj, (str, Path)):
+            return pd.read_csv(obj)
+        return obj.copy()
+
+    @staticmethod
+    def _validate_schema(df: pd.DataFrame) -> None:
+        """Ensure the input has exactly the required columns (order may vary)."""
+        cols = list(df.columns)
+        if len(cols) != 3 or set(cols) != REQUIRED_COLS:
+            raise ValueError(
+                f"Input must have exactly these 3 columns: {sorted(REQUIRED_COLS)}; found: {cols}"
+            )
+
+    @staticmethod
+    def keep_consecutive_seq(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Keep rows according to consecutive-group logic.
+
+        A new group is conceptually marked when s[i] != s[i-1] + 1.
+        Append row i to results only if:
+            (s[i] != s[i-1]) OR (s[i-1] / 2 < s[i] < s[i-1] * 2).
+        The first row is always kept.
+        """
+        # Validate schema (lightweight; assume caller already validated)
+        missing = REQUIRED_COLS.difference(df.columns)
+        if missing:
+            raise ValueError(f"Missing required columns: {sorted(missing)}")
+
+        s = pd.to_numeric(df["serial"], errors="raise").astype("int64").to_numpy()
+        n = len(s)
+        if n == 0:
+            return df.copy()
+
+        keep_idx = [0]
+        for i in range(1, n):
+            prev, cur = s[i - 1], s[i]
+            if (cur != prev) or (prev / 2 < cur < prev * 2):
+                keep_idx.append(i)
+
+        out = df.iloc[keep_idx].copy()
+        out.reset_index(drop=True, inplace=True)
+        return out
 
 
 def fix_audio_csv(argv: Optional[list[str]] = None) -> None:
     """
-    Public CLI entry: read CSV, verify schema, run AudioSerialFixer (gap passes only),
-    and write '<stem>-fixed.csv' unless --out is provided.
+    Minimal public CLI: read CSV → AudioSerialFixer.fix_csv → write '<stem>-fixed.csv'
+    (or --out).
     """
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     p = argparse.ArgumentParser(
-        description="Fix 'serial' via midpoint gap passes (k = 2..19); schema must be serial,start_sample,end_sample."
+        description=(
+            "Fix 'serial' via midpoint gap passes (k=2..19) and a consecutive-sequence "
+            "filter. Schema must be serial,start_sample,end_sample."
+        )
     )
     p.add_argument("csv", type=Path, help="Input CSV path")
     p.add_argument(
@@ -87,13 +129,14 @@ def fix_audio_csv(argv: Optional[list[str]] = None) -> None:
     fixer = AudioSerialFixer()
 
     try:
-        df_out: "pd.DataFrame" = fixer.fix_csv(in_path)
+        df_out = fixer.fix_csv(in_path)
     except Exception as exc:
-        logger.error("Failed to fix CSV: %s", exc)
+        logger.error("Failed to process CSV: %s", exc)
         raise
 
     df_out.to_csv(out_path, index=False)
     logger.info("Wrote %s (%d rows)", out_path, len(df_out))
+    print(str(out_path))
 
 
 if __name__ == "__main__":
