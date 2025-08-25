@@ -56,7 +56,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import logging
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union
 
 import numpy as np
 
@@ -123,29 +123,31 @@ class AudioPlanApplier:
 
     # ------------------------------- Public API ------------------------------- #
     def apply(self) -> Path:
-        """Apply the plan to the input audio and write the edited WAV.
-
-        Returns
-        -------
-        Path
-            Path to the written edited WAV file.
-        """
-        ops = self._load_plan()
-        data, sr = self._load_audio(self.audio_path)
+        """Apply the plan to the input audio and write the edited WAV."""
         logging.info(
-            "Loaded audio: %s  shape=%s  sr=%d", self.audio_path, data.shape, sr
+            "Starting plan application: audio=%s plan=%s outdir=%s",
+            self.audio_path,
+            self.plan_path,
+            self.out_dir,
         )
+        ops = self._load_plan()
+        logging.info("Loaded plan with %d ops", len(ops))
+        logging.info("Decoding audio…")
+        data, sr = self._load_audio(self.audio_path)
+        channels = data.shape[1] if data.ndim == 2 else 1
+        logging.info("Audio decoded: shape=%s  sr=%d  ch=%d", data.shape, sr, channels)
 
         # Preflight size check against WAV 4 GB limit (PCM_16)
-        channels = data.shape[1] if data.ndim == 2 else 1
         self._preflight_wav_limit(data_len=len(data), channels=channels, ops=ops, sr=sr)
 
+        logging.info("Applying %d insertions…", len(ops))
         edited = self._apply_ops_chunked(data, ops)
-        logging.info("Applied %d ops; new length = %d samples", len(ops), len(edited))
+        logging.info("Insertions applied. New length = %d samples", len(edited))
 
         out_path = self._make_out_path()
+        logging.info("Writing edited WAV to %s", out_path)
         self._write_audio(out_path, edited, sr)
-        logging.info("Wrote edited audio: %s", out_path)
+        logging.info("Done.")
         return out_path
 
     # ------------------------------ I/O helpers ------------------------------ #
@@ -168,6 +170,10 @@ class AudioPlanApplier:
                 raise ValueError(f"Invalid plan item at index {i}: {item!r} ({e})")
         # Ensure ascending order by anchor index
         ops.sort(key=lambda x: x.insert_after_sample)
+        total_insert = sum(max(0, op.insert_len_samples) for op in ops)
+        logging.debug(
+            "Plan summary: %d ops, total_insert=%d samples", len(ops), total_insert
+        )
         return ops
 
     def _load_audio(self, path: Path) -> Tuple[np.ndarray, int]:
@@ -181,15 +187,20 @@ class AudioPlanApplier:
         if ext == ".wav":
             if sf is None:
                 raise RuntimeError("soundfile is required to read WAV files")
+            logging.debug("Reading WAV via soundfile: %s", path)
             data, sr = sf.read(path, dtype="float32", always_2d=True)
             return data, int(sr)
 
         # Try soundfile for non-WAV (works if libsndfile has codec support)
         if sf is not None:
             try:
+                logging.debug("Reading non-WAV via soundfile: %s", path)
                 data, sr = sf.read(path, dtype="float32", always_2d=True)
                 return data, int(sr)
             except Exception:
+                logging.debug(
+                    "soundfile could not decode %s; falling back to librosa", path
+                )
                 pass
 
         # Fallback decoder using librosa/audioread (MP3, etc.)
@@ -199,6 +210,7 @@ class AudioPlanApplier:
             raise RuntimeError(
                 "Cannot decode non-WAV audio without librosa (and audioread/ffmpeg)."
             ) from e
+        logging.debug("Reading via librosa/audioread: %s", path)
         y, sr = librosa.load(str(path), sr=None, mono=False)  # y: (n,) or (ch, n)
         if y.ndim == 1:
             data = y.astype(np.float32)[:, None]  # (n, 1)
@@ -213,17 +225,6 @@ class AudioPlanApplier:
         """Raise if predicted WAV output would exceed the 4 GB RIFF/WAV limit.
 
         Assumes PCM_16 output (2 bytes per sample per channel).
-
-        Parameters
-        ----------
-        data_len : int
-            Number of frames (samples per channel) in the source.
-        channels : int
-            Number of channels in the source.
-        ops : List[EditOp]
-            Planned insert operations.
-        sr : int
-            Sample rate (for logging only).
         """
         total_insert = sum(max(0, int(op.insert_len_samples)) for op in ops)
         n_final = int(data_len) + int(total_insert)
@@ -231,7 +232,6 @@ class AudioPlanApplier:
         data_bytes = n_final * bytes_per_frame
         MAX_WAV_BYTES = (2**32 - 1) - 44  # conservative header allowance
         if data_bytes > MAX_WAV_BYTES:
-            duration_hours = n_final / float(sr) / 3600.0
             raise RuntimeError(
                 (
                     "Predicted WAV output exceeds 4 GB limit: "
@@ -268,24 +268,16 @@ class AudioPlanApplier:
 
         This avoids repeatedly reallocating the growing array. Instead, we
         collect source slices and fillers into a list and concatenate once.
-
-        Parameters
-        ----------
-        data : np.ndarray
-            Source PCM, shape (frames, channels) or (frames,) as float32 or int.
-        ops : List[EditOp]
-            Sorted list of insert operations (ascending `insert_after_sample`).
-
-        Returns
-        -------
-        np.ndarray
-            Edited PCM with all insertions applied.
         """
         if data.ndim == 1:
             data = data[:, None]
         n, ch = data.shape
         parts: List[np.ndarray] = []
         cursor = 0  # current read head on the ORIGINAL timeline (0..n)
+
+        total_ops = len(ops)
+        if total_ops:
+            logging.debug("Begin applying %d ops (zero-copy)", total_ops)
 
         for k, op in enumerate(ops):
             if op.insert_len_samples <= 0:
@@ -317,6 +309,8 @@ class AudioPlanApplier:
                 cursor = pos
             # Append silence of requested length
             parts.append(self._make_fill(op.insert_len_samples, ch, data.dtype))
+            if total_ops >= 100 and (k + 1) % 100 == 0:
+                logging.debug("...applied %d/%d ops", k + 1, total_ops)
 
         # Remainder of the source
         if cursor < n:
