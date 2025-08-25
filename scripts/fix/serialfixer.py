@@ -1,5 +1,5 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import List, Tuple, Iterable
 import numpy as np
 from tqdm import tqdm
@@ -20,11 +20,6 @@ class SerialFixer(ABC):
         s[R-1] = s[L] + (k - 1)
     Endpoints L and R are never changed by this rule.
     """
-
-    @abstractmethod
-    def fix(self, series: List[int]) -> Tuple[List[int], List[int]]:
-        """Return a new list with this strategy's fixes applied."""
-        raise NotImplementedError
 
     @staticmethod
     def apply_gap_passes(series: List[int], gaps: Iterable[int]) -> List[int]:

@@ -1,70 +1,72 @@
 from scripts.fix.serialfixer import SerialFixer
-from typing import List, Tuple, Optional
+from typing import Union, Optional
 from pathlib import Path
+import logging
+import pandas as pd
+
+
+logger = logging.getLogger("audio_serial_fixer")
 
 
 class AudioSerialFixer(SerialFixer):
     """
-    Audio strategy:
-      1) Midpoint gap passes (k = 2..19).
-      2) Drop zeros.
-      3) Drop consecutive duplicates.
-      4) Drop min/max outliers.
+    Audio strategy (simplified):
+      • Only run midpoint gap passes (k = 2..19) on the 'serial' column.
     """
 
     GAPS = range(2, 20)
 
-    def fix(self, series: List[int]) -> Tuple[List[int], List[int]]:
+    def fix_csv(
+        self,
+        csv: Union[str, Path, "pd.DataFrame"],
+    ) -> "pd.DataFrame":
         """
-        Pipeline for audio: gap passes → drop zeros → drop consecutive duplicates
-                            → drop min outliers → drop max outliers.
-        Returns (filtered_values, kept_original_indices_after_pipeline).
+        Load CSV/DataFrame, verify it has exactly the columns:
+        ['serial', 'start_sample', 'end_sample'], apply midpoint gap passes to
+        'serial', and return a DataFrame with the same rows and fixed serials.
         """
-        # 1) Midpoint gap passes
-        s = SerialFixer.apply_gap_passes_fast(series, self.GAPS)
-        if not s:
-            return [], []
+        # Normalize input → DataFrame
+        if isinstance(csv, (str, Path)):
+            df = pd.read_csv(csv)
+        else:
+            df = csv.copy()
 
-        # 2) Drop zeros
-        s2, k1 = SerialFixer.drop_zeros(s)
-        if not s2:
-            return [], []
+        # Strict schema check: exactly 3 required columns (order can vary)
+        required = {"serial", "start_sample", "end_sample"}
+        cols = list(df.columns)
+        if len(cols) != 3 or set(cols) != required:
+            raise ValueError(
+                f"Input must have exactly these 3 columns: {sorted(required)}; found: {cols}"
+            )
 
-        # 3) Drop consecutive duplicates (keep first of each run)
-        s3, k2 = SerialFixer.drop_consecutive_duplicates(s2)
-        if not s3:
-            return [], []
-        idx3 = [k1[i] for i in k2]
+        # Ensure integer-like input for the fixer, then apply gap passes
+        try:
+            series = (
+                pd.to_numeric(df["serial"], errors="raise").astype("int64").tolist()
+            )
+        except Exception as exc:
+            raise ValueError("Column 'serial' must be integer-like.") from exc
 
-        # 4) Drop midpoints outliers
-        s4, k3 = SerialFixer.drop_midpoints_gap(s3, 2)
-        if not s4:
-            return [], []
-        idx4 = [idx3[i] for i in k3]
+        fixed = SerialFixer.apply_gap_passes_fast(series, self.GAPS)
 
-        return s4, idx4
+        df_out = df.copy()
+        df_out.loc[:, "serial"] = fixed
+        return df_out
 
 
-def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
+def fix_audio_csv(argv: Optional[list[str]] = None) -> None:
     """
-    CLI: read CSV (serial,start_sample,end_sample), run AudioSerialFixer pipeline ONCE
-    (gap passes 2..19 → drop zeros → drop duplicates → drop min/max outliers),
-    filter rows accordingly, and write '<stem>-fixed.csv'.
-
-    Usage
-    -----
-    python script.py input.csv
-    python script.py input.csv -o /path/to/out.csv
+    Public CLI entry: read CSV, verify schema, run AudioSerialFixer (gap passes only),
+    and write '<stem>-fixed.csv' unless --out is provided.
     """
     import argparse
-    import pandas as pd
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     p = argparse.ArgumentParser(
-        description="Fix 'serial' via gap passes (2..19), then drop zeros, duplicates, and min/max outliers."
+        description="Fix 'serial' via midpoint gap passes (k = 2..19); schema must be serial,start_sample,end_sample."
     )
-    p.add_argument(
-        "csv", type=Path, help="Input CSV with columns: serial,start_sample,end_sample"
-    )
+    p.add_argument("csv", type=Path, help="Input CSV path")
     p.add_argument(
         "-o",
         "--out",
@@ -78,36 +80,20 @@ def fix_audio_csv(argv: Optional[List[str]] = None) -> None:
     if not in_path.exists():
         raise SystemExit(f"ERROR: input CSV not found: {in_path}")
 
-    out_path: Path = (
-        args.out if args.out else in_path.with_name(f"{in_path.stem}-fixed.csv")
-    )
+    out_path: Path = args.out or in_path.with_name(f"{in_path.stem}-fixed.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(in_path)
-
-    required = {"serial", "start_sample", "end_sample"}
-    missing = required.difference(df.columns)
-    if missing:
-        raise SystemExit(
-            f"ERROR: missing required columns: {sorted(missing)}. Found: {list(df.columns)}"
-        )
-
-    # Ensure integer-like serials
-    try:
-        serials = df["serial"].astype("int64").to_numpy()
-    except Exception as exc:
-        raise SystemExit("ERROR: column 'serial' must contain integers.") from exc
-
+    logger.info("Reading %s", in_path)
     fixer = AudioSerialFixer()
-    final_vals, kept_idx = fixer.fix(serials.tolist())
 
-    # Filter DataFrame to match the kept positions and assign fixed values.
-    df = df.iloc[kept_idx].copy()
-    df.reset_index(drop=True, inplace=True)
-    df.loc[:, "serial"] = final_vals
+    try:
+        df_out: "pd.DataFrame" = fixer.fix_csv(in_path)
+    except Exception as exc:
+        logger.error("Failed to fix CSV: %s", exc)
+        raise
 
-    df.to_csv(out_path, index=False)
-    print(str(out_path))
+    df_out.to_csv(out_path, index=False)
+    logger.info("Wrote %s (%d rows)", out_path, len(df_out))
 
 
 if __name__ == "__main__":
