@@ -16,6 +16,7 @@ class AudioSerialFixer(SerialFixer):
     """
 
     GAPS = range(2, 20)
+    MAX_FWD_DELTA = 500  # allowed forward step between kept rows; tune as needed
 
     def fix_csv(
         self,
@@ -65,28 +66,78 @@ class AudioSerialFixer(SerialFixer):
     @staticmethod
     def keep_consecutive_seq(df: pd.DataFrame) -> pd.DataFrame:
         """
-        Keep rows according to consecutive-group logic.
+        Anchor-aware filter over the 'serial' column.
 
-        A new group is conceptually marked when s[i] != s[i-1] + 1.
-        Append row i to results only if:
-            (s[i] != s[i-1]) OR (s[i-1] / 2 < s[i] < s[i-1] * 2).
-        The first row is always kept.
+        Behavior
+        --------
+        • Keep the first row; set ANCHOR = serial[0], LAST_KEPT = serial[0].
+        • For each subsequent value cur:
+            - Drop if cur <= ANCHOR            # back-jumps and duplicates
+            - Drop if (MAX_FWD_DELTA is not None) and (cur - LAST_KEPT) > MAX_FWD_DELTA
+            - Otherwise keep; set ANCHOR = LAST_KEPT = cur
+
+        Examples
+        --------
+        1) Strictly increasing by 1 (keep all)
+           serial: 10, 11, 12
+           keep:   10, 11, 12
+
+        2) Back-jump after an increasing run (small numbers suppressed until surpassing anchor)
+           serial: 1001, 1002, 1003, 1004, 1005, 98, 99, 1009, 1010
+           keep:   1001, 1002, 1003, 1004, 1005,      1009, 1010
+           # 98 and 99 are <= anchor (1005) → dropped
+
+        3) Duplicate values (drop duplicates)
+           serial: 42, 42, 43, 43
+           keep:   42,     43
+
+        4) Large forward jump (controlled by MAX_FWD_DELTA)
+           MAX_FWD_DELTA = 500
+           serial: 1000, 1100, 1700, 2201
+           keep:   1000, 1100, 1700
+           # 2201 - 1700 = 501 > 500 → drop
+           # Set MAX_FWD_DELTA = None to allow 2201 (and any forward jump).
+
+        5) Minor decrease (treated as back-jump → drop)
+           serial: 100, 101, 100, 102
+           keep:   100, 101,      102
+
+        Returns
+        -------
+        pd.DataFrame
+            Rows corresponding to kept serials; index is reset.
         """
-        # Validate schema (lightweight; assume caller already validated)
+        # Schema check (lightweight; fix_csv already validates)
         missing = REQUIRED_COLS.difference(df.columns)
         if missing:
             raise ValueError(f"Missing required columns: {sorted(missing)}")
 
+        # Robust integer coercion
         s = pd.to_numeric(df["serial"], errors="raise").astype("int64").to_numpy()
         n = len(s)
-        if n == 0:
+        if n <= 1:
             return df.copy()
 
-        keep_idx = [0]
+        keep_idx = [0]  # always keep the first row
+        anchor = int(s[0])  # last trusted increasing value
+        last_kept = int(s[0])  # last value we actually appended
+        max_delta = getattr(AudioSerialFixer, "MAX_FWD_DELTA", None)
+
         for i in range(1, n):
-            prev, cur = s[i - 1], s[i]
-            if (cur != prev) or (prev / 2 < cur < prev * 2):
-                keep_idx.append(i)
+            cur = int(s[i])
+
+            # Reject values at or below the anchor (handles 1005 → 98, 99, ...)
+            if cur <= anchor:
+                continue
+
+            # Optional guard against implausibly large forward jumps
+            if max_delta is not None and (cur - last_kept) > max_delta:
+                continue
+
+            # Accept and advance anchor
+            keep_idx.append(i)
+            anchor = cur
+            last_kept = cur
 
         out = df.iloc[keep_idx].copy()
         out.reset_index(drop=True, inplace=True)
