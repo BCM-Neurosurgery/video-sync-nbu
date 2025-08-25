@@ -56,7 +56,7 @@ BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
     "nbu_sleep": {
         "flip_signal": True,
         "flip_window": True,
-        "window_samples": 536,  # empirically observed at NBU sleep
+        "window_samples": 231,  # empirically observed at NBU sleep
         "block_stride": 1100,  # keep same unless you have a measured stride
         "transition_points_1b": [6, 53, 100, 147, 194],
         "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
@@ -65,7 +65,7 @@ BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
     "nbu_lounge": {
         "flip_signal": True,
         "flip_window": True,
-        "window_samples": 646,  # empirically observed at NBU lounge
+        "window_samples": 231,  # empirically observed at NBU lounge
         "block_stride": 1100,  # adjust if your coworkers logged a different hop
         "transition_points_1b": [6, 53, 100, 147, 194],
         "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],
@@ -397,11 +397,11 @@ class WavSerialDecoder:
             w = csv.writer(f)
             w.writerow(
                 [
-                    "file",
-                    "site",
-                    "sample_rate",
-                    "channels",
-                    "index",
+                    # "file",
+                    # "site",
+                    # "sample_rate",
+                    # "channels",
+                    # "index",
                     "serial",
                     "start_sample",
                     "end_sample",
@@ -411,11 +411,11 @@ class WavSerialDecoder:
                 s, e = ranges[i] if i < len(ranges) else ("", "")
                 w.writerow(
                     [
-                        meta["filepath"],
-                        site,
-                        meta["sample_rate"],
-                        meta["channels"],
-                        i,
+                        # meta["filepath"],
+                        # site,
+                        # meta["sample_rate"],
+                        # meta["channels"],
+                        # i,
                         int(val),
                         s,
                         e,
