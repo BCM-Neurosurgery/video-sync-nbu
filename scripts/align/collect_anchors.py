@@ -2,7 +2,7 @@
 """
 scripts/anchor_collect.py — Per-segment, per-camera anchor extractor
 
-Uses your lightweight discover path:
+Uses your discover shortcut:
     from scripts.discover import discover_segment
 
 Inputs
@@ -20,7 +20,8 @@ JSON list of anchors:
     "audio_sample": <int>,
     "cam_serial": "<str>",
     "segment_id": "<str>",
-    "frame_id": <int>
+    "frame_id": <int>,
+    "frame_id_reidx": <int>
   }, ...
 ]
 
@@ -62,12 +63,14 @@ class Anchor:
 
     Attributes
     ----------
-    serial       : Positive serial embedded in the video JSON for that frame.
-    audio_sample : Start-sample index of the matching serial block in the
-                   recorder timeline (units: samples).
-    cam_serial   : Stable camera hardware serial (string).
-    segment_id   : VideoGroup identifier (e.g., basename with timestamp tail).
-    frame_id     : Actual (zero-based) frame id of that video frame.
+    serial         : Positive serial embedded in the video JSON for that frame.
+    audio_sample   : Start-sample index of the matching serial block in the
+                     recorder timeline (units: samples).
+    cam_serial     : Stable camera hardware serial (string).
+    segment_id     : VideoGroup identifier (e.g., basename with timestamp tail).
+    frame_id       : Raw (zero-based) frame id of that video frame.
+    frame_id_reidx : Re-indexed frame id (from JSON), typically contiguous
+                     after any repairs / filtering.
     """
 
     serial: int
@@ -75,6 +78,7 @@ class Anchor:
     cam_serial: str
     segment_id: str
     frame_id: int
+    frame_id_reidx: int
 
 
 # --------------------------- helpers -----------------------------------------
@@ -132,15 +136,17 @@ def label_frames(serials: Sequence[int], frame_ids: Sequence[int]) -> List[str]:
     return labels
 
 
-def _extract_cam_arrays(videogroup, cam_serial: str) -> Tuple[List[int], List[int]]:
+def _extract_cam_arrays(
+    videogroup, cam_serial: str
+) -> Tuple[List[int], List[int], List[int]]:
     """
-    From a VideoGroup, fetch CamJson for `cam_serial` and return
-    (fixed_serials, fixed_frame_ids).
+    From a VideoGroup, fetch CamJson for `cam_serial` and return:
+        (fixed_serials, fixed_frame_ids, fixed_reidx_frame_ids).
 
-    Strict requirement: both `fixed_serials` and `fixed_frame_ids` must exist.
-    No fallbacks. Raises on missing fields, empty arrays, or length mismatch.
+    Strict requirement: all three must exist, be integer-like, non-empty,
+    and have identical lengths. Raises RuntimeError otherwise.
     """
-    # Find CamJson
+    # locate CamJson
     cj = None
     if getattr(videogroup, "json", None) and getattr(
         videogroup.json, "cam_jsons", None
@@ -151,31 +157,34 @@ def _extract_cam_arrays(videogroup, cam_serial: str) -> Tuple[List[int], List[in
             f"Group '{videogroup.group_id}': no cam_json for camera {cam_serial}"
         )
 
-    # Require fixed_* fields
     serials = getattr(cj, "fixed_serials", None)
     frame_ids = getattr(cj, "fixed_frame_ids", None)
+    frame_ids_reidx = getattr(cj, "fixed_reidx_frame_ids", None)
+
     if serials is None:
         raise RuntimeError("CamJson missing required field `fixed_serials`.")
     if frame_ids is None:
         raise RuntimeError("CamJson missing required field `fixed_frame_ids`.")
+    if frame_ids_reidx is None:
+        raise RuntimeError("CamJson missing required field `fixed_reidx_frame_ids`.")
 
-    # Normalize to Python lists of ints
     try:
         serials_list = [int(x) for x in list(serials)]
         frame_ids_list = [int(x) for x in list(frame_ids)]
+        frame_ids_reidx_list = [int(x) for x in list(frame_ids_reidx)]
     except Exception as e:
         raise RuntimeError(f"CamJson fixed_* fields are not integer-like: {e}") from e
 
-    # Basic validations
-    if not serials_list or not frame_ids_list:
+    if not serials_list or not frame_ids_list or not frame_ids_reidx_list:
         raise RuntimeError("CamJson fixed_* fields must be non-empty.")
-    if len(serials_list) != len(frame_ids_list):
+    if not (len(serials_list) == len(frame_ids_list) == len(frame_ids_reidx_list)):
         raise RuntimeError(
-            f"CamJson length mismatch: len(fixed_serials)={len(serials_list)} "
-            f"!= len(fixed_frame_ids)={len(frame_ids_list)}"
+            "CamJson length mismatch among fixed_serials / fixed_frame_ids / "
+            f"fixed_reidx_frame_ids: "
+            f"{len(serials_list)}, {len(frame_ids_list)}, {len(frame_ids_reidx_list)}"
         )
 
-    return serials_list, frame_ids_list
+    return serials_list, frame_ids_list, frame_ids_reidx_list
 
 
 def _collect_anchors_for_cam(
@@ -184,6 +193,7 @@ def _collect_anchors_for_cam(
     cam_serial: str,
     serials: Sequence[int],
     frame_ids: Sequence[int],
+    frame_ids_reidx: Sequence[int],
     *,
     min_k: int = 3,
     min_span_ratio: float = 0.05,
@@ -193,7 +203,7 @@ def _collect_anchors_for_cam(
     """
     labels = label_frames(serials, frame_ids)
 
-    cand = [
+    cand: List[Tuple[int, int]] = [
         (i, int(s))
         for i, (lab, s) in enumerate(zip(labels, serials))
         if lab == "NORMAL" and s in index_map
@@ -207,7 +217,6 @@ def _collect_anchors_for_cam(
     if cand:
         s_vals = [s for _, s in cand]
         local_span = (max(s_vals) - min(s_vals)) if len(s_vals) > 1 else 0
-        # basic span heuristic relative to local range
         if local_span < max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1))):
             logger.warning(
                 "Low anchor span for %s cam %s: span=%d",
@@ -223,6 +232,7 @@ def _collect_anchors_for_cam(
             cam_serial=str(cam_serial),
             segment_id=str(segment_id),
             frame_id=int(frame_ids[i]),
+            frame_id_reidx=int(frame_ids_reidx[i]),
         )
         for i, s in cand
     ]
@@ -245,13 +255,13 @@ def save_anchors_for_camera(
 
     Parameters
     ----------
-    serial_csv   : CSV with (serial,start_sample,end_sample) from serial-audio decode.
-    video_dir    : Root directory with <segment_id>.json and MP4s.
-    segment_id   : VideoGroup id to process.
-    cam_serial   : Camera hardware serial.
-    out_json     : Destination JSON file.
-    min_k        : Warn if fewer anchors than this.
-    min_span_ratio : Span heuristic for serial coverage.
+    serial_csv      : CSV with (serial,start_sample,end_sample) from serial-audio decode.
+    video_dir       : Root directory with <segment_id>.json and MP4s.
+    segment_id      : VideoGroup id to process.
+    cam_serial      : Camera hardware serial.
+    out_json        : Destination JSON file.
+    min_k           : Warn if fewer anchors than this.
+    min_span_ratio  : Span heuristic for serial coverage.
 
     Returns
     -------
@@ -269,13 +279,14 @@ def save_anchors_for_camera(
     if vg is None:
         raise RuntimeError(f"Segment '{segment_id}' not found under {video_dir}")
 
-    serials, frame_ids = _extract_cam_arrays(vg, cam_serial)
+    serials, frame_ids, frame_ids_reidx = _extract_cam_arrays(vg, cam_serial)
     anchors = _collect_anchors_for_cam(
         index_map,
         segment_id,
         cam_serial,
         serials,
         frame_ids,
+        frame_ids_reidx,
         min_k=min_k,
         min_span_ratio=min_span_ratio,
     )
