@@ -57,7 +57,7 @@ from pathlib import Path
 import json
 import logging
 from typing import List, Tuple, Optional, Union
-
+import re
 import numpy as np
 
 try:
@@ -258,8 +258,19 @@ class AudioPlanApplier:
         sf.write(out_path, to_write, sr, subtype="PCM_16")
 
     def _make_out_path(self) -> Path:
-        stem = self.audio_path.stem
-        out_name = f"{stem}-padded.wav"
+        """
+        If input stem ends with '-NN' (e.g., '-01'/'-02'/'-03'), produce:
+            <base>-padded-<NN>.wav
+        Else (fallback): <stem>-padded.wav
+        """
+        stem = self.audio_path.stem  # e.g., "TRBD002_08062025-03"
+        m = re.match(r"^(?P<base>.+)-(?P<seg>\d{2})$", stem)
+        if m:
+            base = m.group("base")
+            seg = m.group("seg")
+            out_name = f"{base}-padded-{seg}.wav"
+        else:
+            out_name = f"{stem}-padded.wav"
         return self.out_dir / out_name
 
     # --------------------------- Core plan application --------------------------- #
