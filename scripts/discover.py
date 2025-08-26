@@ -34,8 +34,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from scripts.videofileparser import VideoFileParser
-from scripts.jsonfileparser import JsonParser
+from scripts.parsers.videofileparser import VideoFileParser
+from scripts.parsers.jsonfileparser import JsonParser
 
 # Try optional MP3 probe (pydub)
 try:

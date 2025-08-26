@@ -36,7 +36,7 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
-from scripts.jsonfileparser import JsonParser
+from scripts.parsers.jsonfileparser import JsonParser
 
 # -----------------------------
 # Labels
