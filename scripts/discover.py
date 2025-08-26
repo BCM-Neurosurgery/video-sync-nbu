@@ -456,7 +456,9 @@ class VideoDiscoverer(_DirMixin):
 
                 try:
                     fixed_reidx_frame_ids = (
-                        [f - f[0] for f in fixed_frame_ids] if fixed_frame_ids else None
+                        [f - fixed_frame_ids[0] for f in fixed_frame_ids]
+                        if fixed_frame_ids
+                        else None
                     )
                 except Exception as e:
                     self.log.warning(
