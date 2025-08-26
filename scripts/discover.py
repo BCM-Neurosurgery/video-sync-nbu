@@ -454,6 +454,19 @@ class VideoDiscoverer(_DirMixin):
                     )
                     fixed_frame_ids = None
 
+                try:
+                    fixed_reidx_frame_ids = (
+                        [f - f[0] for f in fixed_frame_ids] if fixed_frame_ids else None
+                    )
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_fixed_reindexed_frame_ids_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    fixed_reidx_frame_ids = None
+
                 cam_jsons[s_str] = CamJson(
                     cam_serial=s_str,
                     timestamp=ts,
@@ -462,6 +475,7 @@ class VideoDiscoverer(_DirMixin):
                     raw_frame_ids=raw_frame_ids,
                     fixed_serials=fixed_serials,
                     fixed_frame_ids=fixed_frame_ids,
+                    fixed_reidx_frame_ids=fixed_reidx_frame_ids,
                 )
 
             return cam_serials_all, cam_jsons
