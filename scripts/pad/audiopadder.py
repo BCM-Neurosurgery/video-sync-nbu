@@ -11,26 +11,38 @@ Input CSV (required columns):
 Outputs (written next to the input CSV):
   - <name>-editplan.json : list of insert operations on the *original* timeline
         [{"insert_after_sample": <int>, "insert_len_samples": <int>, "note": "gap s=..."}, ...]
-  - <name>-padded.csv    : fixed CSV on the *new* timeline including synthetic rows for
-        missing serials; columns: serial, start_sample, end_sample, center_sample, is_synthetic
+  - <name>-padded.csv    : fixed CSV on the *new* timeline (optionally includes synthetic rows)
+        columns: serial, start_sample, end_sample, center_sample, is_synthetic
 
 Notes
 -----
-- Period P (samples between serial centers) is estimated robustly from rows with Δserial==1.
-  Fallback to round(44100/30)=1470 if estimation fails.
-- Block length L defaults to the median of (end-start+1).
-- For a gap where Δserial>1 between rows i and i+1:
-    Missing M = Δserial - 1
-    Observed center gap D = center[i+1] - center[i]
-    Insert length S = max(0, round(Δserial*P - D)) samples inserted *after row i*.
-    Synthetic rows are placed at centers: center'[i] + m*P (m=1..M) on the *new* timeline.
-- Cumulative shift C is tracked so that all mapped indices in the output CSV are consistent
-  with the post-insertion timeline.
+**Exact-gap principle (no drift)**
+You can choose how to compute the *ideal* time to fill per gap (Δserial > 1):
+
+- **video** (default): assume each serial corresponds to one video frame.
+  Then the missing time is exactly `Δserial / fps` seconds. Given audio sample
+  rate `sr`, the ideal span in samples is `round(Δserial * sr / fps)`.
+- **local**: estimate a *local* period `P_local` from nearby Δserial==1 pairs
+  and use `round(Δserial * P_local)`.
+- **global**: use a global period hint `P_global` (fallback to an estimate if not provided).
+
+For a gap between rows *i* and *i+1* with observed center gap `D = center[i+1]-center[i]`,
+we insert `S = max(0, ideal_span - D)` samples *after* row *i* on the original timeline.
+This ensures the filled time equals the intended missing time with no cumulative drift.
+
+- Block length L defaults to the median of (end-start+1) unless overridden.
+- Synthetic rows (if enabled) are placed by **evenly partitioning the ideal span**:
+  step = ideal_span / Δserial (not a fixed constant). This guarantees the last synthetic
+  lands exactly at `center[i]' + ideal_span` on the new timeline.
+- Cumulative shift C is tracked so indices in the output CSV are consistent with the
+  post-insertion timeline.
 - This tool does not edit audio. It only plans padding and produces the fixed index CSV.
 
 Usage
 -----
-python audio_padder.py /path/to/serial_blocks.csv [--period 1470] [--block-len L]
+python audio_padder.py /path/to/serial_blocks.csv \
+  [--gap-policy video|local|global] [--fps 30.0] [--sample-rate 44100] \
+  [--period 1470] [--block-len L] [--no-synth]
 """
 from __future__ import annotations
 
@@ -72,19 +84,43 @@ class AudioPadder:
     csv_path : Path
         Path to the input CSV (must contain columns: serial, start_sample, end_sample).
     period : int | None
-        Optional period P in samples (center-to-center); if None, estimated from data.
+        Optional *global* period hint in samples (center-to-center); used only as a
+        fallback when local estimation around a gap is impossible.
     block_len : int | None
         Optional block length L; if None, estimated as median(end-start+1).
+    include_synthetic : bool
+        If True (default), the output CSV includes synthetic rows for missing serials
+        whose centers are linearly spaced across the *ideal* span of each gap. If False,
+        only observed rows are emitted on the new timeline.
+    gap_policy : str
+        One of {"video", "local", "global"}. See module notes.
+    sample_rate : int
+        Audio sample rate in Hz, used when gap_policy="video". Default 44100.
+    fps : float
+        Video frame rate, used when gap_policy="video". Default 30.0.
     """
 
     REQUIRED_COLS = ("serial", "start_sample", "end_sample")
 
     def __init__(
-        self, csv_path: Path, period: int | None = None, block_len: int | None = None
+        self,
+        csv_path: Path,
+        period: int | None = None,
+        block_len: int | None = None,
+        include_synthetic: bool = True,
+        gap_policy: str = "video",
+        sample_rate: int = 44100,
+        fps: float = 30.0,
     ):
         self.csv_path = Path(csv_path)
         self.period = period
         self.block_len = block_len
+        self.include_synthetic = include_synthetic
+        self.gap_policy = gap_policy.lower()
+        if self.gap_policy not in {"video", "local", "global"}:
+            raise ValueError("gap_policy must be one of: video, local, global")
+        self.sample_rate = int(sample_rate)
+        self.fps = float(fps)
 
         if not self.csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {self.csv_path}")
@@ -98,7 +134,7 @@ class AudioPadder:
         ops : List[EditOp]
             The planned insert operations (original timeline).
         fixed_df : pd.DataFrame
-            The fixed CSV content (new timeline), including synthetic rows.
+            The fixed CSV content (new timeline), including synthetic rows when enabled.
         out_csv : Path
             Path to the written fixed CSV (<name>-padded.csv).
         out_plan : Path
@@ -108,7 +144,7 @@ class AudioPadder:
         df = self._sort_by_time(df)
         centers = self._ensure_centers(df)
 
-        P = (
+        P_global = (
             self.period
             if self.period is not None
             else self._estimate_period(df, centers)
@@ -119,9 +155,12 @@ class AudioPadder:
             else self._estimate_block_len(df)
         )
 
-        logging.info(f"Using period P={P} samples; block length L={L} samples")
+        logging.info(
+            f"Using fallback global period P={P_global} samples; block length L={L} samples; "
+            f"gap_policy={self.gap_policy} (sr={self.sample_rate}, fps={self.fps})"
+        )
 
-        ops, fixed_df = self._build_plan_and_fixed(df, centers, P, L)
+        ops, fixed_df = self._build_plan_and_fixed(df, centers, P_global, L)
 
         out_csv, out_plan = self._emit_outputs(fixed_df, ops)
 
@@ -168,7 +207,6 @@ class AudioPadder:
             )
             return 1470
         # Robust center-to-center period: median of plausible candidates
-        # Limit outliers: within 0.5x..2.0x of nominal 1470 to stabilize
         nominal = 1470
         plausible = candidates[
             (candidates >= nominal * 0.5) & (candidates <= nominal * 2.0)
@@ -192,67 +230,53 @@ class AudioPadder:
         return int(np.rint(np.median(pos)))
 
     def _build_plan_and_fixed(
-        self, df: pd.DataFrame, centers: np.ndarray, P: int, L: int
+        self, df: pd.DataFrame, centers: np.ndarray, P_global: int, L: int
     ) -> Tuple[List[EditOp], pd.DataFrame]:
         """
         Build the insertion plan (EditPlan) and the fixed CSV on the *new* timeline.
 
-
         Parameters
         ----------
         df : pd.DataFrame
-        Input rows sorted by time. Must contain columns
-        ``serial``, ``start_sample``, ``end_sample`` on the *original* timeline.
+            Input rows sorted by time. Must contain columns
+            ``serial``, ``start_sample``, ``end_sample`` on the *original* timeline.
         centers : np.ndarray
-        Per-row center sample, computed as round((start+end)/2) on the original timeline.
-        P : int
-        Target center-to-center period (in samples). Typically ~1470 for 44.1kHz/30Hz.
+            Per-row center sample, computed as round((start+end)/2) on the original timeline.
+        P_global : int
+            Fallback global period (samples). Used only when local estimation fails.
         L : int
-        Typical block length in samples. Used for synthetic rows. Observed rows
-        keep their own measured length (``end - start + 1``).
-
+            Typical block length in samples. Used for synthetic rows. Observed rows
+            keep their own measured length (``end - start + 1``).
 
         Returns
         -------
         ops : List[EditOp]
-        Insert operations, each anchored to the *original* timeline
-        (``insert_after_sample`` is an original sample index). When applied in order
-        to the audio, these ops reproduce the fixed/new timeline.
+            Insert operations, each anchored to the *original* timeline
+            (``insert_after_sample`` is an original sample index). When applied in order
+            to the audio, these ops reproduce the fixed/new timeline.
         fixed_df : pd.DataFrame
-        Rows describing the *post-insertion* timeline. Columns:
-        ``serial, start_sample, end_sample, center_sample, is_synthetic``.
-
+            Rows describing the *post-insertion* timeline. Columns:
+            ``serial, start_sample, end_sample, center_sample, is_synthetic``.
 
         Algorithm (single left→right pass)
         ---------------------------------
         Let C be the cumulative number of samples inserted *before* the current point.
         1) Append the first observed row on the new timeline using ``center' = center + C``.
         2) For every adjacent pair i → i+1 on the original timeline:
-        - Δs = serial[i+1] - serial[i]
-        - D = center[i+1] - center[i] # observed spacing on the original timeline
-        - If Δs > 1 (gap of M = Δs - 1 missing blocks):
-        * Compute the insertion length
-        S = max(0, round(Δs * P - D))
-        (i.e., the difference between the ideal spacing Δs·P and the observed D).
-        * If S > 0, record an EditOp anchored after ``end[i]`` on the original timeline.
-        * Emit M synthetic rows on the *new* timeline at centers
-        center[i]' + m·P, m = 1..M,
-        where center[i]' = center[i] + C. Each synthetic row uses length L.
-        * Update cumulative shift: C ← C + S.
-        - Append the (i+1)-th observed row on the new timeline at ``center[i+1]' = center[i+1] + C``
-        using that row's measured length (``end[i+1] - start[i+1] + 1``).
+           - Δs = serial[i+1] - serial[i]
+           - D  = center[i+1] - center[i]   # observed spacing on the original timeline
+           - If Δs > 1 (gap of M = Δs - 1 missing blocks):
+             * Compute `ideal_span` per `gap_policy`:
+               - video  → `round(Δs * sample_rate / fps)`
+               - local  → `round(Δs * P_local)` where `P_local` is estimated from nearby Δs==1 pairs
+               - global → `round(Δs * P_global)`
+             * Let `S = max(0, ideal_span - D)` and record an EditOp (if S>0) anchored after `end[i]`.
+             * If synthetic rows are enabled, place them on the **new** timeline by slicing
+               the ideal span evenly: centers at `center[i]' + m * (ideal_span/Δs)` for m=1..M.
+             * Update cumulative shift: `C ← C + S`.
+           - Append the (i+1)-th observed row on the new timeline at ``center[i+1]' = center[i+1] + C``
+             using that row's measured length (``end[i+1] - start[i+1] + 1``).
         3) Sort all output rows by (start_sample, end_sample, serial) and return.
-
-
-        Timeline conventions & invariants
-        ---------------------------------
-        - EditOps are defined on the *original* timeline and must be applied in chronological order,
-        maintaining a running cumulative shift to mirror C.
-        - ``fixed_df`` indices are on the *new* (post-insertion) timeline. This makes the CSV directly
-        consumable for downstream alignment.
-        - If Δs ≤ 0, the pair is treated as no gap (a warning is logged). If S ≤ 0, no EditOp is added,
-        but synthetic rows are still placed so the serial sequence is complete.
-
 
         Complexity
         ----------
@@ -287,7 +311,7 @@ class AudioPadder:
                 }
             )
 
-        # Process first row: map to new timeline with current C (0)
+        # First row → new timeline
         center0_new = int(centers[0] + C)
         append_row(
             serials[0],
@@ -311,23 +335,29 @@ class AudioPadder:
                     i + 1,
                     delta_s,
                 )
-                # No insertion; next observed row will be appended after we compute its new center
-                pass
             elif delta_s == 1:
                 # No insertion
                 pass
             else:
-                # Gap detected: plan insertion after row i
-                # M: number of missing serials
+                # Gap detected: compute ideal span per gap policy
                 M = delta_s - 1
-                # Number of audio samples to insert as padding
-                S = int(max(0, round(delta_s * P - D)))
+                if self.gap_policy == "video":
+                    ideal_span = int(round(delta_s * (self.sample_rate / self.fps)))
+                elif self.gap_policy == "local":
+                    P_local = self._estimate_local_period(
+                        df, centers, i_left=i, i_right=i + 1, default_P=P_global
+                    )
+                    ideal_span = int(round(delta_s * P_local))
+                else:  # global
+                    ideal_span = int(round(delta_s * P_global))
+
+                S = int(max(0, ideal_span - D))
                 if S > 0:
                     ops.append(
                         EditOp(
                             insert_after_sample=end_i,  # original timeline anchor
                             insert_len_samples=S,
-                            note=f"gap delta_serial={delta_s} around serial {s_i}->{s_j}",
+                            note=f"gap Δserial={delta_s} (policy={self.gap_policy}) around serial {s_i}->{s_j}",
                         )
                     )
                 else:
@@ -337,12 +367,16 @@ class AudioPadder:
                         i,
                         i + 1,
                     )
-                # Emit synthetic rows on the NEW timeline, centered at c_i' + m*P
-                c_i_new = int(c_i + C)
-                for m in range(1, M + 1):
-                    c_syn = int(round(c_i_new + m * P))
-                    append_row(s_i + m, c_syn, is_synth=True)
-                # After placing synthetics, future rows shift by S
+
+                # Optional synthetic rows placed by evenly slicing the *ideal* span on NEW timeline
+                if self.include_synthetic and M > 0:
+                    c_i_new = int(c_i + C)
+                    step = ideal_span / float(delta_s)
+                    for m in range(1, M + 1):
+                        c_syn = int(round(c_i_new + m * step))
+                        append_row(s_i + m, c_syn, is_synth=True)
+
+                # Update cumulative shift
                 C += max(0, S)
 
             # Append the (i+1)-th observed row on the NEW timeline
@@ -360,11 +394,54 @@ class AudioPadder:
                 "is_synthetic",
             ],
         )
-        # Ensure strictly increasing by start on the new axis
         fixed_df = fixed_df.sort_values(
             by=["start_sample", "end_sample", "serial"]
         ).reset_index(drop=True)
         return ops, fixed_df
+
+    def _estimate_local_period(
+        self,
+        df: pd.DataFrame,
+        centers: np.ndarray,
+        i_left: int,
+        i_right: int,
+        default_P: int,
+        window: int = 16,
+    ) -> int:
+        """Estimate a *local* center-to-center period around a gap.
+
+        Looks at up to `window` Δserial==1 pairs immediately before `i_left`
+        and after `i_right` and takes the median of their center gaps. If both
+        sides are available, returns a length-weighted average of the two
+        medians. If neither side is available, falls back to `default_P`.
+        """
+        serials = df["serial"].to_numpy()
+        left_d: List[int] = []
+        k = i_left - 1
+        while k >= 0 and len(left_d) < window:
+            if serials[k + 1] - serials[k] == 1:
+                left_d.append(int(centers[k + 1] - centers[k]))
+            k -= 1
+        right_d: List[int] = []
+        k = i_right
+        while k + 1 < len(df) and len(right_d) < window:
+            if serials[k + 1] - serials[k] == 1:
+                right_d.append(int(centers[k + 1] - centers[k]))
+            k += 1
+        vals = []
+        weights = []
+        if left_d:
+            vals.append(np.median(left_d))
+            weights.append(len(left_d))
+        if right_d:
+            vals.append(np.median(right_d))
+            weights.append(len(right_d))
+        if not vals:
+            return int(default_P)
+        if len(vals) == 1:
+            return int(round(vals[0]))
+        P_local = float(np.average(vals, weights=weights))
+        return int(round(P_local))
 
     def _emit_outputs(
         self, fixed_df: pd.DataFrame, ops: List[EditOp]
@@ -399,16 +476,36 @@ def _build_argparser() -> argparse.ArgumentParser:
         "csv", type=Path, help="Input CSV with columns: serial,start_sample,end_sample"
     )
     p.add_argument(
+        "--gap-policy",
+        choices=["video", "local", "global"],
+        default="video",
+        help="How to compute ideal span per gap",
+    )
+    p.add_argument(
+        "--fps", type=float, default=30.0, help="Video frame rate when gap-policy=video"
+    )
+    p.add_argument(
+        "--sample-rate",
+        type=int,
+        default=44100,
+        help="Audio sample rate when gap-policy=video",
+    )
+    p.add_argument(
         "--period",
         type=int,
         default=None,
-        help="Override period P (samples between serial centers)",
+        help="Override *global* fallback period (samples between serial centers)",
     )
     p.add_argument(
         "--block-len",
         type=int,
         default=None,
         help="Override block length L (samples per block)",
+    )
+    p.add_argument(
+        "--no-synth",
+        action="store_true",
+        help="Do not emit synthetic rows; only map observed rows to the new timeline",
     )
     p.add_argument(
         "--log",
@@ -429,7 +526,13 @@ def main():
     )
 
     padder = AudioPadder(
-        csv_path=args.csv, period=args.period, block_len=args.block_len
+        csv_path=args.csv,
+        period=args.period,
+        block_len=args.block_len,
+        include_synthetic=not args.no_synth,
+        gap_policy=args.gap_policy,
+        sample_rate=args.sample_rate,
+        fps=args.fps,
     )
     try:
         padder.run()
