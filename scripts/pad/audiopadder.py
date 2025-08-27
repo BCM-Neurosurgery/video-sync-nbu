@@ -25,6 +25,11 @@ You can choose how to compute the *ideal* time to fill per gap (Δserial > 1):
 - **local**: estimate a *local* period `P_local` from nearby Δserial==1 pairs
   and use `round(Δserial * P_local)`.
 - **global**: use a global period hint `P_global` (fallback to an estimate if not provided).
+- **budget**: *control the final total duration*. Compute observed total duration from
+  the CSV (`(last_end - first_start + 1) / sr`). With `--frames` and `--fps`, target
+  total duration is `frames / fps`. The total insertion budget is
+  `max(0, target_samples - observed_samples)`, which is **evenly distributed across all gaps**
+  (Δserial > 1). If there are no gaps, a single tail insertion is emitted.
 
 For a gap between rows *i* and *i+1* with observed center gap `D = center[i+1]-center[i]`,
 we insert `S = max(0, ideal_span - D)` samples *after* row *i* on the original timeline.
@@ -41,8 +46,8 @@ This ensures the filled time equals the intended missing time with no cumulative
 Usage
 -----
 python audio_padder.py /path/to/serial_blocks.csv \
-  [--gap-policy video|local|global] [--fps 30.0] [--sample-rate 44100] \
-  [--period 1470] [--block-len L] [--no-synth]
+  [--gap-policy video|local|global|budget] [--fps 30.0] [--sample-rate 44100] \
+  [--period 1470] [--block-len L] [--no-synth] [--frames N]
 """
 from __future__ import annotations
 
@@ -93,11 +98,13 @@ class AudioPadder:
         whose centers are linearly spaced across the *ideal* span of each gap. If False,
         only observed rows are emitted on the new timeline.
     gap_policy : str
-        One of {"video", "local", "global"}. See module notes.
+        One of {"video", "local", "global", "budget"}. See module notes.
     sample_rate : int
         Audio sample rate in Hz, used when gap_policy="video". Default 44100.
     fps : float
-        Video frame rate, used when gap_policy="video". Default 30.0.
+        Video frame rate, used when gap_policy="video" and "budget". Default 30.0.
+    target_frames : int | None
+        Required when gap_policy="budget": total frame count that sets the target duration.
     """
 
     REQUIRED_COLS = ("serial", "start_sample", "end_sample")
@@ -111,16 +118,21 @@ class AudioPadder:
         gap_policy: str = "video",
         sample_rate: int = 44100,
         fps: float = 30.0,
+        target_frames: int | None = None,
     ):
         self.csv_path = Path(csv_path)
         self.period = period
         self.block_len = block_len
         self.include_synthetic = include_synthetic
         self.gap_policy = gap_policy.lower()
-        if self.gap_policy not in {"video", "local", "global"}:
-            raise ValueError("gap_policy must be one of: video, local, global")
+        if self.gap_policy not in {"video", "local", "global", "budget"}:
+            raise ValueError("gap_policy must be one of: video, local, global, budget")
         self.sample_rate = int(sample_rate)
         self.fps = float(fps)
+        self.target_frames = target_frames
+
+        if self.gap_policy == "budget" and self.target_frames is None:
+            raise ValueError("When gap_policy='budget', you must specify --frames.")
 
         if not self.csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {self.csv_path}")
@@ -266,21 +278,12 @@ class AudioPadder:
            - Δs = serial[i+1] - serial[i]
            - D  = center[i+1] - center[i]   # observed spacing on the original timeline
            - If Δs > 1 (gap of M = Δs - 1 missing blocks):
-             * Compute `ideal_span` per `gap_policy`:
-               - video  → `round(Δs * sample_rate / fps)`
-               - local  → `round(Δs * P_local)` where `P_local` is estimated from nearby Δs==1 pairs
-               - global → `round(Δs * P_global)`
-             * Let `S = max(0, ideal_span - D)` and record an EditOp (if S>0) anchored after `end[i]`.
+             * Compute `ideal_span` per `gap_policy`.
+             * Let `S = max(0, ideal_span - D)` (or allocated budget when policy='budget').
              * If synthetic rows are enabled, place them on the **new** timeline by slicing
                the ideal span evenly: centers at `center[i]' + m * (ideal_span/Δs)` for m=1..M.
              * Update cumulative shift: `C ← C + S`.
-           - Append the (i+1)-th observed row on the new timeline at ``center[i+1]' = center[i+1] + C``
-             using that row's measured length (``end[i+1] - start[i+1] + 1``).
-        3) Sort all output rows by (start_sample, end_sample, serial) and return.
-
-        Complexity
-        ----------
-        O(n) time and O(n) memory, where n is the number of input rows.
+           - Append the (i+1)-th observed row on the new timeline at ``center[i+1]' = center[i+1] + C``.
         """
         serials = df["serial"].to_numpy()
         starts = df["start_sample"].to_numpy()
@@ -294,6 +297,45 @@ class AudioPadder:
         if n == 0:
             # Empty input: emit empty outputs
             return ops, pd.DataFrame(columns=["serial", "start_sample", "end_sample", "center_sample", "is_synthetic"])  # type: ignore
+
+        # --------- budget policy precomputation: distribute a total insert budget ---------
+        per_gap_budget: Dict[int, int] = {}
+        tail_budget = 0
+        if self.gap_policy == "budget":
+            observed_total_samples = int(ends[-1] - starts[0] + 1)
+            target_total_samples = int(round((self.target_frames * self.sample_rate) / self.fps))  # type: ignore[arg-type]
+            total_insert_budget = max(0, target_total_samples - observed_total_samples)
+
+            # Find all gap indices (i where Δserial > 1)
+            gap_indices: List[int] = []
+            for i in range(n - 1):
+                if int(serials[i + 1]) - int(serials[i]) > 1:
+                    gap_indices.append(i)
+
+            if gap_indices:
+                base = total_insert_budget // len(gap_indices)
+                rem = total_insert_budget - base * len(gap_indices)
+                # Distribute remainder to the first `rem` gaps
+                for k, i in enumerate(gap_indices):
+                    per_gap_budget[i] = base + (1 if k < rem else 0)
+                logging.info(
+                    "budget policy: observed=%d samples, target=%d samples, total_insert=%d distributed across %d gaps (base=%d, rem=%d)",
+                    observed_total_samples,
+                    target_total_samples,
+                    total_insert_budget,
+                    len(gap_indices),
+                    base,
+                    rem,
+                )
+            else:
+                # No gaps → insert once at tail
+                tail_budget = total_insert_budget
+                logging.info(
+                    "budget policy: no gaps → tail insertion of %d samples (observed=%d, target=%d)",
+                    tail_budget,
+                    observed_total_samples,
+                    target_total_samples,
+                )
 
         # Helper to append a row on NEW timeline
         def append_row(
@@ -339,19 +381,25 @@ class AudioPadder:
                 # No insertion
                 pass
             else:
-                # Gap detected: compute ideal span per gap policy
+                # Gap detected
                 M = delta_s - 1
+
                 if self.gap_policy == "video":
                     ideal_span = int(round(delta_s * (self.sample_rate / self.fps)))
+                    S = int(max(0, ideal_span - D))
                 elif self.gap_policy == "local":
                     P_local = self._estimate_local_period(
                         df, centers, i_left=i, i_right=i + 1, default_P=P_global
                     )
                     ideal_span = int(round(delta_s * P_local))
-                else:  # global
+                    S = int(max(0, ideal_span - D))
+                elif self.gap_policy == "global":
                     ideal_span = int(round(delta_s * P_global))
+                    S = int(max(0, ideal_span - D))
+                else:  # budget
+                    S = int(per_gap_budget.get(i, 0))
+                    ideal_span = int(D + S)
 
-                S = int(max(0, ideal_span - D))
                 if S > 0:
                     ops.append(
                         EditOp(
@@ -383,6 +431,16 @@ class AudioPadder:
             center_next_new = int(centers[i + 1] + C)
             L_next = int(ends[i + 1] - starts[i + 1] + 1)
             append_row(serials[i + 1], center_next_new, is_synth=False, L_local=L_next)
+
+        # Tail insertion if budget policy has no gaps but needs extra time
+        if self.gap_policy == "budget" and tail_budget > 0:
+            ops.append(
+                EditOp(
+                    insert_after_sample=int(ends[-1]),
+                    insert_len_samples=int(tail_budget),
+                    note="tail padding (budget policy)",
+                )
+            )
 
         fixed_df = pd.DataFrame(
             out_rows,
@@ -477,18 +535,21 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--gap-policy",
-        choices=["video", "local", "global"],
+        choices=["video", "local", "global", "budget"],
         default="video",
         help="How to compute ideal span per gap",
     )
     p.add_argument(
-        "--fps", type=float, default=30.0, help="Video frame rate when gap-policy=video"
+        "--fps",
+        type=float,
+        default=30.0,
+        help="Video frame rate when gap-policy=video/budget",
     )
     p.add_argument(
         "--sample-rate",
         type=int,
         default=44100,
-        help="Audio sample rate when gap-policy=video",
+        help="Audio sample rate when gap-policy=video/budget",
     )
     p.add_argument(
         "--period",
@@ -506,6 +567,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--no-synth",
         action="store_true",
         help="Do not emit synthetic rows; only map observed rows to the new timeline",
+    )
+    p.add_argument(
+        "--frames",
+        type=int,
+        default=None,
+        help="Total frame count for the target duration (required when --gap-policy=budget)",
     )
     p.add_argument(
         "--log",
@@ -533,6 +600,7 @@ def main():
         gap_policy=args.gap_policy,
         sample_rate=args.sample_rate,
         fps=args.fps,
+        target_frames=args.frames,
     )
     try:
         padder.run()
