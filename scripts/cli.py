@@ -38,7 +38,7 @@ import csv
 
 # --- Your modules (import paths per discover.py) ---
 from scripts.discover import discover as run_discover
-from scripts.wavfileparser import WavSerialDecoder
+from scripts.parsers.wavfileparser import WavSerialDecoder
 
 # --- Logging ---
 logger = logging.getLogger("sync")
@@ -766,36 +766,36 @@ def cmd_fit(args: argparse.Namespace) -> int:
     anchors = collect_anchors(
         index_map, sess, min_k=args.min_k, min_span_ratio=args.min_span
     )
-    fit = ransac_affine(
-        anchors, tau_samples=args.tau, iters=args.iters, min_inliers=args.min_inliers
-    )
+    # fit = ransac_affine(
+    #     anchors, tau_samples=args.tau, iters=args.iters, min_inliers=args.min_inliers
+    # )
 
-    print(
-        json.dumps(
-            {
-                "alpha": fit.alpha,
-                "beta": fit.beta,
-                "inliers": fit.inliers,
-                "total": fit.total,
-                "rmse": fit.rmse,
-            },
-            indent=2,
-        )
-    )
+    # print(
+    #     json.dumps(
+    #         {
+    #             "alpha": fit.alpha,
+    #             "beta": fit.beta,
+    #             "inliers": fit.inliers,
+    #             "total": fit.total,
+    #             "rmse": fit.rmse,
+    #         },
+    #         indent=2,
+    #     )
+    # )
 
-    Path(args.out_fit).write_text(
-        json.dumps(
-            {
-                "alpha": fit.alpha,
-                "beta": fit.beta,
-                "inliers": fit.inliers,
-                "total": fit.total,
-                "rmse": fit.rmse,
-            },
-            indent=2,
-        )
-    )
-    logger.info("Saved fit → %s", args.out_fit)
+    # Path(args.out_fit).write_text(
+    #     json.dumps(
+    #         {
+    #             "alpha": fit.alpha,
+    #             "beta": fit.beta,
+    #             "inliers": fit.inliers,
+    #             "total": fit.total,
+    #             "rmse": fit.rmse,
+    #         },
+    #         indent=2,
+    #     )
+    # )
+    # logger.info("Saved fit → %s", args.out_fit)
     if getattr(args, "out_anchors", None):
         Path(args.out_anchors).write_text(
             json.dumps([asdict(a) for a in anchors], indent=2)
@@ -1061,17 +1061,13 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--threshold", type=float, default=0.5)
     i.set_defaults(func=cmd_index)
 
-    f = sub.add_parser("fit", help="Collect anchors and fit affine map n ≈ α·s + β")
+    f = sub.add_parser("fit", help="Collect anchors")
     f.add_argument("--audio-dir", required=True)
     f.add_argument("--video-dir", required=True)
     f.add_argument("--serial-channel", type=int, default=3)
     f.add_argument("--index", required=True)
-    f.add_argument("--out-fit", required=True)
     f.add_argument("--min-k", type=int, default=3)
     f.add_argument("--min-span", type=float, default=0.05)
-    f.add_argument("--tau", type=float, default=3200.0)
-    f.add_argument("--iters", type=int, default=1000)
-    f.add_argument("--min-inliers", type=int, default=20)
     f.add_argument("--out-anchors", help="Path to write anchors JSON")
     f.set_defaults(func=cmd_fit)
 
@@ -1083,7 +1079,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--video-dir", required=True)
     s.add_argument("--serial-channel", type=int, default=3)
     s.add_argument("--anchors", help="Path to anchors JSON saved during 'fit'")
-    s.add_argument("--fit", required=True)
     s.add_argument("--out-audio", required=True)
     s.add_argument("--out-video", required=True)
     s.add_argument(
