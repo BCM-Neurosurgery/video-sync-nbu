@@ -29,41 +29,21 @@ import argparse
 import json
 import logging
 import math
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 import shutil
 import subprocess
 import csv
 
-# --- Your modules (import paths per discover.py) ---
 from scripts.discover import discover as run_discover
-from scripts.parsers.wavfileparser import WavSerialDecoder
 
-# --- Logging ---
 logger = logging.getLogger("sync")
 if not logger.handlers:
     _h = logging.StreamHandler()
     _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
-
-
-# --- Small data holders ---
-@dataclass
-class Anchor:
-    """Represents a synchronization anchor point.
-
-    Attributes
-    ----------
-    frame_id: the actual frame id starting from 0 that exists in video
-    """
-
-    serial: int
-    audio_sample: int
-    cam_serial: str
-    segment_id: str
-    frame_id: int
 
 
 @dataclass
@@ -131,65 +111,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Stage 1 — Build serial index from A3
-# ---------------------------------------------------------------------------
-
-
-def build_serial_index(
-    a3_path: Path, out_index: Path, *, site: str = "jamail", threshold: float = 0.5
-) -> Path:
-    """Decode A3 once and persist per-block rows using decoder ranges.
-
-    CSV columns
-    -----------
-    serial,start_sample,end_sample
-    (one row per decoded block; mirrors wavfileparser.save_counts_csv)
-    """
-    logger.info("Decoding serial audio (A3): %s", a3_path)
-    dec = WavSerialDecoder(str(a3_path))
-    frames, stats = dec.decode_by_block(site=site, threshold=threshold)
-
-    logger.info(
-        "Decoded %d serials (bytes_total=%d, longest_monotone=%d)",
-        len(frames),
-        getattr(stats, "bytes_total", 0),
-        getattr(stats, "monotonic_span", 0),
-    )
-
-    # Prefer `frame_ranges` (as in wavfileparser); fall back to `ranges` if present.
-    ranges = getattr(dec, "frame_ranges", None) or getattr(dec, "ranges", None) or []
-
-    out_index.parent.mkdir(parents=True, exist_ok=True)
-    with out_index.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["serial", "start_sample", "end_sample"])
-        for i, val in enumerate(frames):
-            s, e = ranges[i] if i < len(ranges) else ("", "")
-            # Guard in case `val` can be None
-            serial = "" if val is None else int(val)
-            w.writerow([serial, s, e])
-
-    logger.info("Wrote serial CSV with %d rows → %s", len(frames), out_index)
-    return out_index
-
-
-def cmd_index(args: argparse.Namespace) -> int:
-    sess = run_discover(
-        Path(args.audio_dir),
-        Path(args.video_dir),
-        default_serial_channel=args.serial_channel,
-    )
-    a3 = sess.audiogroup.serial_audio
-    assert (
-        a3 is not None
-    ), "No serial channel found (expected channel == serial_channel)."
-    build_serial_index(
-        Path(a3.path), Path(args.out_index), site=args.site, threshold=args.threshold
-    )
-    return 0
-
-
 def load_serial_index(path: Path) -> Dict[int, int]:
     """
     Load a CSV with columns: serial,start_sample,end_sample
@@ -216,164 +137,6 @@ def load_serial_index(path: Path) -> Dict[int, int]:
 
 # ---------------------------------------------------------------------------
 # Stage 2 — Anchors & labeling
-# ---------------------------------------------------------------------------
-
-
-def label_frames(serials: Sequence[int], frame_ids: Sequence[int]) -> List[str]:
-    """Mark frames for anchor selection & diagnostics.
-    NORMAL:    Δfid=1 & Δserial=1
-    DUPLICATE: Δfid=1 & Δserial=0
-    DROP:      Δfid>1
-    MISSING:   serial<=0 or None
-    """
-    labels: List[str] = []
-    prev_fid: Optional[int] = None
-    prev_s: Optional[int] = None
-    for s, f in zip(serials, frame_ids):
-        if s is None or s <= 0:
-            labels.append("MISSING")
-        elif prev_fid is None:
-            labels.append("NORMAL")
-        else:
-            df = f - prev_fid
-            ds = s - prev_s  # type: ignore[arg-type]
-            if df == 1 and ds == 1:
-                labels.append("NORMAL")
-            elif df == 1 and ds == 0:
-                labels.append("DUPLICATE")
-            elif df > 1:
-                labels.append("DROP")
-            else:
-                labels.append("MISSING")
-        prev_fid, prev_s = f, s
-    return labels
-
-
-def collect_anchors(
-    index_map: Dict[int, int], session, *, min_k: int = 3, min_span_ratio: float = 0.05
-) -> List[Anchor]:
-    """Build a list of audio/video alignment anchors from all segments/cameras."""
-    anchors: List[Anchor] = []
-    for vg in session.videogroups:
-        if not vg.videos:
-            continue
-        for v in vg.videos:
-            cam_serial = str(v.cam_serial)
-            cj = vg.json.cam_jsons.get(cam_serial)
-            if not cj or not cj.fixed_serials or not cj.fixed_frame_ids:
-                logger.warning(
-                    "%s cam %s: missing fixed serials/frame_ids in JSON",
-                    vg.group_id,
-                    cam_serial,
-                )
-                continue
-            serials = list(cj.fixed_serials)
-            frame_ids = list(cj.fixed_frame_ids)
-            labels = label_frames(serials, frame_ids)
-
-            # Build anchors: NORMAL frames with serial present in index_map
-            cand = [
-                (i, s)
-                for i, (lab, s) in enumerate(zip(labels, serials))
-                if lab == "NORMAL" and s in index_map
-            ]
-            if len(cand) < min_k:
-                logger.warning(
-                    "Few anchors for %s cam %s: %d", vg.group_id, cam_serial, len(cand)
-                )
-            if cand:
-                s_vals = [s for _, s in cand]
-                span = max(s_vals) - min(s_vals) if len(s_vals) > 1 else 0
-                # Span check (relative to local range)
-                if span < max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1))):
-                    logger.warning(
-                        "Low anchor span for %s cam %s: span=%d",
-                        vg.group_id,
-                        cam_serial,
-                        span,
-                    )
-
-            for i, s in cand:
-                anchors.append(
-                    Anchor(
-                        serial=int(s),
-                        audio_sample=int(index_map[int(s)]),
-                        cam_serial=cam_serial,
-                        segment_id=vg.group_id,
-                        frame_id=serials.index(int(s)),
-                    )
-                )
-
-    logger.info(
-        "Collected %d anchors across %d segments.",
-        len(anchors),
-        len(session.videogroups),
-    )
-    return anchors
-
-
-# ---------------------------------------------------------------------------
-# Stage 3 — Robust affine fit (RANSAC → LS on inliers)
-# ---------------------------------------------------------------------------
-
-
-def ransac_affine(
-    anchors: List[Anchor],
-    tau_samples: float = 3200.0,
-    iters: int = 1000,
-    min_inliers: int = 20,
-) -> FitResult:
-    """
-    Robustly fit an affine map y ≈ α·x + β between serial/frame indices and audio
-    sample indices using a simple RANSAC followed by least-squares on the inliers.
-    """
-    import random
-
-    assert len(anchors) >= 2, "Not enough anchors to fit."
-
-    xs = [a.serial for a in anchors]
-    ys = [a.audio_sample for a in anchors]
-
-    best = None
-    for _ in range(iters):
-        i1, i2 = random.sample(range(len(anchors)), 2)
-        x1, y1 = xs[i1], ys[i1]
-        x2, y2 = xs[i2], ys[i2]
-        if x2 == x1:
-            continue
-        alpha = (y2 - y1) / (x2 - x1)
-        beta = y1 - alpha * x1
-        resid = [abs(y - (alpha * x + beta)) for x, y in zip(xs, ys)]
-        inl_idx = [i for i, r in enumerate(resid) if r <= tau_samples]
-        if best is None or len(inl_idx) > best["ninl"]:
-            best = {"alpha": alpha, "beta": beta, "idx": inl_idx, "ninl": len(inl_idx)}
-
-    if best is None or best["ninl"] < max(min_inliers, int(0.5 * len(anchors))):
-        logger.warning("Weak RANSAC fit; consider increasing anchors or tau.")
-
-    inliers = best["idx"] if best else list(range(len(anchors)))
-    X = [xs[i] for i in inliers]
-    Y = [ys[i] for i in inliers]
-    n = len(X)
-
-    # Least squares on inliers
-    xbar = sum(X) / n
-    ybar = sum(Y) / n
-    num = sum((x - xbar) * (y - ybar) for x, y in zip(X, Y))
-    den = sum((x - xbar) ** 2 for x in X) or 1.0
-    alpha = num / den
-    beta = ybar - alpha * xbar
-
-    rmse = math.sqrt(
-        sum((y - (alpha * x + beta)) ** 2 for x, y in zip(X, Y)) / max(1, n)
-    )
-    return FitResult(
-        alpha=alpha, beta=beta, inliers=len(inliers), total=len(anchors), rmse=rmse
-    )
-
-
-# ---------------------------------------------------------------------------
-# Stage 4 — Windows, trims, mux
 # ---------------------------------------------------------------------------
 
 
@@ -559,31 +322,6 @@ def mux_video_audio(
         )
 
     return out_path
-
-
-# ---------------------------------------------------------------------------
-# Stage 5 — Orchestration commands: fit & sync
-# ---------------------------------------------------------------------------
-
-
-def cmd_fit(args: argparse.Namespace) -> int:
-    sess = run_discover(
-        Path(args.audio_dir),
-        Path(args.video_dir),
-        default_serial_channel=args.serial_channel,
-    )
-    index_map = load_serial_index(Path(args.index))
-
-    anchors = collect_anchors(
-        index_map, sess, min_k=args.min_k, min_span_ratio=args.min_span
-    )
-
-    if getattr(args, "out_anchors", None):
-        Path(args.out_anchors).write_text(
-            json.dumps([asdict(a) for a in anchors], indent=2)
-        )
-        logger.info("Saved anchors → %s (%d rows)", args.out_anchors, len(anchors))
-    return 0
 
 
 def compute_window_from_anchors(
@@ -922,27 +660,6 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--video-dir", required=True)
     d.add_argument("--serial-channel", type=int, default=3)
     d.set_defaults(func=cmd_discover)
-
-    i = sub.add_parser(
-        "index-serials", help="Build serial index JSON from A3 (serial channel)"
-    )
-    i.add_argument("--audio-dir", required=True)
-    i.add_argument("--video-dir", required=True)
-    i.add_argument("--serial-channel", type=int, default=3)
-    i.add_argument("--out-index", required=True)
-    i.add_argument("--site", default="jamail")
-    i.add_argument("--threshold", type=float, default=0.5)
-    i.set_defaults(func=cmd_index)
-
-    f = sub.add_parser("fit", help="Collect anchors")
-    f.add_argument("--audio-dir", required=True)
-    f.add_argument("--video-dir", required=True)
-    f.add_argument("--serial-channel", type=int, default=3)
-    f.add_argument("--index", required=True)
-    f.add_argument("--min-k", type=int, default=3)
-    f.add_argument("--min-span", type=float, default=0.05)
-    f.add_argument("--out-anchors", help="Path to write anchors JSON")
-    f.set_defaults(func=cmd_fit)
 
     s = sub.add_parser(
         "sync-segments",
