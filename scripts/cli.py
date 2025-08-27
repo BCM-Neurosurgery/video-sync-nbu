@@ -16,7 +16,7 @@ High-level flow
 1) discover: find A1/A2 (program), A3 (serial), and segments (JSON+MP4s grouped by BASE)
 2) index-serials: build A3 serial→sample index (midpoint per decoded block)
 3) fit: collect anchors (NORMAL frames only) across all segments and RANSAC-fit n ≈ α·s + β
-4) sync-segments: per segment & camera → compute audio window, clip A1/A2, mux with video (CFR)
+4) sync-segments: per segment & camera → compute audio window, clip A1/A2, mux with video (CFR).
 
 Notes
 -----
@@ -252,59 +252,7 @@ def label_frames(serials: Sequence[int], frame_ids: Sequence[int]) -> List[str]:
 def collect_anchors(
     index_map: Dict[int, int], session, *, min_k: int = 3, min_span_ratio: float = 0.05
 ) -> List[Anchor]:
-    """Build a list of audio/video alignment anchors from all segments/cameras.
-
-    This traverses every VideoGroup in `session` and, for each Video in that group,
-    looks up the corresponding CamJson (via `vg.json.cam_jsons[cam_serial]`). From
-    that CamJson it expects:
-      • `fixed_serials`: per-frame serial IDs after any fixing/cleanup
-      • `fixed_frame_ids`: per-frame frame IDs as recorded
-    It labels each frame with `label_frames(serials, frame_ids)` and keeps only
-    frames labeled "NORMAL". For each kept frame whose serial `s` exists in
-    `index_map`, it emits an Anchor:
-        Anchor(serial=s,
-               audio_sample=index_map[s],
-               cam_serial=str(v.cam_serial),
-               segment_id=vg.group_id)
-
-    Parameters
-    ----------
-    index_map : Dict[int, int]
-        Mapping from decoded serial ID (from the serial audio channel) to the
-        corresponding audio sample index (start index of each block).
-        Keys and values must be integers.
-    session : scripts.models.AudioVideoSession
-        Result of `discover(...)`. Must contain `videogroups`, each with a `json`
-        that has `cam_jsons: Dict[str, CamJson]`, and each `CamJson` provides
-        `fixed_serials` and `fixed_frame_ids`.
-    min_k : int, default 3
-        If a camera yields fewer than `min_k` candidate anchors in its segment,
-        a warning is logged. This does not prevent anchors from being returned.
-    min_span_ratio : float, default 0.05
-        Heuristic span check. Let `s_vals` be the kept serials for a cam/segment
-        and `span = max(s_vals) - min(s_vals)`. If `span` is smaller than
-        `max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1)))`, a warning
-        is logged to flag poor coverage (e.g., all anchors clumped together).
-
-    Returns
-    -------
-    List[Anchor]
-        One Anchor per kept frame (NORMAL + present in `index_map`), across all
-        segments and cameras. The list may be empty if no valid anchors exist.
-
-    Notes
-    -----
-    • This function does *not* deduplicate anchors across segments/cameras.
-      Multiple segments containing the same serial will yield multiple anchors.
-    • It assumes `fixed_serials` and `fixed_frame_ids` are 1:1 aligned and of the
-      same length for a given CamJson.
-    • Logging:
-        - Warns if CamJson is missing or lacks required arrays.
-        - Warns if a cam/segment yields < `min_k` anchors.
-        - Warns if the serial span heuristic indicates low coverage.
-      Finally logs the total anchors collected and segment count.
-
-    """
+    """Build a list of audio/video alignment anchors from all segments/cameras."""
     anchors: List[Anchor] = []
     for vg in session.videogroups:
         if not vg.videos:
@@ -378,68 +326,6 @@ def ransac_affine(
     """
     Robustly fit an affine map y ≈ α·x + β between serial/frame indices and audio
     sample indices using a simple RANSAC followed by least-squares on the inliers.
-
-    This is typically used to align camera-derived indices (e.g., frame IDs or
-    decoded chunk serials) to audio sample positions in the serial channel.
-
-    Parameters
-    ----------
-    anchors : List[Anchor]
-        Collection of correspondence points. Each `Anchor` must expose:
-          - `serial` (x): camera-side index (e.g., frame ID or chunk-serial)
-          - `audio_sample` (y): matching audio sample index (integer or float)
-        At least two anchors are required.
-    tau_samples : float, default=3200.0
-        Inlier threshold in *audio samples*. A residual |y - (αx + β)| ≤ `tau_samples`
-        is treated as an inlier during RANSAC. (Example: at 48 kHz, 3200 samples ≈ 66.7 ms.)
-    iters : int, default=1000
-        Number of RANSAC iterations. Each iteration samples two anchors to
-        hypothesize (α, β), then counts inliers under `tau_samples`.
-    min_inliers : int, default=20
-        Minimum absolute number of inliers required for a "strong" model. The
-        implementation also requires at least 50% of all anchors to be inliers.
-        If this is not met, a warning is logged and the fit proceeds with the
-        best model found.
-
-    Returns
-    -------
-    FitResult
-        Dataclass summarizing the fit with fields:
-          - `alpha` : float
-                Slope (samples per serial unit). If x is frame ID, then
-                α ≈ sample_rate / fps.
-          - `beta` : float
-                Intercept at x = 0 (samples).
-          - `inliers` : int
-                Number of inliers used in the final least-squares refit.
-          - `total` : int
-                Total number of anchors provided.
-          - `rmse` : float
-                Root-mean-square error over the inlier set (in samples).
-
-    Notes
-    -----
-    - The RANSAC hypothesis uses two random distinct anchors; vertical models
-      (Δx = 0) are skipped.
-    - After selecting the best inlier set, parameters (α, β) are recomputed
-      via closed-form least squares on those inliers.
-    - For reproducibility, set `random.seed(...)` in the caller before invoking.
-    - A warning is emitted if the best consensus set is "weak" (too few inliers).
-
-    Raises
-    ------
-    AssertionError
-        If fewer than two anchors are provided.
-
-    Examples
-    --------
-    >>> # anchors: serial -> audio_sample
-    >>> anchors = [Anchor(serial=0, audio_sample=1000),
-    ...            Anchor(serial=10, audio_sample=58000),
-    ...            Anchor(serial=20, audio_sample=115000)]
-    >>> fit = ransac_affine(anchors, tau_samples=2000, iters=500)
-    >>> fit.alpha, fit.beta  # doctest: +SKIP
-    (approx_sample_per_serial, approx_intercept)
     """
     import random
 
@@ -503,54 +389,7 @@ def compute_clip_window_for_segment(
     margin_samples: int,
     audio_len_samples: int,
 ) -> Optional[ClipWindow]:
-    """
-    Compute the **sample-accurate audio window** for a video segment using the
-    first and last *valid* serials in that segment and an affine mapping
-    (``sample ≈ alpha·serial + beta``).
-
-    The function returns a **clamped** window `[start, end)` that lies inside the
-    actual recorder file, along with **diagnostic** values `pad_head` and
-    `pad_tail` indicating how many samples would be *missing* at the head/tail
-    if we attempted to use the *unclamped* ideal window. **No padding is added
-    here**—callers may choose to synthesize silence later if required.
-
-    Parameters
-    ----------
-    serials : Sequence[int]
-        Per-frame serial values for the segment (e.g., from JSON). Non-positive
-        values (≤0) are treated as invalid/missing and ignored when locating
-        the endpoints.
-    fit : FitResult
-        Affine map from serial → audio sample (``predict(s)`` returns a sample
-        index in the recorder timeline).
-    margin_samples : int
-        Safety margin (in samples) applied to both sides of the raw window
-        before clamping. Use roughly one serial block in samples.
-    audio_len_samples : int
-        Total length of the underlying recorder file in samples; used to clamp
-        the window to `[0, audio_len_samples)` and compute diagnostic padding.
-
-    Returns
-    -------
-    Optional[ClipWindow]
-        ``ClipWindow(start, end, pad_head, pad_tail)`` if the segment contains
-        at least one valid serial; otherwise ``None``.
-
-    Notes
-    -----
-    Algorithm steps:
-      1) Find the first/last **positive** serial in ``serials`` → ``s_first``, ``s_last``.
-      2) Compute the **raw** window in samples using the fit and margin:
-         ``start_raw = floor(predict(s_first) - margin)``
-         ``end_raw   = ceil (predict(s_last)  + margin)``
-      3) Derive diagnostic padding relative to the recorder bounds:
-         ``pad_head = max(0, -start_raw)``,
-         ``pad_tail = max(0, end_raw - audio_len_samples)``
-      4) Clamp to the recorder timeline:
-         ``start = max(0, start_raw)``,
-         ``end   = min(audio_len_samples, end_raw)``
-      5) Return the clamped window and diagnostics.
-    """
+    """Compute the sample-accurate audio window for a segment using an affine fit."""
     pair = first_last_valid_serial(serials)
     if not pair:
         return None
@@ -642,34 +481,6 @@ def mux_video_audio(
 ) -> Path:
     """
     Mux one MP4 video with two mono program-audio clips into an MP4.
-
-    Behavior
-    --------
-    - If `fps` is provided, the video is **re-encoded** to a constant frame rate (CFR)
-      using libx264 at that fps. This is the safest way to keep A/V in lock-step
-      with your sample-accurate audio trims. We use `-vsync cfr`, output `-r`, and
-      `-shortest` so the mux stops at the shortest input (typically the audio).
-    - If `fps` is None, the video stream is **copied** (`-c:v copy`) and only audio
-      is re-encoded to AAC. This preserves any source VFR timing; only use this if
-      your upstream PTS are already correct.
-
-    Inputs
-    ------
-    mp4_in   : Path to the source MP4 (video stream 0:v:0 is used).
-    a1_clip  : Path to clipped program-audio for channel A1 (e.g., WAV).
-    a2_clip  : Path to clipped program-audio for channel A2 (e.g., WAV).
-               If you only have one program channel, pass the same file for both.
-    fps      : Target CFR (e.g., 30.0). If None, video is copied (no CFR enforcement).
-    out_path : Destination MP4 (parent dirs are created).
-
-    Returns
-    -------
-    Path to the output file on success.
-
-    Raises
-    ------
-    FileNotFoundError if ffmpeg is not found.
-    RuntimeError if ffmpeg returns a non-zero exit code.
     """
     # Preconditions
     if shutil.which("ffmpeg") is None:
@@ -702,7 +513,7 @@ def mux_video_audio(
         # Enforce CFR by re-encoding video. Keep this conservative & fast.
         cmd += [
             "-r",
-            f"{fps:.6f}",  # output frame rate
+            f"{fps:.6f}",
             "-vsync",
             "cfr",
             "-c:v",
@@ -724,7 +535,7 @@ def mux_video_audio(
         "aac",
         "-b:a",
         "192k",
-        "-shortest",  # stop when the shortest stream ends (usually audio)
+        "-shortest",
         "-movflags",
         "+faststart",
         str(out_path),
@@ -766,36 +577,7 @@ def cmd_fit(args: argparse.Namespace) -> int:
     anchors = collect_anchors(
         index_map, sess, min_k=args.min_k, min_span_ratio=args.min_span
     )
-    # fit = ransac_affine(
-    #     anchors, tau_samples=args.tau, iters=args.iters, min_inliers=args.min_inliers
-    # )
 
-    # print(
-    #     json.dumps(
-    #         {
-    #             "alpha": fit.alpha,
-    #             "beta": fit.beta,
-    #             "inliers": fit.inliers,
-    #             "total": fit.total,
-    #             "rmse": fit.rmse,
-    #         },
-    #         indent=2,
-    #     )
-    # )
-
-    # Path(args.out_fit).write_text(
-    #     json.dumps(
-    #         {
-    #             "alpha": fit.alpha,
-    #             "beta": fit.beta,
-    #             "inliers": fit.inliers,
-    #             "total": fit.total,
-    #             "rmse": fit.rmse,
-    #         },
-    #         indent=2,
-    #     )
-    # )
-    # logger.info("Saved fit → %s", args.out_fit)
     if getattr(args, "out_anchors", None):
         Path(args.out_anchors).write_text(
             json.dumps([asdict(a) for a in anchors], indent=2)
@@ -814,10 +596,12 @@ def compute_window_from_anchors(
     if not anchors_for_video:
         raise RuntimeError("No anchors for this video")
 
-    anchors_for_video = sorted(anchors_for_video, key=lambda a: int(a["frame_id"]))
+    anchors_for_video = sorted(
+        anchors_for_video, key=lambda a: int(a["frame_id_reidx"])
+    )
     a_start, a_end = anchors_for_video[0], anchors_for_video[-1]
 
-    fid0, fid1 = int(a_start["frame_id"]), int(a_end["frame_id"])
+    fid0, fid1 = int(a_start["frame_id_reidx"]), int(a_end["frame_id_reidx"])
     if fid1 < fid0:
         fid0, fid1 = fid1, fid0
 
@@ -871,15 +655,6 @@ def clip_video_by_frames(
     """
     Extract frames in [n0, n1] inclusive by index and re-encode at true CFR `fps`
     without dropping/duplicating frames.
-
-    Implementation details
-    ----------------------
-    - We use trim with start_frame/end_frame (end is exclusive) to select frames.
-    - We then set constant timestamps via setpts=N/(fps*TB) so each output frame
-        is spaced at exactly 1/fps seconds starting at t=0.
-    - We DO NOT use output "-r" (which would resample and change frame count).
-    - We pass "-vsync vfr" to avoid implicit CFR resampling by the muxer.
-    - Source audio is dropped ("-an").
     """
     if shutil.which("ffmpeg") is None:
         raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
@@ -890,9 +665,7 @@ def clip_video_by_frames(
 
     # trim uses end_frame as EXCLUSIVE → add +1 to include n1
     end_frame_excl = n1 + 1
-    # Trim frames and set constant PTS so duration = N / fps with exactly N frames
-    # Note: setpts uses N = output frame index within the filter chain
-    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl}," f"setpts=(N/{fps:.9f})/TB"
+    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl},setpts=(N/{fps:.9f})/TB"
     cmd = [
         "ffmpeg",
         "-y",
@@ -903,7 +676,6 @@ def clip_video_by_frames(
         str(mp4_in),
         "-vf",
         vf,
-        # Avoid implicit frame duplication/drop; PTS already enforces CFR
         "-vsync",
         "vfr",
         "-an",
@@ -1033,6 +805,107 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Single segment/camera sync
+# ---------------------------------------------------------------------------
+
+
+def cmd_sync_one(args: argparse.Namespace) -> int:
+    """Anchor-driven sync for exactly one (segment_id, cam_serial) pair."""
+    sess = run_discover(
+        Path(args.audio_dir),
+        Path(args.video_dir),
+        default_serial_channel=args.serial_channel,
+    )
+    ag = sess.audiogroup
+
+    assert ag.serial_audio is not None, "No serial channel found."
+    serial_ch = ag.serial_audio.channel
+    prog_channels = [ch for ch in sorted(ag.audios.keys()) if ch != serial_ch]
+    assert len(prog_channels) >= 1, "No program audio channels found."
+    a1 = Path(ag.audios[prog_channels[0]].path)
+    a2 = (
+        Path(ag.audios[prog_channels[1]].path)
+        if len(prog_channels) > 1
+        else Path(ag.audios[prog_channels[0]].path)
+    )
+
+    fs = int(ag.serial_audio.sample_rate)
+    audio_len_samples = int(fs * float(ag.serial_audio.duration))
+
+    if not getattr(args, "anchors", None):
+        raise ValueError("--anchors is required for anchor-driven sync.")
+    try:
+        anchors_all = json.loads(Path(args.anchors).read_text())
+    except Exception as e:
+        raise RuntimeError(f"Failed to load anchors JSON ({args.anchors}): {e}") from e
+
+    seg_id = str(args.segment_id)
+    cam_serial = str(args.cam_serial)
+
+    # find the requested Video in the discovered session
+    target_video = None
+    for vg in sess.videogroups:
+        if vg.group_id != seg_id or not vg.videos:
+            continue
+        for v in vg.videos:
+            if str(v.cam_serial) == cam_serial:
+                target_video = (vg, v)
+                break
+        if target_video:
+            break
+    if not target_video:
+        raise RuntimeError(
+            f"Could not find video for segment_id='{seg_id}' and cam_serial='{cam_serial}'."
+        )
+
+    vg, v = target_video
+    tag = f"{vg.group_id}.serial{cam_serial}"
+    logger.info("Syncing only: segment=%s, cam=%s", vg.group_id, cam_serial)
+
+    # Restrict anchors to this exact (segment, camera)
+    cand = [
+        a
+        for a in anchors_all
+        if a.get("segment_id") == vg.group_id and a.get("cam_serial") == cam_serial
+    ]
+    if not cand:
+        raise RuntimeError(
+            f"No anchors found for segment '{seg_id}' cam '{cam_serial}'."
+        )
+    logger.info("%s: %d anchors", tag, len(cand))
+
+    # Compute matched window (anchors only)
+    mw = compute_window_from_anchors(
+        anchors_for_video=cand,
+        fs=fs,
+        audio_len_samples=audio_len_samples,
+        margin_samples=0,
+    )
+
+    # Outputs
+    out_audio = Path(args.out_audio)
+    out_video = Path(args.out_video)
+
+    # 1) Clip program audio to [s0, s1)
+    awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
+    a1_clip, a2_clip = clip_program_audio(
+        a1, a2, awindow, out_audio, tag, out_fs=fs, serial_fs=fs
+    )
+
+    # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
+    clip_mp4 = out_video / f"{tag}_clip.mp4"
+    clip_video_by_frames(Path(v.path), mw.fid0, mw.fid1, mw.fps, clip_mp4)
+
+    # 3) Mux: copy video, add program audio
+    out_path = out_video / f"{tag}_synced.mp4"
+    logger.info("Mux → %s", out_path.name)
+    mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
+
+    logger.info("Single-segment sync complete → %s", out_path)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1088,6 +961,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Samples of safety margin (~1 serial block)",
     )
     s.set_defaults(func=cmd_sync_segments)
+
+    one = sub.add_parser(
+        "sync-one",
+        help="Sync exactly one (segment_id, cam_serial) using anchors; trims A1/A2 and muxes",
+    )
+    one.add_argument("--audio-dir", required=True)
+    one.add_argument("--video-dir", required=True)
+    one.add_argument("--serial-channel", type=int, default=3)
+    one.add_argument("--segment-id", required=True, help="Target segment/group id")
+    one.add_argument("--cam-serial", required=True, help="Target camera serial")
+    one.add_argument("--anchors", required=True, help="Path to anchors JSON")
+    one.add_argument("--out-audio", required=True)
+    one.add_argument("--out-video", required=True)
+    one.set_defaults(func=cmd_sync_one)
 
     return p
 
