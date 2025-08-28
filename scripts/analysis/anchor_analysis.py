@@ -31,18 +31,15 @@ CLI
 ---
 python -m scripts.analysis.anchor_analysis /path/to/anchors.json
   [--out-text /path/to/report.txt]
-  [--out-json /path/to/report.json]
   [--hist-cols 2]
   [--top 5]
 """
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterable, List, Set
+from typing import Any, Iterable, List, Set, Optional, Union
 
 import pandas as pd
 from scripts.analysis.serial_analysis import analyze, summarize_text
@@ -60,6 +57,8 @@ REQUIRED_KEYS = {"serial", "audio_sample", "cam_serial", "segment_id", "frame_id
 def load_anchors(path: Path) -> List[dict]:
     """Load anchors JSON and validate minimal schema."""
     try:
+        import json
+
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
         raise RuntimeError(f"Failed to read anchors JSON: {path}\n{e}") from e
@@ -100,9 +99,7 @@ def unique_sorted_ints(values: Iterable[Any]) -> List[int]:
     return sorted(set(int(v) for v in s.tolist()))
 
 
-def build_serial_report(
-    anchors: List[dict], *, hist_cols: int, top: int
-) -> tuple[str, dict]:
+def build_serial_report(anchors: List[dict], *, hist_cols: int, top: int) -> str:
     """Global serial analysis using unique, sorted serials."""
     serial_values = unique_sorted_ints(a.get("serial") for a in anchors)
     if len(serial_values) < 2:
@@ -115,12 +112,10 @@ def build_serial_report(
     ]
     return "\n".join(header) + summarize_text(
         res, include_tops=True, hist_cols=max(1, hist_cols)
-    ), asdict(res)
+    )
 
 
-def build_frame_report(
-    anchors: List[dict], *, hist_cols: int, top: int
-) -> tuple[str, dict]:
+def build_frame_report(anchors: List[dict], *, hist_cols: int, top: int) -> str:
     """Frame-ID analysis (single segment & cam) using unique, sorted frame_ids."""
     fids = unique_sorted_ints(a.get("frame_id") for a in anchors)
     if len(fids) < 2:
@@ -133,7 +128,7 @@ def build_frame_report(
     ]
     return "\n".join(header) + summarize_text(
         res, include_tops=True, hist_cols=max(1, hist_cols)
-    ), asdict(res)
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -148,9 +143,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--out-text", default=None, help="Optional path to write formatted text report"
     )
     p.add_argument(
-        "--out-json", default=None, help="Optional path to write a JSON summary"
-    )
-    p.add_argument(
         "--hist-cols",
         type=int,
         default=2,
@@ -160,32 +152,52 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = build_arg_parser()
-    args = ap.parse_args(argv)
+# -----------------------------
+# Public API
+# -----------------------------
+def analyze_anchors_file(
+    anchors_json: Union[str, Path],
+    *,
+    out_text: Optional[Union[str, Path]] = None,
+    hist_cols: int = 2,
+    top: int = 5,
+) -> Path:
+    """
+    Analyze an anchors JSON and write a formatted text report.
 
-    in_path = Path(args.path)
+    Parameters
+    ----------
+    anchors_json : str | Path
+        Path to the anchors JSON file.
+    out_text : str | Path | None, default None
+        Where to write the formatted text report. If None, uses "<json_stem>.txt"
+        next to the input.
+    hist_cols : int, default 2
+        Histogram entries per row for pretty printing.
+    top : int, default 5
+        Number of top forward/drops to list.
+
+    Returns
+    -------
+    Path
+        Absolute path to the written text report.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the anchors_json path does not exist.
+    ValueError, RuntimeError
+        If the JSON is malformed, schema is invalid, or analysis fails.
+    """
+    in_path = Path(anchors_json)
     if not in_path.exists():
-        logger.error(f"File not found: {in_path}")
-        return 2
+        raise FileNotFoundError(f"File not found: {in_path}")
 
-    try:
-        anchors = load_anchors(in_path)
-        segment_id, cam_serial = enforce_single_segment_and_cam(anchors)
-    except Exception as e:
-        logger.error(str(e))
-        return 2
+    anchors = load_anchors(in_path)
+    segment_id, cam_serial = enforce_single_segment_and_cam(anchors)
 
-    try:
-        serial_txt, serial_json = build_serial_report(
-            anchors, hist_cols=args.hist_cols, top=args.top
-        )
-        frame_txt, frame_json = build_frame_report(
-            anchors, hist_cols=args.hist_cols, top=args.top
-        )
-    except Exception as e:
-        logger.error(str(e))
-        return 2
+    serial_txt = build_serial_report(anchors, hist_cols=hist_cols, top=top)
+    frame_txt = build_frame_report(anchors, hist_cols=hist_cols, top=top)
 
     # Compose text report
     report_lines = [
@@ -200,22 +212,33 @@ def main(argv: list[str] | None = None) -> int:
     full_text = "\n".join(report_lines)
 
     # Write text
-    out_text = Path(args.out_text) if args.out_text else in_path.with_suffix(".txt")
-    out_text.parent.mkdir(parents=True, exist_ok=True)
-    out_text.write_text(full_text.rstrip() + "\n", encoding="utf-8")
-    logger.info(f"Anchor analysis written to {out_text}")
+    out_text_path = Path(out_text) if out_text else in_path.with_suffix(".txt")
+    out_text_path.parent.mkdir(parents=True, exist_ok=True)
+    out_text_path.write_text(full_text.rstrip() + "\n", encoding="utf-8")
+    logger.info(f"Anchor analysis written to {out_text_path}")
 
-    # Optional JSON
-    if args.out_json:
-        payload = {
-            "source": str(in_path),
-            "segment_id": segment_id,
-            "cam_serial": cam_serial,
-            "serial": serial_json,
-            "frame_id": frame_json,
-        }
-        Path(args.out_json).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        logger.info(f"JSON summary written to {args.out_json}")
+    return out_text_path.resolve()
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_arg_parser()
+    args = ap.parse_args(argv)
+
+    in_path = Path(args.path)
+    if not in_path.exists():
+        logger.error(f"File not found: {in_path}")
+        return 2
+
+    try:
+        _ = analyze_anchors_file(
+            in_path,
+            out_text=args.out_text,
+            hist_cols=args.hist_cols,
+            top=args.top,
+        )
+    except Exception as e:
+        logger.error(str(e))
+        return 2
 
     return 0
 
