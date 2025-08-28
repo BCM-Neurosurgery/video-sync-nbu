@@ -11,6 +11,9 @@ Public API
 - class AudioGapFiller:
     - fill_list(series) -> List[int]
     - fill_csv(csv_like) -> pd.DataFrame
+- gapfill_csv_file(input_csv, out_path=None, gaps=None) -> Path
+    Load CSV, apply gap-filling to 'serial', save to disk (default suffix '-gapfilled.csv'),
+    and return the absolute output path.
 
 CLI
 ---
@@ -21,17 +24,11 @@ from __future__ import annotations
 from typing import Sequence, Optional, Union, List
 from pathlib import Path
 import logging
-import math
 
 import pandas as pd
 from scripts.fix.serialfixer import SerialFixer  # uses apply_gap_passes_fast
 
-logger = logging.getLogger("audio_gap_filler")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 REQUIRED_COLS = {"serial", "start_sample", "end_sample"}
 
@@ -42,8 +39,8 @@ class AudioGapFiller:
 
     Gap policy
     ----------
-    - If `gaps` is provided, use it verbatim.
-    - Otherwise, auto-compute powers of 10 less than the sequence length:
+    - If `gaps` is provided, use it verbatim after sanitization.
+    - Otherwise, auto-compute powers of 10 strictly less than the sequence length:
         [10, 100, 1000, ..., < len(series)]
       (Each gap g must satisfy 2 <= g < len(series).)
 
@@ -62,6 +59,16 @@ class AudioGapFiller:
     def fill_list(self, series: Sequence[int]) -> List[int]:
         """
         Apply fast midpoint gap passes to a plain integer sequence.
+
+        Parameters
+        ----------
+        series : Sequence[int]
+            Input 'serial' sequence.
+
+        Returns
+        -------
+        List[int]
+            Gap-filled sequence (or the original if no passes apply).
         """
         s = [int(x) for x in series]
         gaps = self._resolve_gaps(len(s))
@@ -76,6 +83,16 @@ class AudioGapFiller:
     def fill_csv(self, csv_like: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
         """
         Load CSV/DataFrame, validate schema, and gap-fill the 'serial' column.
+
+        Parameters
+        ----------
+        csv_like : str | Path | pd.DataFrame
+            Input CSV path or a DataFrame with required columns.
+
+        Returns
+        -------
+        pd.DataFrame
+            A copy of the input with 'serial' gap-filled.
         """
         df = self._load_csv_like(csv_like)
         self._validate_schema(df)
@@ -103,8 +120,10 @@ class AudioGapFiller:
             return []
 
         if self._gaps is not None:
-            # Keep only valid window sizes (2 <= g < n), dedup + sort (stable enough here)
-            valid = sorted({int(g) for g in self._gaps if 2 <= int(g) < n})
+            try:
+                valid = sorted({int(g) for g in self._gaps if 2 <= int(g) < n})
+            except Exception as exc:
+                raise ValueError("All gap sizes must be integers >=2.") from exc
             return valid
 
         return self._pow10_gaps(n)
@@ -117,19 +136,23 @@ class AudioGapFiller:
         if n <= 10:
             return []
         gaps: List[int] = []
-        k = 1  # 10^1 = 10
-        while True:
-            g = 10**k
-            if g >= n:
-                break
+        g = 10
+        while g < n:
             gaps.append(g)
-            k += 1
+            g *= 10
         return gaps
 
     @staticmethod
     def _load_csv_like(obj: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
         if isinstance(obj, (str, Path)):
-            return pd.read_csv(obj)
+            try:
+                return pd.read_csv(obj)
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Input CSV not found: {obj}")
+            except pd.errors.EmptyDataError as exc:
+                raise ValueError(f"CSV is empty: {obj}") from exc
+            except Exception as exc:
+                raise RuntimeError(f"Failed to read CSV: {obj}") from exc
         return obj.copy()
 
     @staticmethod
@@ -141,6 +164,74 @@ class AudioGapFiller:
             )
 
 
+# -----------------------------
+# Public API function
+# -----------------------------
+def gapfill_csv_file(
+    input_csv: Union[str, Path],
+    *,
+    out_path: Optional[Union[str, Path]] = None,
+    gaps: Optional[Sequence[int]] = None,
+) -> Path:
+    """
+    Gap-fill 'serial' from an input CSV and save to disk.
+
+    By default, writes alongside the input as "<stem>-gapfilled.csv".
+
+    Parameters
+    ----------
+    input_csv : str | Path
+        Path to the input CSV with columns: serial,start_sample,end_sample.
+    out_path : str | Path | None, default None
+        Output CSV path. If None, uses "<input_stem>-gapfilled.csv" in the same directory.
+    gaps : Sequence[int] | None, default None
+        Optional gap sizes to apply. If None, powers of 10 are auto-selected.
+
+    Returns
+    -------
+    Path
+        Absolute path to the written output CSV.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the input CSV does not exist.
+    ValueError
+        If the CSV schema is invalid or serial values are not integer-like.
+    RuntimeError
+        If reading, processing, or writing fails unexpectedly.
+    """
+    in_path = Path(input_csv)
+    if not in_path.exists():
+        raise FileNotFoundError(f"Input CSV not found: {in_path}")
+
+    try:
+        filler = AudioGapFiller(gaps=gaps)
+        logger.info("Reading %s", in_path)
+        df_out = filler.fill_csv(in_path)
+    except Exception:
+        # Let specific exceptions from fill_csv bubble up (already well-typed).
+        raise
+
+    out = (
+        Path(out_path)
+        if out_path is not None
+        else in_path.with_name(f"{in_path.stem}-gapfilled.csv")
+    )
+    out = out.resolve()
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df_out.to_csv(out, index=False)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to write output CSV: {out}") from exc
+
+    logger.info("Wrote %s (%d rows)", out, len(df_out))
+    return out
+
+
+# -----------------------------
+# CLI
+# -----------------------------
 def _parse_gaps(gaps_arg: Optional[str]) -> Optional[List[int]]:
     """
     Parse a comma-separated integer list like "10,100,1000".
@@ -178,23 +269,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     args = p.parse_args(argv)
 
-    in_path: Path = args.csv
-    if not in_path.exists():
-        logger.error("Input CSV not found: %s", in_path)
-        return 2
-
-    out_path: Path = args.out or in_path.with_name(f"{in_path.stem}-gapfilled.csv")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
     try:
-        gaps = _parse_gaps(args.gaps)
-        filler = AudioGapFiller(gaps=gaps)
-        logger.info("Reading %s", in_path)
-        df_out = filler.fill_csv(in_path)
-        df_out.to_csv(out_path, index=False)
-        logger.info("Wrote %s (%d rows)", out_path, len(df_out))
-        print(str(out_path))
+        outp = gapfill_csv_file(
+            input_csv=args.csv,
+            out_path=args.out,
+            gaps=_parse_gaps(args.gaps),
+        )
+        print(str(outp))
         return 0
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        return 2
     except Exception as e:
         logger.exception("Failed to gap-fill: %s", e)
         return 2
