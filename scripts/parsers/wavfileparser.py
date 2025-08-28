@@ -38,7 +38,7 @@ Recent additions
    - Soft cap for any input via env VIDEOSYNC_DECODE_MAX_BYTES (default: 2 GiB).
 4) **Output directory**:
    - Use --outdir to choose where outputs are written. Defaults to the audio file's directory.
-   - Output CSV name is fixed to raw.csv; a summary text raw.txt is also written.
+   - Output CSV name is fixed to raw.csv; a summary text raw_info.txt is also written.
 """
 
 # ---- Size guard thresholds ----
@@ -428,7 +428,7 @@ def decode_to_raw(
     """
     Public API: decode an audio file and write:
       - raw.csv : decoded serials with start/end sample indices
-      - raw.txt : summary (audio path, sample rate, duration (s), processed timestamp)
+      - raw_info.txt : summary (audio path, sample rate, duration (s), processed timestamp)
 
     Returns
     -------
@@ -439,7 +439,7 @@ def decode_to_raw(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = out_dir / "raw.csv"
-    txt_path = out_dir / "raw.txt"
+    txt_path = out_dir / "raw_info.txt"
 
     dec = WavSerialDecoder(str(audio_path))
     counts, stats = dec.parse_counts(site=site, threshold=threshold)
@@ -524,7 +524,7 @@ def split_audio_file(
 # ---------------------- CLI ----------------------
 def _main() -> None:
     p = argparse.ArgumentParser(
-        description="Decode frame IDs from WAV/MP3 and save raw.csv + raw.txt next to the input or into --outdir."
+        description="Decode frame IDs from WAV/MP3 and save raw.csv + raw_info.txt next to the input or into --outdir."
     )
     p.add_argument("audio", help="Path to input audio (.wav or .mp3)")
     p.add_argument(
