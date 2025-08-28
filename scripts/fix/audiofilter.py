@@ -154,6 +154,28 @@ class AudioFilter:
         return out
 
 
+def filter_audio_file(
+    input_csv: Union[str, Path], out_path: Optional[Union[str, Path]] = None
+) -> Path:
+    """
+    Programmatic API: load CSV, apply AudioFilter, save CSV, return output path.
+    No argparse/basicConfig/print/SystemExit here.
+    """
+    in_path = Path(input_csv)
+    if not in_path.exists():
+        raise FileNotFoundError(f"Input CSV not found: {in_path}")
+
+    df = AudioFilter().filter_csv(in_path)
+    out = (
+        Path(out_path)
+        if out_path
+        else in_path.with_name(f"{in_path.stem}-filtered.csv")
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    return out
+
+
 def filter_audio_csv(argv: Optional[list[str]] = None) -> None:
     """
     Minimal CLI: read CSV → AudioFilter.filter_csv → write '<stem>-filtered.csv' (or --out).
