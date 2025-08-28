@@ -31,7 +31,7 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 import shutil
 import subprocess
 import csv
@@ -543,16 +543,68 @@ def cmd_sync_segments(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Single segment/camera sync
+# Public API — single segment/camera sync
 # ---------------------------------------------------------------------------
 
 
-def cmd_sync_one(args: argparse.Namespace) -> int:
-    """Anchor-driven sync for exactly one (segment_id, cam_serial) pair."""
+def sync_one_segment(
+    *,
+    audio_dir: Union[str, Path],
+    video_dir: Union[str, Path],
+    segment_id: str,
+    cam_serial: str,
+    anchors_json: Union[str, Path],
+    out_audio_dir: Union[str, Path],
+    out_video_dir: Union[str, Path],
+    serial_channel: int = 3,
+) -> Path:
+    """
+    Programmatic API to sync exactly one (segment_id, cam_serial) pair using anchors.
+
+    This performs:
+      1) discovery (to locate program audio channels and the target video),
+      2) matched-window computation from the provided anchors,
+      3) trimming A1/A2 to the matched window,
+      4) frame-accurate video clip to [fid0..fid1] @ computed CFR,
+      5) muxing video with the two program-audio tracks (copy video timing, add audio).
+
+    Parameters
+    ----------
+    audio_dir : str | Path
+        Root directory containing audio files (A1/A2 and serial channel).
+    video_dir : str | Path
+        Root directory containing per-segment video groups.
+    segment_id : str
+        Target segment/group id (e.g., "TRBD002_20250806_104707").
+    cam_serial : str
+        Target camera serial string (stable camera identity).
+    anchors_json : str | Path
+        Path to the anchors JSON containing entries with fields
+        "segment_id", "cam_serial", "frame_id_reidx", and "audio_sample".
+    out_audio_dir : str | Path
+        Directory where clipped A1/A2 WAVs will be written.
+    out_video_dir : str | Path
+        Directory where the clipped and final muxed MP4s will be written.
+    serial_channel : int, default 3
+        Default serial channel index used during discovery.
+
+    Returns
+    -------
+    Path
+        Absolute path to the final muxed MP4 file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If `anchors_json` does not exist or ffmpeg is not available.
+    RuntimeError, ValueError, AssertionError
+        For discovery failures, missing media, malformed anchors, or processing errors.
+    """
+    # Discovery
     sess = run_discover(
-        Path(args.audio_dir),
-        Path(args.video_dir),
-        default_serial_channel=args.serial_channel,
+        Path(audio_dir),
+        Path(video_dir),
+        default_serial_channel=serial_channel,
     )
     ag = sess.audiogroup
 
@@ -570,30 +622,29 @@ def cmd_sync_one(args: argparse.Namespace) -> int:
     fs = int(ag.serial_audio.sample_rate)
     audio_len_samples = int(fs * float(ag.serial_audio.duration))
 
-    if not getattr(args, "anchors", None):
-        raise ValueError("--anchors is required for anchor-driven sync.")
+    # Load anchors
+    anchors_path = Path(anchors_json)
+    if not anchors_path.exists():
+        raise FileNotFoundError(f"Anchors JSON not found: {anchors_path}")
     try:
-        anchors_all = json.loads(Path(args.anchors).read_text())
+        anchors_all = json.loads(anchors_path.read_text())
     except Exception as e:
-        raise RuntimeError(f"Failed to load anchors JSON ({args.anchors}): {e}") from e
+        raise RuntimeError(f"Failed to load anchors JSON ({anchors_path}): {e}") from e
 
-    seg_id = str(args.segment_id)
-    cam_serial = str(args.cam_serial)
-
-    # find the requested Video in the discovered session
+    # Locate the requested video in the discovered session
     target_video = None
     for vg in sess.videogroups:
-        if vg.group_id != seg_id or not vg.videos:
+        if vg.group_id != segment_id or not vg.videos:
             continue
         for v in vg.videos:
-            if str(v.cam_serial) == cam_serial:
+            if str(v.cam_serial) == str(cam_serial):
                 target_video = (vg, v)
                 break
         if target_video:
             break
     if not target_video:
         raise RuntimeError(
-            f"Could not find video for segment_id='{seg_id}' and cam_serial='{cam_serial}'."
+            f"Could not find video for segment_id='{segment_id}' and cam_serial='{cam_serial}'."
         )
 
     vg, v = target_video
@@ -604,11 +655,11 @@ def cmd_sync_one(args: argparse.Namespace) -> int:
     cand = [
         a
         for a in anchors_all
-        if a.get("segment_id") == vg.group_id and a.get("cam_serial") == cam_serial
+        if a.get("segment_id") == vg.group_id and a.get("cam_serial") == str(cam_serial)
     ]
     if not cand:
         raise RuntimeError(
-            f"No anchors found for segment '{seg_id}' cam '{cam_serial}'."
+            f"No anchors found for segment '{segment_id}' cam '{cam_serial}'."
         )
     logger.info("%s: %d anchors", tag, len(cand))
 
@@ -621,8 +672,8 @@ def cmd_sync_one(args: argparse.Namespace) -> int:
     )
 
     # Outputs
-    out_audio = Path(args.out_audio)
-    out_video = Path(args.out_video)
+    out_audio = Path(out_audio_dir)
+    out_video = Path(out_video_dir)
 
     # 1) Clip program audio to [s0, s1)
     awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
@@ -640,7 +691,32 @@ def cmd_sync_one(args: argparse.Namespace) -> int:
     mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
 
     logger.info("Single-segment sync complete → %s", out_path)
-    return 0
+    return out_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# CLI — single segment/camera sync
+# ---------------------------------------------------------------------------
+
+
+def cmd_sync_one(args: argparse.Namespace) -> int:
+    """Anchor-driven sync for exactly one (segment_id, cam_serial) pair."""
+    try:
+        out_path = sync_one_segment(
+            audio_dir=args.audio_dir,
+            video_dir=args.video_dir,
+            segment_id=str(args.segment_id),
+            cam_serial=str(args.cam_serial),
+            anchors_json=args.anchors,
+            out_audio_dir=args.out_audio,
+            out_video_dir=args.out_video,
+            serial_channel=args.serial_channel,
+        )
+        logger.info("Wrote %s", out_path)
+        return 0
+    except Exception as e:
+        logger.exception(e)
+        return 2
 
 
 # ---------------------------------------------------------------------------
