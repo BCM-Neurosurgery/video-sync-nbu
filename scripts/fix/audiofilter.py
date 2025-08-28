@@ -27,7 +27,8 @@ class AudioFilter:
     """
 
     # Allowed forward step between kept rows; set to None to allow any forward jump.
-    MAX_FWD_DELTA: Optional[int] = 500
+    # by observation, the forward jump is ~64
+    MAX_FWD_DELTA: Optional[int] = 200
 
     def filter_csv(self, csv: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
         """
