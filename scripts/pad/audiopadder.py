@@ -122,6 +122,7 @@ class AudioPadder:
         sample_rate: int = 44100,
         fps: float = 30.0,
         target_frames: int | None = None,
+        local_window: int = 3,
     ):
         self.csv_path = Path(csv_path)
         self.period = period
@@ -133,6 +134,7 @@ class AudioPadder:
         self.sample_rate = int(sample_rate)
         self.fps = float(fps)
         self.target_frames = target_frames
+        self.local_window = int(local_window)
 
         if self.gap_policy == "budget" and self.target_frames is None:
             raise ValueError("When gap_policy='budget', you must specify --frames.")
@@ -328,7 +330,7 @@ class AudioPadder:
                     missing_frames.append(ds - 1)
 
             if gap_indices:
-                # NEW: proportional allocation by missing frames (Δserial-1)
+                # Proportional allocation by missing frames (Δserial-1)
                 total_missing = int(np.sum(missing_frames)) if missing_frames else 0
                 if total_insert_budget > 0 and total_missing > 0:
                     weights = np.array(missing_frames, dtype=np.int64)
@@ -419,7 +421,12 @@ class AudioPadder:
                     S = int(max(0, ideal_span - D))
                 elif self.gap_policy == "local":
                     P_local = self._estimate_local_period(
-                        df, centers, i_left=i, i_right=i + 1, default_P=P_global
+                        df,
+                        centers,
+                        i_left=i,
+                        i_right=i + 1,
+                        default_P=P_global,
+                        window=self.local_window,
                     )
                     ideal_span = int(round(delta_s * P_local))
                     S = int(max(0, ideal_span - D))
@@ -484,7 +491,7 @@ class AudioPadder:
         i_left: int,
         i_right: int,
         default_P: int,
-        window: int = 16,
+        window: int = 3,
     ) -> int:
         """Estimate a *local* center-to-center period around a gap.
 
@@ -595,6 +602,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Total frame count for the target duration (required when --gap-policy=budget)",
     )
     p.add_argument(
+        "--local-window",
+        type=int,
+        default=3,
+        help="Window size (per side) for local period estimation when --gap-policy=local",
+    )
+    p.add_argument(
         "--log",
         dest="loglevel",
         default="INFO",
@@ -621,6 +634,7 @@ def main():
         sample_rate=args.sample_rate,
         fps=args.fps,
         target_frames=args.frames,
+        local_window=args.local_window,
     )
     try:
         padder.run()
