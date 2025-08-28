@@ -2,22 +2,13 @@
 """
 csv_serial_analysis.py — CSV-only front end for serial discontinuity diagnostics.
 
-This script reuses the core logic from `serial_diag_cli_jsonparser.py` but restricts
-I/O to CSV files. It exposes:
+Public API:
+    analyze_csv_serials(path, column="serial", expect_step=1, top=5, hist_cols=2,
+                        out_text=None) -> tuple[Analysis, pathlib.Path]
 
-1) Public API:
-   analyze_csv_serials(path, column="serial", expect_step=1, top=5, hist_cols=2,
-                       out_text=None, out_json=None) -> Analysis
-
-2) CLI:
-   csv-serial-analysis <path.csv> [--column SERIAL] [--expect-step 1]
-                       [--top 5] [--hist-cols 2] [--out-text OUT.txt]
-                       [--out-json OUT.json]
-
-Examples
---------
-$ csv-serial-analysis data/serials.csv --column chunk_serial --out-json report.json
-$ python csv_serial_analysis.py data/serials.csv
+CLI:
+    csv-serial-analysis <path.csv> [--column SERIAL] [--expect-step 1]
+                        [--top 5] [--hist-cols 2] [--out-text OUT.txt]
 """
 from __future__ import annotations
 
@@ -25,7 +16,7 @@ import argparse
 import logging
 from pathlib import Path
 from typing import Optional
-
+from typing import Tuple
 from scripts.analysis.serial_analysis import (
     load_series_from_csv,
     analyze,
@@ -34,6 +25,9 @@ from scripts.analysis.serial_analysis import (
 )
 
 
+# -----------------------------
+# Public API
+# -----------------------------
 def analyze_csv_serials(
     path: str,
     column: str = "serial",
@@ -42,8 +36,8 @@ def analyze_csv_serials(
     top: int = 5,
     hist_cols: int = 2,
     out_text: Optional[str] = None,
-) -> Analysis:
-    """Analyze a CSV integer sequence column for discontinuities and (optionally) write a text report.
+) -> Tuple[Analysis, Path]:
+    """Analyze a CSV integer sequence column and write a text report.
 
     Parameters
     ----------
@@ -58,13 +52,13 @@ def analyze_csv_serials(
     hist_cols : int, default 2
         Histogram entries per row in the text report (1 = one per line).
     out_text : str or None, default None
-        If provided, write a human-readable text report to this path.
+        If provided, write the text report to this path.
         If None, defaults to "<csv_stem>.txt" next to the CSV.
 
     Returns
     -------
-    Analysis
-        The structured analysis dataclass produced by the underlying engine.
+    (Analysis, Path)
+        The structured analysis and the absolute path to the written text report.
 
     Raises
     ------
@@ -90,6 +84,7 @@ def analyze_csv_serials(
     )
     default_text_path = csv_path.with_suffix(".txt")
     out_text_path = Path(out_text) if out_text is not None else default_text_path
+    out_text_path = out_text_path.resolve()
 
     # Write text output
     try:
@@ -101,7 +96,7 @@ def analyze_csv_serials(
     except OSError as e:
         raise OSError(f"Failed to write text report: {out_text_path}") from e
 
-    return result
+    return result, out_text_path
 
 
 # -----------------------------
@@ -148,7 +143,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        res = analyze_csv_serials(
+        res, outp = analyze_csv_serials(
             path=args.path,
             column=args.column,
             expect_step=args.expect_step,
@@ -157,12 +152,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             out_text=args.out_text,  # may be None → default computed in API
         )
         logging.info(
-            "Done. Values=%d Steps=%d ok=%d (%.2f%%) MissingIDs=%d",
+            "Done. Values=%d Steps=%d ok=%d (%.2f%%) MissingIDs=%d → %s",
             res.n_values,
             res.total_steps,
             res.ok_steps,
             100.0 * res.ok_ratio,
             res.total_missing_ids,
+            str(outp),
         )
         return 0
     except (FileNotFoundError, ValueError, OSError) as e:
