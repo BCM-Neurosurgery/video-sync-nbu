@@ -78,6 +78,8 @@ if not logger.handlers:
     logger.addHandler(h)
 logger.setLevel(logging.INFO)
 
+SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
+
 
 def _name(p) -> str:
     """Return just the basename for any path-like object."""
@@ -167,6 +169,12 @@ def run_pipeline(
     Returns 0 on success, nonzero if any failures occurred.
     """
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+
+    if site not in SITE_CHOICES:
+        logger.error(
+            "Invalid --site '%s'. Choose from: %s", site, ", ".join(SITE_CHOICES)
+        )
+        return 5
 
     # Discover audio group once (shared across segments/cams)
     try:
@@ -415,7 +423,10 @@ if __name__ == "__main__":
         "--out-dir", required=True, type=Path, help="Parent output directory"
     )
     parser.add_argument(
-        "--site", default="jamail", help="Site label for decoding (default: jamail)"
+        "--site",
+        default="jamail",
+        choices=SITE_CHOICES,
+        help="Site label (jamail | nbu_lounge | nbu_sleep)",
     )
     parser.add_argument(
         "-s",
