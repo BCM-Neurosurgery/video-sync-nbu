@@ -78,6 +78,14 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 
+def _name(p) -> str:
+    """Return just the basename for any path-like object."""
+    try:
+        return Path(p).name
+    except Exception:
+        return str(p)
+
+
 def process_segment(
     video_in: str,
     audiogroup: AudioGroup,
@@ -92,183 +100,185 @@ def process_segment(
     """
     segment_out = parent_out / seg_id
     audio_decoded_dir = segment_out / "audio_decoded"
+    summary = {"segment": seg_id, "ok": [], "fail": []}
 
+    # ---- Stage: decode + analyze raw ----
     try:
-        logger.info("Decoding serial audio for %s ...", seg_id)
+        logger.info("[%s] decoding serial…", seg_id)
         decoded_raw_csv, _, _, _ = decode_to_raw(
             serial_audio_path, audio_decoded_dir, site=site
         )
-        logger.info("Audio Serial Decoded.")
+        logger.info("[%s] raw.csv → %s", seg_id, _name(decoded_raw_csv))
+        try:
+            _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
+            logger.info("[%s] raw.txt → %s", seg_id, _name(raw_txt))
+        except SerialAnalysisError as e:
+            logger.error("[%s] raw analysis failed: %s", seg_id, e)
+            summary["fail"].append("raw-analysis")
     except AudioDecodingError as e:
-        logger.exception("Segment %s: audio decode failed: %s", seg_id, e)
+        logger.error("[%s] decode failed: %s", seg_id, e)
+        summary["fail"].append("decode")
+        return summary
 
-    try:
-        _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-        logger.info("Analyzed raw serial.")
-    except SerialAnalysisError as e:
-        logger.exception("Segment %s: audio analysis failed: %s", seg_id, e)
-
+    # ---- Stage: gapfill + analyze ----
     try:
         gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-        logger.info("Gapfilled → %s", gapfilled_csv)
+        logger.info("[%s] gapfilled.csv → %s", seg_id, _name(gapfilled_csv))
+        try:
+            _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
+            logger.info("[%s] gapfilled.txt → %s", seg_id, _name(gapfilled_txt))
+        except SerialAnalysisError as e:
+            logger.error("[%s] gapfilled analysis failed: %s", seg_id, e)
+            summary["fail"].append("gapfilled-analysis")
     except GapFillError as e:
-        logger.exception("Segment %s: gapfilling failed: %s", seg_id, e)
+        logger.error("[%s] gapfill failed: %s", seg_id, e)
+        summary["fail"].append("gapfill")
+        return summary
 
-    try:
-        _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-        logger.info("Analyzed → %s", gapfilled_txt)
-    except SerialAnalysisError as e:
-        logger.exception("Segment %s: audio analysis failed: %s", seg_id, e)
-
+    # ---- Stage: filter + analyze ----
     try:
         filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-        logger.info("Filtered → %s", filtered_csv)
-    except FilteredError as e:
-        logger.exception("Segment %s: filtering failed: %s", seg_id, e)
-
-    try:
-        _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-        logger.info("Analyzed → %s", filtered_txt)
-    except SerialAnalysisError as e:
-        logger.exception("Segment %s: audio analysis failed: %s", seg_id, e)
-
-    for cam in cam_serials:
+        logger.info("[%s] filtered.csv → %s", seg_id, _name(filtered_csv))
         try:
-            cam_out = segment_out / cam
-            (cam_out / "work").mkdir(parents=True, exist_ok=True)
-            (cam_out / "audio_padded").mkdir(parents=True, exist_ok=True)
-            (cam_out / "audio_clips").mkdir(parents=True, exist_ok=True)
-            (cam_out / "synced").mkdir(parents=True, exist_ok=True)
-            filtered_anchors = cam_out / "work" / f"gapfilled-filtered-anchors.json"
-            padded_anchors = (
-                cam_out / "work" / f"gapfilled-filtered-padded-anchors.json"
+            _, filtered_txt = analyze_csv_serials(path=filtered_csv)
+            logger.info("[%s] filtered.txt → %s", seg_id, _name(filtered_txt))
+        except SerialAnalysisError as e:
+            logger.error("[%s] filtered analysis failed: %s", seg_id, e)
+            summary["fail"].append("filtered-analysis")
+    except FilteredError as e:
+        logger.error("[%s] filter failed: %s", seg_id, e)
+        summary["fail"].append("filter")
+        return summary
+
+    # ---- Per camera workflow ----
+    for cam in cam_serials:
+        tag = f"{seg_id}·{cam}"
+        cam_out = segment_out / cam
+        (cam_out / "work").mkdir(parents=True, exist_ok=True)
+        (cam_out / "audio_padded").mkdir(parents=True, exist_ok=True)
+        (cam_out / "audio_clips").mkdir(parents=True, exist_ok=True)
+        (cam_out / "synced").mkdir(parents=True, exist_ok=True)
+
+        filtered_anchors = cam_out / "work" / "gapfilled-filtered-anchors.json"
+        padded_anchors = cam_out / "work" / "gapfilled-filtered-padded-anchors.json"
+
+        # Anchors from filtered CSV
+        try:
+            save_anchors_for_camera(
+                serial_csv=filtered_csv,
+                video_dir=video_in,
+                segment_id=seg_id,
+                cam_serial=cam,
+                out_json=filtered_anchors,
             )
-
+            logger.info("[%s] anchors.json → %s", tag, _name(filtered_anchors))
             try:
-                save_anchors_for_camera(
-                    serial_csv=filtered_csv,
-                    video_dir=video_in,
-                    segment_id=seg_id,
-                    cam_serial=cam,
-                    out_json=filtered_anchors,
-                )
-                logger.info("Saved gapfilled-filtered-anchors for %s", cam)
+                analyze_anchors_file(anchors_json=filtered_anchors)
+                logger.info("[%s] anchors analyzed", tag)
             except AnchorError as e:
-                logger.exception(
-                    "Segment %s cam %s: anchor saving failed: %s", seg_id, cam, e
-                )
+                logger.error("[%s] anchors analyze failed: %s", tag, e)
+                summary["fail"].append(f"{cam}:anchors-analyze")
+        except AnchorError as e:
+            logger.error("[%s] anchors save failed: %s", tag, e)
+            summary["fail"].append(f"{cam}:anchors-save")
+            # continue to next cam
+            continue
 
-            try:
-                analyze_anchors_file(
-                    anchors_json=filtered_anchors,
-                )
-                logger.info("Analyzed gapfilled-filtered-anchors.json for %s", cam)
-            except AnchorError as e:
-                logger.exception(
-                    "Segment %s cam %s: anchor analysis failed: %s", seg_id, cam, e
-                )
-
-            try:
-                clipped_csv = clip_with_anchors(
-                    input_csv=filtered_csv,
-                    anchors_json=filtered_anchors,
-                    output_csv=cam_out / "work" / f"gapfilled-filtered-clipped.csv",
-                )
-                logger.info("Clipped filtered CSV for cam %s", cam)
-            except ClipError as e:
-                logger.exception(
-                    "Segment %s cam %s: clipping failed: %s", seg_id, cam, e
-                )
-
+        # Clip CSV to video window
+        try:
+            clipped_csv = clip_with_anchors(
+                input_csv=filtered_csv,
+                anchors_json=filtered_anchors,
+                output_csv=cam_out / "work" / "gapfilled-filtered-clipped.csv",
+            )
+            logger.info("[%s] clipped.csv → %s", tag, _name(clipped_csv))
             try:
                 _, clipped_txt = analyze_csv_serials(path=clipped_csv)
-                logger.info("Analyzed → %s", clipped_txt)
+                logger.info("[%s] clipped.txt → %s", tag, _name(clipped_txt))
             except SerialAnalysisError as e:
-                logger.exception(
-                    "Segment %s cam %s: audio analysis failed: %s", seg_id, cam, e
-                )
+                logger.error("[%s] clipped analysis failed: %s", tag, e)
+                summary["fail"].append(f"{cam}:clipped-analysis")
+        except ClipError as e:
+            logger.error("[%s] clip failed: %s", tag, e)
+            summary["fail"].append(f"{cam}:clip")
+            continue
 
-            try:
-                apadder = AudioPadder(
-                    csv_path=clipped_csv,
-                    include_synthetic=True,
-                    gap_policy="local",
-                    sample_rate=44100,
-                )
-                _, _, padded_csv, padplan = apadder.run()
-                logger.info("Padded clipped CSV for cam %s → %s", cam, padded_csv)
-            except AudioPaddingError as e:
-                logger.exception(
-                    "Segment %s cam %s: audio padding failed: %s", seg_id, cam, e
-                )
-
+        # Pad (build plan + fixed CSV)
+        try:
+            apadder = AudioPadder(
+                csv_path=clipped_csv,
+                include_synthetic=True,
+                gap_policy="local",
+                sample_rate=44100,
+            )
+            _, _, padded_csv, padplan = apadder.run()
+            logger.info("[%s] padded.csv → %s", tag, _name(padded_csv))
+            logger.info("[%s] padplan.json → %s", tag, _name(padplan))
             try:
                 _, padded_txt = analyze_csv_serials(path=padded_csv)
-                logger.info("Analyzed → %s", padded_txt)
+                logger.info("[%s] padded.txt → %s", tag, _name(padded_txt))
             except SerialAnalysisError as e:
-                logger.exception(
-                    "Segment %s cam %s: audio analysis failed: %s", seg_id, cam, e
-                )
+                logger.error("[%s] padded analysis failed: %s", tag, e)
+                summary["fail"].append(f"{cam}:padded-analysis")
+        except AudioPaddingError as e:
+            logger.error("[%s] padding failed: %s", tag, e)
+            summary["fail"].append(f"{cam}:padding")
+            continue
 
-            for ch, audio in audiogroup.audios.items():
-                try:
-                    applier = AudioPlanApplier(
-                        audio_path=audio.path,
-                        plan_path=padplan,
-                        out_dir=cam_out / "audio_padded",
-                    )
-                    out = applier.apply()
-                    logger.info("Applied padding plan for audio ch %s → %s", ch, out)
-                except AudioPlanError as e:
-                    logger.exception(
-                        "Segment %s cam %s ch %s: audio plan application failed: %s",
-                        seg_id,
-                        cam,
-                        ch,
-                        e,
-                    )
-
+        # Apply plan to each program channel
+        for ch, audio in audiogroup.audios.items():
             try:
-                save_anchors_for_camera(
-                    serial_csv=padded_csv,
-                    video_dir=video_in,
-                    segment_id=seg_id,
-                    cam_serial=cam,
-                    out_json=padded_anchors,
+                applier = AudioPlanApplier(
+                    audio_path=audio.path,
+                    plan_path=padplan,
+                    out_dir=cam_out / "audio_padded",
                 )
-                logger.info("Saved anchors based on filtered CSV for cam %s", cam)
-            except AnchorError as e:
-                logger.exception(
-                    "Segment %s cam %s: anchor saving failed: %s", seg_id, cam, e
-                )
+                out = applier.apply()
+                logger.info("[%s] plan→ch%02d → %s", tag, ch, _name(out))
+            except AudioPlanError as e:
+                logger.error("[%s] plan apply ch%02d failed: %s", tag, ch, e)
+                summary["fail"].append(f"{cam}:plan-ch{ch}")
 
+        # Anchors from padded CSV
+        try:
+            save_anchors_for_camera(
+                serial_csv=padded_csv,
+                video_dir=video_in,
+                segment_id=seg_id,
+                cam_serial=cam,
+                out_json=padded_anchors,
+            )
+            logger.info("[%s] padded-anchors.json → %s", tag, _name(padded_anchors))
             try:
                 analyze_anchors_file(anchors_json=padded_anchors)
-                logger.info(
-                    "Analyzed gapfilled-filtered-padded-anchors.json for cam %s", cam
-                )
+                logger.info("[%s] padded-anchors analyzed", tag)
             except AnchorError as e:
-                logger.exception(
-                    "Segment %s cam %s: anchor analysis failed: %s", seg_id, cam, e
-                )
+                logger.error("[%s] padded-anchors analyze failed: %s", tag, e)
+                summary["fail"].append(f"{cam}:padded-anchors-analyze")
+        except AnchorError as e:
+            logger.error("[%s] padded-anchors save failed: %s", tag, e)
+            summary["fail"].append(f"{cam}:padded-anchors-save")
+            continue
 
-            try:
-                sync_one_segment(
-                    audio_dir=cam_out / "audio_padded",
-                    video_dir=video_in,
-                    segment_id=seg_id,
-                    cam_serial=cam,
-                    anchors_json=padded_anchors,
-                    out_audio_dir=cam_out / "audio_clips",
-                    out_video_dir=cam_out / "synced",
-                    serial_channel=3,
-                )
-                logger.info("Synced video for cam %s", cam)
-            except SyncError as e:
-                logger.exception("Segment %s cam %s: sync failed: %s", seg_id, cam, e)
-
+        # Final sync
+        try:
+            sync_one_segment(
+                audio_dir=cam_out / "audio_padded",
+                video_dir=video_in,
+                segment_id=seg_id,
+                cam_serial=cam,
+                anchors_json=padded_anchors,
+                out_audio_dir=cam_out / "audio_clips",
+                out_video_dir=cam_out / "synced",
+                serial_channel=3,
+            )
+            logger.info("[%s] synced ✔", tag)
+            summary["ok"].append(cam)
         except SyncError as e:
-            logger.exception("Segment %s cam %s failed: %s", seg_id, cam, e)
+            logger.error("[%s] sync failed: %s", tag, e)
+            summary["fail"].append(f"{cam}:sync")
+
+    return summary
 
 
 if __name__ == "__main__":
