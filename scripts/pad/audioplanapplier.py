@@ -65,6 +65,12 @@ try:
 except Exception:  # pragma: no cover - optional dep
     sf = None  # type: ignore
 
+# --- logutils -----------------------------------------------------------
+from scripts.log.logutils import configure_standalone_logging
+
+logger = logging.getLogger(__name__)
+# -----------------------------------------------------------------------
+
 
 @dataclass
 class EditOp:
@@ -124,30 +130,30 @@ class AudioPlanApplier:
     # ------------------------------- Public API ------------------------------- #
     def apply(self) -> Path:
         """Apply the plan to the input audio and write the edited WAV."""
-        logging.info(
+        logger.info(
             "Starting plan application: audio=%s plan=%s outdir=%s",
             self.audio_path,
             self.plan_path,
             self.out_dir,
         )
         ops = self._load_plan()
-        logging.info("Loaded plan with %d ops", len(ops))
-        logging.info("Decoding audio…")
+        logger.info("Loaded plan with %d ops", len(ops))
+        logger.info("Decoding audio…")
         data, sr = self._load_audio(self.audio_path)
         channels = data.shape[1] if data.ndim == 2 else 1
-        logging.info("Audio decoded: shape=%s  sr=%d  ch=%d", data.shape, sr, channels)
+        logger.info("Audio decoded: shape=%s  sr=%d  ch=%d", data.shape, sr, channels)
 
         # Preflight size check against WAV 4 GB limit (PCM_16)
         self._preflight_wav_limit(data_len=len(data), channels=channels, ops=ops, sr=sr)
 
-        logging.info("Applying %d insertions…", len(ops))
+        logger.info("Applying %d insertions…", len(ops))
         edited = self._apply_ops_chunked(data, ops)
-        logging.info("Insertions applied. New length = %d samples", len(edited))
+        logger.info("Insertions applied. New length = %d samples", len(edited))
 
         out_path = self._make_out_path()
-        logging.info("Writing edited WAV to %s", out_path)
+        logger.info("Writing edited WAV to %s", out_path)
         self._write_audio(out_path, edited, sr)
-        logging.info("Done.")
+        logger.info("Done.")
         return out_path
 
     # ------------------------------ I/O helpers ------------------------------ #
@@ -171,7 +177,7 @@ class AudioPlanApplier:
         # Ensure ascending order by anchor index
         ops.sort(key=lambda x: x.insert_after_sample)
         total_insert = sum(max(0, op.insert_len_samples) for op in ops)
-        logging.debug(
+        logger.debug(
             "Plan summary: %d ops, total_insert=%d samples", len(ops), total_insert
         )
         return ops
@@ -187,18 +193,18 @@ class AudioPlanApplier:
         if ext == ".wav":
             if sf is None:
                 raise RuntimeError("soundfile is required to read WAV files")
-            logging.debug("Reading WAV via soundfile: %s", path)
+            logger.debug("Reading WAV via soundfile: %s", path)
             data, sr = sf.read(path, dtype="float32", always_2d=True)
             return data, int(sr)
 
         # Try soundfile for non-WAV (works if libsndfile has codec support)
         if sf is not None:
             try:
-                logging.debug("Reading non-WAV via soundfile: %s", path)
+                logger.debug("Reading non-WAV via soundfile: %s", path)
                 data, sr = sf.read(path, dtype="float32", always_2d=True)
                 return data, int(sr)
             except Exception:
-                logging.debug(
+                logger.debug(
                     "soundfile could not decode %s; falling back to librosa", path
                 )
                 pass
@@ -210,7 +216,7 @@ class AudioPlanApplier:
             raise RuntimeError(
                 "Cannot decode non-WAV audio without librosa (and audioread/ffmpeg)."
             ) from e
-        logging.debug("Reading via librosa/audioread: %s", path)
+        logger.debug("Reading via librosa/audioread: %s", path)
         y, sr = librosa.load(str(path), sr=None, mono=False)  # y: (n,) or (ch, n)
         if y.ndim == 1:
             data = y.astype(np.float32)[:, None]  # (n, 1)
@@ -240,7 +246,7 @@ class AudioPlanApplier:
                     "Consider segmenting or using RF64/WAVE64/FLAC."
                 )
             )
-        logging.info(
+        logger.info(
             "Preflight OK: final frames=%d, channels=%d, sr=%d, bytes≈%s",
             n_final,
             channels,
@@ -288,7 +294,7 @@ class AudioPlanApplier:
 
         total_ops = len(ops)
         if total_ops:
-            logging.debug("Begin applying %d ops (zero-copy)", total_ops)
+            logger.debug("Begin applying %d ops (zero-copy)", total_ops)
 
         for k, op in enumerate(ops):
             if op.insert_len_samples <= 0:
@@ -298,7 +304,7 @@ class AudioPlanApplier:
             pos = anchor + 1
             # Clamp & monotonicity enforcement
             if pos < cursor:
-                logging.warning(
+                logger.warning(
                     "Plan op %d insertion at %d is before current cursor %d. Clamping to %d.",
                     k,
                     pos,
@@ -307,7 +313,7 @@ class AudioPlanApplier:
                 )
                 pos = cursor
             if pos > n:
-                logging.warning(
+                logger.warning(
                     "Plan op %d insertion at %d beyond EOF %d. Clamping to end.",
                     k,
                     pos,
@@ -321,7 +327,7 @@ class AudioPlanApplier:
             # Append silence of requested length
             parts.append(self._make_fill(op.insert_len_samples, ch, data.dtype))
             if total_ops >= 100 and (k + 1) % 100 == 0:
-                logging.debug("...applied %d/%d ops", k + 1, total_ops)
+                logger.debug("...applied %d/%d ops", k + 1, total_ops)
 
         # Remainder of the source
         if cursor < n:
@@ -365,9 +371,9 @@ def main():
 
     args = _build_cli_parser().parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(levelname)s: %(message)s",
+    # Use standalone console logging from logutils (won't interfere with driver)
+    configure_standalone_logging(
+        level="INFO" if args.verbose else "WARNING", seg="-", cam="-"
     )
 
     try:
@@ -375,10 +381,8 @@ def main():
             audio_path=args.audio, plan_path=args.plan, out_dir=args.outdir
         )
         out = applier.apply()
-        # Minimal, friendly STDOUT message
-        print(str(out))
     except Exception as e:
-        logging.error("%s", e)
+        logger.error("%s", e)
         sys.exit(1)
 
 
