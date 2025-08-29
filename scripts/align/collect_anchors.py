@@ -43,11 +43,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 # -----------------------------------------------------------------------------
-# Logging
+# Logging (library module: no handlers/levels; driver or standalone config handles it)
 # -----------------------------------------------------------------------------
-# Library module: do NOT add handlers or set levels here. Let the caller (driver)
-# configure logging. When run standalone (__main__), we'll install a minimal
-# console handler that does not interfere with project-wide logging.
+from scripts.log.logutils import configure_standalone_logging, log_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,14 +57,6 @@ def _short_name(p: str | Path) -> str:
     """basename with extension (e.g., 'file.csv')."""
     try:
         return Path(p).name
-    except Exception:
-        return str(p)
-
-
-def _short_stem(p: str | Path) -> str:
-    """stem without extension (e.g., 'file')."""
-    try:
-        return Path(p).stem
     except Exception:
         return str(p)
 
@@ -372,63 +363,26 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-# Standalone logging that won't interfere with the driver:
-# - Install a single console handler ONLY if root has no handlers (i.e., standalone).
-# - Compact format with [seg/cam] tagging using CLI values.
-class _StandaloneSegCamFilter(logging.Filter):
-    def __init__(self, seg: str, cam: str) -> None:
-        super().__init__()
-        self.seg = seg
-        self.cam = cam
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        # Ensure seg/cam exist for the format string
-        if not hasattr(record, "seg") or record.seg in (None, "-", ""):
-            record.seg = self.seg or "-"
-        if not hasattr(record, "cam") or record.cam in (None, "-", ""):
-            record.cam = self.cam or "-"
-        return True
-
-
-def configure_standalone_logging(level: str, seg: str, cam: str) -> None:
-    """
-    Minimal, non-intrusive console logging for `python -m ...` use.
-    If root already has handlers (i.e., invoked by the driver), this is a no-op.
-    """
-    root = logging.getLogger()
-    if root.handlers:
-        return  # Respect project's global logging config
-
-    lvl = getattr(logging, level.upper(), logging.INFO)
-    root.setLevel(lvl)
-
-    h = logging.StreamHandler()
-    h.setLevel(lvl)
-    h.addFilter(_StandaloneSegCamFilter(seg=seg, cam=cam))
-    h.setFormatter(logging.Formatter("[%(levelname)s] [%(seg)s/%(cam)s] %(message)s"))
-    root.addHandler(h)
-
-
 def _cmd_collect(ns: argparse.Namespace) -> int:
-    # Standalone: concise console logging with seg/cam tag.
-    configure_standalone_logging(ns.log_level, ns.segment_id, ns.cam_serial)
+    # Standalone: minimal console logging; no-op if driver already configured root.
+    configure_standalone_logging(ns.log_level, seg=ns.segment_id, cam=ns.cam_serial)
 
-    save_anchors_for_camera(
-        ns.serial_index,
-        ns.video_dir,
-        ns.segment_id,
-        ns.cam_serial,
-        ns.out,
-        min_k=ns.min_k,
-        min_span_ratio=ns.min_span,
-    )
-    # Extra concise summary for humans:
-    logger.info(
-        "Anchors written → %s (seg=%s cam=%s)",
-        _short_name(ns.out),
-        ns.segment_id,
-        ns.cam_serial,
-    )
+    with log_context(seg=ns.segment_id, cam=ns.cam_serial):
+        save_anchors_for_camera(
+            ns.serial_index,
+            ns.video_dir,
+            ns.segment_id,
+            ns.cam_serial,
+            ns.out,
+            min_k=ns.min_k,
+            min_span_ratio=ns.min_span,
+        )
+        logger.info(
+            "Anchors written → %s (seg=%s cam=%s)",
+            _short_name(ns.out),
+            ns.segment_id,
+            ns.cam_serial,
+        )
     return 0
 
 
@@ -438,9 +392,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.cmd == "collect":
             return _cmd_collect(args)
-        parser.error("unknown command")  # pragma: no cover
+        parser.error("unknown command")
     except Exception as e:
-        # If standalone logging is active, this will print a readable stack trace.
         logger.exception(e)
         return 2
 
