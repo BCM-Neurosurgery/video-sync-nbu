@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/anchor_collect.py — Per-segment, per-camera anchor extractor
-
-Uses your discover shortcut:
-    from scripts.discover import discover_segment
+scripts/align/collect_anchors.py — Per-segment, per-camera anchor extractor
 
 Inputs
 ------
@@ -27,7 +24,7 @@ JSON list of anchors:
 
 CLI
 ---
-python -m scripts.anchor_collect collect \
+python -m scripts.align.collect_anchors collect \
   --serial-index /path/to/serial_index.csv \
   --video-dir    /path/to/videos \
   --segment-id   20240806_153012 \
@@ -45,17 +42,37 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+# Library module: do NOT add handlers or set levels here. Let the caller (driver)
+# configure logging. When run standalone (__main__), we'll install a minimal
+# console handler that does not interfere with project-wide logging.
+logger = logging.getLogger(__name__)
 
-# ---------------------------- logging ----------------------------------------
-logger = logging.getLogger("anchor_collect")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+
+# -----------------------------------------------------------------------------
+# Small utils (concise names in logs)
+# -----------------------------------------------------------------------------
+def _short_name(p: str | Path) -> str:
+    """basename with extension (e.g., 'file.csv')."""
+    try:
+        return Path(p).name
+    except Exception:
+        return str(p)
 
 
-# --------------------------- data model --------------------------------------
+def _short_stem(p: str | Path) -> str:
+    """stem without extension (e.g., 'file')."""
+    try:
+        return Path(p).stem
+    except Exception:
+        return str(p)
+
+
+# -----------------------------------------------------------------------------
+# Data model
+# -----------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Anchor:
     """
@@ -81,7 +98,9 @@ class Anchor:
     frame_id_reidx: int
 
 
-# --------------------------- helpers -----------------------------------------
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
 def load_serial_index_csv(path: Path) -> Dict[int, int]:
     """
     Load CSV with columns: serial,start_sample,end_sample → {serial: start_sample}.
@@ -100,7 +119,9 @@ def load_serial_index_csv(path: Path) -> Dict[int, int]:
 
     if not mapping:
         raise ValueError(f"No valid rows found in serial index CSV: {path}")
-    logger.info("Loaded %d serial→sample entries from %s", len(mapping), path)
+    logger.info(
+        "Loaded %d serial→sample entries from %s", len(mapping), _short_name(path)
+    )
     return mapping
 
 
@@ -217,12 +238,14 @@ def _collect_anchors_for_cam(
     if cand:
         s_vals = [s for _, s in cand]
         local_span = (max(s_vals) - min(s_vals)) if len(s_vals) > 1 else 0
-        if local_span < max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1))):
+        expected_span = max(1, int(min_span_ratio * (max(s_vals) - min(s_vals) + 1)))
+        if local_span < expected_span:
             logger.warning(
-                "Low anchor span for %s cam %s: span=%d",
+                "Low anchor span for %s cam %s: span=%d (expect ≥ %d)",
                 segment_id,
                 cam_serial,
                 local_span,
+                expected_span,
             )
 
     anchors: List[Anchor] = [
@@ -239,7 +262,9 @@ def _collect_anchors_for_cam(
     return anchors
 
 
-# ----------------------------- public API ------------------------------------
+# -----------------------------------------------------------------------------
+# Public API
+# -----------------------------------------------------------------------------
 def save_anchors_for_camera(
     serial_csv: Path | str,
     video_dir: Path | str,
@@ -267,7 +292,9 @@ def save_anchors_for_camera(
     -------
     Path to the written JSON.
     """
-    from scripts.discover import discover_segment  # local import
+    from scripts.discover import (
+        discover_segment,
+    )  # local import to avoid heavy import at module load
 
     serial_csv = Path(serial_csv)
     video_dir = Path(video_dir)
@@ -294,16 +321,18 @@ def save_anchors_for_camera(
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps([asdict(a) for a in anchors], indent=2))
     logger.info(
-        "Saved %d anchors for segment=%s cam=%s → %s",
+        "Saved %d anchors for seg=%s cam=%s → %s",
         len(anchors),
         segment_id,
         cam_serial,
-        out_json,
+        _short_name(out_json),
     )
     return out_json
 
 
-# ------------------------------- CLI -----------------------------------------
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="anchor-collect",
@@ -338,13 +367,52 @@ def _build_parser() -> argparse.ArgumentParser:
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging verbosity",
+        help="Logging verbosity (standalone only; ignored when called from driver)",
     )
     return p
 
 
+# Standalone logging that won't interfere with the driver:
+# - Install a single console handler ONLY if root has no handlers (i.e., standalone).
+# - Compact format with [seg/cam] tagging using CLI values.
+class _StandaloneSegCamFilter(logging.Filter):
+    def __init__(self, seg: str, cam: str) -> None:
+        super().__init__()
+        self.seg = seg
+        self.cam = cam
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Ensure seg/cam exist for the format string
+        if not hasattr(record, "seg") or record.seg in (None, "-", ""):
+            record.seg = self.seg or "-"
+        if not hasattr(record, "cam") or record.cam in (None, "-", ""):
+            record.cam = self.cam or "-"
+        return True
+
+
+def configure_standalone_logging(level: str, seg: str, cam: str) -> None:
+    """
+    Minimal, non-intrusive console logging for `python -m ...` use.
+    If root already has handlers (i.e., invoked by the driver), this is a no-op.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return  # Respect project's global logging config
+
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    root.setLevel(lvl)
+
+    h = logging.StreamHandler()
+    h.setLevel(lvl)
+    h.addFilter(_StandaloneSegCamFilter(seg=seg, cam=cam))
+    h.setFormatter(logging.Formatter("[%(levelname)s] [%(seg)s/%(cam)s] %(message)s"))
+    root.addHandler(h)
+
+
 def _cmd_collect(ns: argparse.Namespace) -> int:
-    logger.setLevel(getattr(logging, ns.log_level))
+    # Standalone: concise console logging with seg/cam tag.
+    configure_standalone_logging(ns.log_level, ns.segment_id, ns.cam_serial)
+
     save_anchors_for_camera(
         ns.serial_index,
         ns.video_dir,
@@ -353,6 +421,13 @@ def _cmd_collect(ns: argparse.Namespace) -> int:
         ns.out,
         min_k=ns.min_k,
         min_span_ratio=ns.min_span,
+    )
+    # Extra concise summary for humans:
+    logger.info(
+        "Anchors written → %s (seg=%s cam=%s)",
+        _short_name(ns.out),
+        ns.segment_id,
+        ns.cam_serial,
     )
     return 0
 
@@ -363,8 +438,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.cmd == "collect":
             return _cmd_collect(args)
-        parser.error("unknown command")
+        parser.error("unknown command")  # pragma: no cover
     except Exception as e:
+        # If standalone logging is active, this will print a readable stack trace.
         logger.exception(e)
         return 2
 
