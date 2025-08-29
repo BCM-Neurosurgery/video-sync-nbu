@@ -69,6 +69,7 @@ from scripts.errors import (
     AudioPaddingError,
     AudioPlanError,
 )
+import argparse
 
 logger = logging.getLogger("sync")
 if not logger.handlers:
@@ -86,11 +87,124 @@ def _name(p) -> str:
         return str(p)
 
 
+def list_segments(video_dir: Path) -> list[str]:
+    """
+    Discover segment IDs from *.json basenames in video_dir.
+    Example file: TRBD002_20250806_104707.json → segment_id == TRBD002_20250806_104707
+    """
+    return sorted({p.stem for p in Path(video_dir).glob("*.json")})
+
+
+def list_cameras_for_segment(video_dir: Path, segment_id: str) -> list[str]:
+    """
+    Discover camera serials for a given segment by scanning <segment>.*.mp4 files.
+    Example: TRBD002_20250806_104707.23512909.mp4 → '23512909'
+    """
+    cams = []
+    for mp4 in Path(video_dir).glob(f"{segment_id}.*.mp4"):
+        # extract the substring between last '.' and '.mp4'
+        cam = mp4.stem.split(".")[-1]
+        if cam not in cams:
+            cams.append(cam)
+    cams.sort()
+    return cams
+
+
+def build_targets(
+    video_dir: Path,
+    segments: list[str] | None,
+    cameras: list[str] | None,
+) -> dict[str, list[str]]:
+    """
+    Build a {segment_id: [cam_serial, ...]} map following selection rules:
+      - segments=None  → all segments
+      - cameras=None   → all cameras per segment
+      - cameras given  → restrict each segment to these cams (skip cams not present)
+    """
+    # choose segments
+    segs = segments or list_segments(video_dir)
+    targets: dict[str, list[str]] = {}
+
+    for seg in segs:
+        all_cams = set(list_cameras_for_segment(video_dir, seg))
+        if not all_cams:
+            logger.warning("[%s] no cameras found", seg)
+            continue
+
+        if cameras:
+            # keep only cams that actually exist for this segment
+            selected = [c for c in cameras if c in all_cams]
+            if not selected:
+                logger.warning(
+                    "[%s] none of the requested cameras exist: %s",
+                    seg,
+                    ",".join(cameras),
+                )
+                continue
+        else:
+            selected = sorted(all_cams)
+
+        targets[seg] = selected
+
+    if not targets:
+        logger.error(
+            "No targets found. Check --video-dir / --segment / --camera inputs."
+        )
+    return targets
+
+
+def run_pipeline(
+    audio_dir: Path,
+    video_dir: Path,
+    out_dir: Path,
+    site: str,
+    segments: list[str] | None,
+    cameras: list[str] | None,
+    log_level: str = "INFO",
+) -> int:
+    """
+    Orchestrate discovery + per-(segment,camera) processing.
+    Returns 0 on success, nonzero if any failures occurred.
+    """
+    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+
+    # Discover audio group once (shared across segments/cams)
+    try:
+        ag = AudioDiscoverer(audio_dir=audio_dir, log=logger)
+        logger.info("Audio(s) discovered")
+    except AudioGroupDiscoverError as e:
+        logger.error("Audio group discovery failed: %s", e)
+        return 2
+
+    targets = build_targets(video_dir, segments, cameras)
+    if not targets:
+        return 3
+
+    failures = 0
+    for seg_id, cam_list in targets.items():
+        summary = process_segment(
+            video_in=video_dir,
+            audiogroup=ag,
+            seg_id=seg_id,
+            site=site,
+            parent_out=out_dir,
+            cam_serials=cam_list,
+        )
+        if summary["fail"]:
+            failures += 1
+            logger.warning(
+                "[%s] done with failures: %s", seg_id, ", ".join(summary["fail"])
+            )
+        else:
+            logger.info("[%s] done!", seg_id)
+
+    return 0 if failures == 0 else 4
+
+
 def process_segment(
     video_in: str,
     audiogroup: AudioGroup,
     seg_id: str,
-    serial_audio_path: Path,
     site: str,
     parent_out: Path,
     cam_serials: Iterable[str],
@@ -106,7 +220,7 @@ def process_segment(
     try:
         logger.info("[%s] decoding serial…", seg_id)
         decoded_raw_csv, _, _, _ = decode_to_raw(
-            serial_audio_path, audio_decoded_dir, site=site
+            audiogroup.serial_audio.path, audio_decoded_dir, site=site
         )
         logger.info("[%s] raw.csv → %s", seg_id, _name(decoded_raw_csv))
         try:
@@ -282,44 +396,56 @@ def process_segment(
 
 
 if __name__ == "__main__":
-    # set inputs and outputs
-    serial_audio_path = Path(
-        "/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/audio/TRBD002_08062025-03.mp3"
+    parser = argparse.ArgumentParser(
+        description="A/V sync driver: process all segments, one segment, or (segment, camera) subset."
     )
-    audio_in = Path(
-        "/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/audio"
+    parser.add_argument(
+        "--audio-dir",
+        required=True,
+        type=Path,
+        help="Directory containing TRBD...-01.mp3 etc.",
     )
-    video_in = Path(
-        "/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/video"
+    parser.add_argument(
+        "--video-dir",
+        required=True,
+        type=Path,
+        help="Directory containing <SEGMENT>.json and <SEGMENT>.<CAM>.mp4 files",
     )
-    site = "jamail"
-    parent_out = Path(
-        "/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/out"
+    parser.add_argument(
+        "--out-dir", required=True, type=Path, help="Parent output directory"
     )
-    segments = ["TRBD002_20250806_104707"]
-    cameras = ["23512909"]
+    parser.add_argument(
+        "--site", default="jamail", help="Site label for decoding (default: jamail)"
+    )
+    parser.add_argument(
+        "-s",
+        "--segment",
+        dest="segments",
+        action="append",
+        help="Segment ID to process (repeatable). If omitted, process ALL segments.",
+    )
+    parser.add_argument(
+        "-c",
+        "--camera",
+        dest="cameras",
+        action="append",
+        help="Camera serial to process (repeatable). If omitted, process ALL cams per segment.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level (default: INFO)",
+    )
+    args = parser.parse_args()
 
-    try:
-        ag = AudioDiscoverer(
-            audio_dir=audio_in,
-            log=logger,
-        )
-        logger.info("Discovered Audios")
-    except AudioGroupDiscoverError as e:
-        logger.exception("Audio group discovery failed: %s", e)
-
-    for seg in segments:
-        report = process_segment(
-            video_in=video_in,
-            audio_in=audio_in,
-            seg_id=seg,
-            serial_audio_path=serial_audio_path,
-            site=site,
-            parent_out=parent_out,
-            cam_serials=cameras,
-        )
-
-    # Decide exit code or follow-up based on failures
-    # failed = sum(len(r["failed"]) for r in all_reports)
-    # if failed:
-    #     raise SystemExit(2)
+    rc = run_pipeline(
+        audio_dir=args.audio_dir,
+        video_dir=args.video_dir,
+        out_dir=args.out_dir,
+        site=args.site,
+        segments=args.segments,
+        cameras=args.cameras,
+        log_level=args.log_level,
+    )
+    raise SystemExit(rc)
