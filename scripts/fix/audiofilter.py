@@ -3,7 +3,9 @@ from pathlib import Path
 import logging
 import pandas as pd
 
-logger = logging.getLogger("audio_filter")
+from scripts.log.logutils import configure_standalone_logging, log_context
+
+logger = logging.getLogger(__name__)
 REQUIRED_COLS = {"serial", "start_sample", "end_sample"}
 
 
@@ -77,48 +79,13 @@ class AudioFilter:
     @staticmethod
     def keep_consecutive_seq(df: pd.DataFrame) -> pd.DataFrame:
         """
-        Anchor-aware filter over the 'serial' column.
-
-        Behavior
-        --------
-        • Keep the first row; set ANCHOR = serial[0], LAST_KEPT = serial[0].
-        • For each subsequent value cur:
-            - Drop if cur <= ANCHOR            # back-jumps and duplicates
-            - Drop if (MAX_FWD_DELTA is not None) and (cur - LAST_KEPT) > MAX_FWD_DELTA
-            - Otherwise keep; set ANCHOR = LAST_KEPT = cur
-
-        Examples
-        --------
-        1) Strictly increasing by 1 (keep all)
-           serial: 10, 11, 12
-           keep:   10, 11, 12
-
-        2) Back-jump after an increasing run (small numbers suppressed until surpassing anchor)
-           serial: 1001, 1002, 1003, 1004, 1005, 98, 99, 1009, 1010
-           keep:   1001, 1002, 1003, 1004, 1005,      1009, 1010
-           # 98 and 99 are <= anchor (1005) → dropped
-
-        3) Duplicate values (drop duplicates)
-           serial: 42, 42, 43, 43
-           keep:   42,     43
-
-        4) Large forward jump (controlled by MAX_FWD_DELTA)
-           MAX_FWD_DELTA = 500
-           serial: 1000, 1100, 1700, 2201
-           keep:   1000, 1100, 1700
-           # 2201 - 1700 = 501 > 500 → drop
-           # Set MAX_FWD_DELTA = None to allow 2201 (and any forward jump).
-
-        5) Minor decrease (treated as back-jump → drop)
-           serial: 100, 101, 100, 102
-           keep:   100, 101,      102
+        Anchor-aware filter over the 'serial' column. See class docstring for details.
 
         Returns
         -------
         pd.DataFrame
             Rows corresponding to kept serials; index is reset.
         """
-        # Schema check (lightweight; filter_csv already validates)
         missing = REQUIRED_COLS.difference(df.columns)
         if missing:
             raise ValueError(f"Missing required columns: {sorted(missing)}")
@@ -159,7 +126,7 @@ def filter_audio_file(
 ) -> Path:
     """
     Programmatic API: load CSV, apply AudioFilter, save CSV, return output path.
-    No argparse/basicConfig/print/SystemExit here.
+    Library function — no logging configuration or stdout printing here.
     """
     in_path = Path(input_csv)
     if not in_path.exists():
@@ -179,10 +146,9 @@ def filter_audio_file(
 def filter_audio_csv(argv: Optional[list[str]] = None) -> None:
     """
     Minimal CLI: read CSV → AudioFilter.filter_csv → write '<stem>-filtered.csv' (or --out).
+    Uses shared logutils for clean standalone logging & stamps logs with [<csv-stem>/-].
     """
     import argparse
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     p = argparse.ArgumentParser(
         description=(
@@ -198,27 +164,49 @@ def filter_audio_csv(argv: Optional[list[str]] = None) -> None:
         default=None,
         help="Output CSV path (default: <input_stem>-filtered.csv in the same directory)",
     )
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver)",
+    )
+    p.add_argument(
+        "-q", "--quiet", action="store_true", help="Only print warnings and errors."
+    )
     args = p.parse_args(argv)
 
     in_path: Path = args.csv
     if not in_path.exists():
         raise SystemExit(f"ERROR: input CSV not found: {in_path}")
 
+    # Standalone console logging; a no-op if a driver already configured root.
+    level = "WARNING" if args.quiet else args.log_level
+    root = logging.getLogger()
+    was_handlerless = not root.handlers
+    configure_standalone_logging(level, seg=in_path.stem, cam="-")
+
     out_path: Path = args.out or in_path.with_name(f"{in_path.stem}-filtered.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Reading %s", in_path)
-    filt = AudioFilter()
-
     try:
-        df_out = filt.filter_csv(in_path)
+        # Only stamp context here in true-standalone case so we don't override driver tags.
+        if was_handlerless:
+            with log_context(seg=in_path.stem, cam="-"):
+                logger.info("Reading %s", in_path.name)
+                df_out = AudioFilter().filter_csv(in_path)
+                df_out.to_csv(out_path, index=False)
+                logger.info("Wrote %s (%d rows)", out_path.name, len(df_out))
+        else:
+            logger.info("Reading %s", in_path.name)
+            df_out = AudioFilter().filter_csv(in_path)
+            df_out.to_csv(out_path, index=False)
+            logger.info("Wrote %s (%d rows)", out_path.name, len(df_out))
+
+        # Preserve existing behavior: print the path to stdout for piping.
+        print(str(out_path))
     except Exception as exc:
         logger.error("Failed to process CSV: %s", exc)
         raise
-
-    df_out.to_csv(out_path, index=False)
-    logger.info("Wrote %s (%d rows)", out_path, len(df_out))
-    print(str(out_path))
 
 
 if __name__ == "__main__":
