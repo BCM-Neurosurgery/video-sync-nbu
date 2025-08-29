@@ -33,7 +33,7 @@ Public API
 CLI
 ---
 Usage:
-    python csv_clipper.py /path/to/in.csv /path/to/anchors.json [-o /path/to/out.csv]
+    python csv_clipper.py /path/to/in.csv /path/to/anchors.json [-o /path/to/out.csv] [--log-level INFO] [-q]
 """
 from __future__ import annotations
 
@@ -44,14 +44,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from scripts.log.logutils import configure_standalone_logging, log_context
 
-# ---- Logging (simple, readable) -------------------------------------------------
-logger = logging.getLogger("csvclipper")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # ---- Core -----------------------------------------------------------------------
@@ -78,7 +73,7 @@ class CSVClipper:
     def load_anchor_window(self, path: Path) -> Tuple[int, int, str, str]:
         """Return (s_min, s_max, cam_serial, segment_id) after validation."""
         try:
-            data = json.loads(Path(path).read_text())
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
         except Exception as e:
             raise ValueError(f"Failed to read anchors JSON '{path}': {e}") from e
 
@@ -115,14 +110,17 @@ class CSVClipper:
         s_min, s_max = min(serials), max(serials)
         cam_serial = next(iter(cam_ids))
         segment_id = next(iter(seg_ids))
-        logger.info(
-            "Anchors: cam=%s segment=%s  serial_window=[%d..%d] (%d anchors)",
-            cam_serial,
-            segment_id,
-            s_min,
-            s_max,
-            len(serials),
-        )
+
+        # Stamp this summary with [seg/cam] so it matches the rest of the pipeline
+        with log_context(seg=segment_id, cam=cam_serial):
+            logger.info(
+                "Anchors: cam=%s segment=%s  serial_window=[%d..%d] (%d anchors)",
+                cam_serial,
+                segment_id,
+                s_min,
+                s_max,
+                len(serials),
+            )
         return s_min, s_max, cam_serial, segment_id
 
     # ---- CSV ----
@@ -168,7 +166,7 @@ class CSVClipper:
             writer = csv.DictWriter(f, fieldnames=list(self.REQUIRED_CSV_COLS))
             writer.writeheader()
             writer.writerows(rows)
-        logger.info("Wrote clipped CSV → %s", out_path)
+        logger.info("Wrote clipped CSV → %s", out_path.name)
         return out_path
 
     # ---- Orchestrator ----
@@ -176,12 +174,13 @@ class CSVClipper:
         self, input_csv: Path, anchors_json: Path, output_csv: Optional[Path] = None
     ) -> Path:
         s_min, s_max, cam_serial, segment_id = self.load_anchor_window(anchors_json)
-        rows = self.clip_csv(input_csv, s_min, s_max)
 
-        if output_csv is None:
-            output_csv = input_csv.with_name(f"{input_csv.stem}-clipped.csv")
-
-        return self.save_csv(rows, output_csv)
+        # Stamp all subsequent logs with [seg/cam]
+        with log_context(seg=segment_id, cam=cam_serial):
+            rows = self.clip_csv(input_csv, s_min, s_max)
+            if output_csv is None:
+                output_csv = input_csv.with_name(f"{input_csv.stem}-clipped.csv")
+            return self.save_csv(rows, output_csv)
 
 
 # ---- Public API -----------------------------------------------------------------
@@ -231,6 +230,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "-q", "--quiet", action="store_true", help="Only print warnings and errors."
     )
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver).",
+    )
     return p
 
 
@@ -238,11 +243,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    logger.setLevel(logging.WARNING if args.quiet else logging.INFO)
+    # Standalone console logging (no-op under the driver).
+    level = "WARNING" if args.quiet else args.log_level
+    configure_standalone_logging(level, seg="-", cam="-")
 
     try:
-        out_path = clip_with_anchors(args.csv, args.anchors, args.out)
-        logger.info("Done. Output: %s", out_path)
+        _ = clip_with_anchors(args.csv, args.anchors, args.out)
         return 0
     except Exception as e:
         logger.error("%s", e)
