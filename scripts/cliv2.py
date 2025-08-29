@@ -192,14 +192,14 @@ def build_targets(
     for seg in segs:
         all_cams = set(list_cameras_for_segment(vd, seg))
         if not all_cams:
-            logger.warning("[%s] no cameras found", seg)
+            logger.warning("no cameras found", seg)
             continue
 
         if cameras:
             selected = [c for c in cameras if c in all_cams]
             if not selected:
                 logger.warning(
-                    "[%s] none of the requested cameras exist: %s",
+                    "none of the requested cameras exist: %s",
                     seg,
                     ",".join(cameras),
                 )
@@ -273,11 +273,9 @@ def run_pipeline(
         )
         if summary["fail"]:
             failures += 1
-            logger.warning(
-                "[%s] done with failures: %s", seg_id, ", ".join(summary["fail"])
-            )
+            logger.warning("done with failures: %s", seg_id, ", ".join(summary["fail"]))
         else:
-            logger.info("[%s] done!", seg_id)
+            logger.info("done!", seg_id)
 
     return 0 if failures == 0 else 4
 
@@ -303,63 +301,61 @@ def process_segment(
                 decoded_raw_csv = audio_decoded_dir / "raw.csv"
                 if not decoded_raw_csv.exists():
                     logger.error(
-                        "[%s] --skip-decode set but missing %s", seg_id, decoded_raw_csv
+                        "--skip-decode set but missing %s", seg_id, decoded_raw_csv
                     )
                     summary["fail"].append("decode-missing")
                     return summary
-                logger.info(
-                    "[%s] skip decode: using %s", seg_id, _name(decoded_raw_csv)
-                )
+                logger.info("skip decode: using %s", seg_id, _name(decoded_raw_csv))
                 try:
                     _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("[%s] raw.txt → %s", seg_id, _name(raw_txt))
+                    logger.info("raw.txt → %s", seg_id, _name(raw_txt))
                 except SerialAnalysisError as e:
-                    logger.error("[%s] raw analysis failed: %s", seg_id, e)
+                    logger.error("raw analysis failed: %s", seg_id, e)
                     summary["fail"].append("raw-analysis")
             else:
-                logger.info("[%s] decoding serial…", seg_id)
+                logger.info("decoding serial…", seg_id)
                 decoded_raw_csv, _, _, _ = decode_to_raw(
                     audiogroup.serial_audio.path, audio_decoded_dir, site=site
                 )
-                logger.info("[%s] raw.csv → %s", seg_id, _name(decoded_raw_csv))
+                logger.info("raw.csv → %s", seg_id, _name(decoded_raw_csv))
                 try:
                     _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("[%s] raw.txt → %s", seg_id, _name(raw_txt))
+                    logger.info("raw.txt → %s", seg_id, _name(raw_txt))
                 except SerialAnalysisError as e:
-                    logger.error("[%s] raw analysis failed: %s", seg_id, e)
+                    logger.error("raw analysis failed: %s", seg_id, e)
                     summary["fail"].append("raw-analysis")
         except AudioDecodingError as e:
-            logger.error("[%s] decode failed: %s", seg_id, e)
+            logger.error("decode failed: %s", seg_id, e)
             summary["fail"].append("decode")
             return summary
 
         # ---- Stage: gapfill + analyze ----
         try:
             gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-            logger.info("[%s] gapfilled.csv → %s", seg_id, _name(gapfilled_csv))
+            logger.info("gapfilled.csv → %s", seg_id, _name(gapfilled_csv))
             try:
                 _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-                logger.info("[%s] gapfilled.txt → %s", seg_id, _name(gapfilled_txt))
+                logger.info("gapfilled.txt → %s", seg_id, _name(gapfilled_txt))
             except SerialAnalysisError as e:
-                logger.error("[%s] gapfilled analysis failed: %s", seg_id, e)
+                logger.error("gapfilled analysis failed: %s", seg_id, e)
                 summary["fail"].append("gapfilled-analysis")
         except GapFillError as e:
-            logger.error("[%s] gapfill failed: %s", seg_id, e)
+            logger.error("gapfill failed: %s", seg_id, e)
             summary["fail"].append("gapfill")
             return summary
 
         # ---- Stage: filter + analyze ----
         try:
             filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-            logger.info("[%s] filtered.csv → %s", seg_id, _name(filtered_csv))
+            logger.info("filtered.csv → %s", seg_id, _name(filtered_csv))
             try:
                 _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-                logger.info("[%s] filtered.txt → %s", seg_id, _name(filtered_txt))
+                logger.info("filtered.txt → %s", seg_id, _name(filtered_txt))
             except SerialAnalysisError as e:
-                logger.error("[%s] filtered analysis failed: %s", seg_id, e)
+                logger.error("filtered analysis failed: %s", seg_id, e)
                 summary["fail"].append("filtered-analysis")
         except FilteredError as e:
-            logger.error("[%s] filter failed: %s", seg_id, e)
+            logger.error("filter failed: %s", seg_id, e)
             summary["fail"].append("filter")
             return summary
 
