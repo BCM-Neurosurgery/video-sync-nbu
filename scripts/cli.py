@@ -1,785 +1,578 @@
 #!/usr/bin/env python3
 """
-cli.py — Streamlined orchestrator for A/V sync (uses your models.py & discover.py)
+A/V Sync Driver — multi-segment, multi-camera pipeline with clean, industry-grade logging
+========================================================================================
 
-This CLI wires together your existing discovery layer with a practical
-serial→audio mapping + per-segment sync. We intentionally **do not** implement
-jitter/drift correction here—just a robust affine fit (RANSAC) and per-segment CFR.
+What this is
+------------
+A command-line orchestrator that runs your end-to-end audio↔video sync workflow:
+decode serials → gapfill → filter → collect anchors → clip window → build pad plan →
+apply plan to program channels → re-collect anchors → final sync.
 
-Modules assumed (per your repo layout):
-  - scripts.discover      → discover(audio_dir, video_dir, default_serial_channel=3) → AudioVideoSession
-  - scripts.models        → dataclasses: AudioGroup, VideoGroup, AudioVideoSession, etc.
-  - scripts.wavfileparser → WavSerialDecoder (for A3 serial decoding)
+You can target **all segments/cameras** or a subset via flags.
 
-High-level flow
----------------
-1) discover: find A1/A2 (program), A3 (serial), and segments (JSON+MP4s grouped by BASE)
-2) index-serials: build A3 serial→sample index (midpoint per decoded block)
-3) fit: collect anchors (NORMAL frames only) across all segments and RANSAC-fit n ≈ α·s + β
-4) sync-segments: per segment & camera → compute audio window, clip A1/A2, mux with video (CFR).
+Quick start
+-----------
+python sync_driver.py \
+  --audio-dir /path/to/input/audio \
+  --video-dir /path/to/input/video \
+  --out-dir   /path/to/output \
+  --site jamail \
+  --log-level INFO
 
-Notes
------
-- This file leaves **TODOs** for: ffmpeg-based trims/mux, and persisting parquet/CSV if desired.
-- We rely on **camera serial** (stable identity), not positional camera id.
+Speed-ups / resume
+------------------
+- Use **--skip-decode** to reuse an existing decoded CSV at:
+  <out_dir>/<segment_id>/audio_decoded/raw.csv
+  This skips the slow serial decoding and goes straight to gapfill→filter→… stages.
+
+Input folder layout (discover expects this)
+-------------------------------------------
+input_dir structure
+- audio
+    - TRBD002_08062025-01.mp3
+    - TRBD002_08062025-03.mp3
+- video
+    - <SEGMENT_ID>_<TIMESTAMP>.<CAM_SERIAL1>.mp4
+    - <SEGMENT_ID>_<TIMESTAMP>.json
+    ...
+    - <SEGMENT_ID>_<TIMESTAMP>.<CAM_SERIAL2>.mp4
+    - <SEGMENT_ID>_<TIMESTAMP>.json
+    ...
+
+Output folder layout (what this tool writes)
+--------------------------------------------
+output_dir structure
+- parent_out
+    - <segment_id> (e.g. TRBD002_20250806_104707)
+        - audio_decoded   (shared across cameras)
+            - raw.csv
+            - raw.txt
+            - raw-gapfilled.csv
+            - raw-gapfilled.txt
+            - raw-gapfilled-filtered.csv
+            - raw-gapfilled-filtered.txt
+
+        - <camera_serial1> (e.g. 23512909)
+            - work (intermediate artifacts)
+                - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
+                - gapfilled-filtered-clipped.csv              (CSV clipped to video window)
+                - gapfilled-filtered-clipped.txt
+                - gapfilled-filtered-clipped-editplan.json
+                - gapfilled-filtered-clipped-padded.csv
+                - gapfilled-filtered-clipped-padded.txt
+                - gapfilled-filtered-padded-anchors.json      (anchors after padding)
+            - audio_padded
+                - TRBD002_08062025-padded-01.mp3
+                - TRBD002_08062025-padded-03.mp3
+            - audio_clips
+            - synced  (final synced videos)
+            - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
+
+        - <camera_serial2>
+        ...
+
+Logging (clean + consistent)
+----------------------------
+- Console        : one handler, unified format → "[LEVEL] [seg/cam] message"
+- Run log        : <out_dir>/sync-run.log (rotating, 5MB x 3), format:
+                   "%(asctime)s %(levelname)s [%(seg)s/%(cam)s] %(name)s: %(message)s"
+- Per-camera log : <out_dir>/<segment>/<camera>/sync.log (rotating, 5MB x 3), same format;
+                   stamped with correct [seg/cam] even for logs from other modules.
+
+Return codes
+------------
+0 : All segments processed with no camera-level failures
+2 : Audio group discovery failed
+3 : Target building / validation error
+4 : At least one (segment, camera) had failures
+5 : Invalid site argument
 """
+
 from __future__ import annotations
 
-import argparse
-import json
-import logging
-import math
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
-import shutil
-import subprocess
-import csv
+import argparse
+import logging
+from typing import Iterable
 
-from scripts.discover import discover as run_discover
+from scripts.parsers.wavfileparser import decode_to_raw
+from scripts.analysis.csv_serial_analysis import analyze_csv_serials
+from scripts.analysis.anchor_analysis import analyze_anchors_file
+from scripts.fix.audiogapfiller import gapfill_csv_file
+from scripts.fix.audiofilter import filter_audio_file
+from scripts.align.collect_anchors import save_anchors_for_camera
+from scripts.clip.audiocsvclipper import clip_with_anchors
+from scripts.pad.audiopadder import AudioPadder
+from scripts.pad.audioplanapplier import AudioPlanApplier
+from scripts.align.sync import sync_one_segment
+from scripts.discover import AudioDiscoverer
+from scripts.models import AudioGroup
+from scripts.errors import (
+    AudioGroupDiscoverError,
+    TargetBuildError,
+    AudioDecodingError,
+    SyncError,
+    SerialAnalysisError,
+    GapFillError,
+    FilteredError,
+    AnchorError,
+    ClipError,
+    AudioPaddingError,
+    AudioPlanError,
+)
 
-logger = logging.getLogger("sync")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+# Shared logging utilities
+from scripts.log.logutils import (
+    configure_logging,  # console + run log at <out_dir>/sync-run.log
+    attach_cam_logger,  # per-camera rotating file handler + adapter
+    log_context,  # context manager to stamp [seg/cam]
+)
 
+# Application logger (handlers live on root, configured by configure_logging)
+logger = logging.getLogger(__name__)
 
-@dataclass
-class FitResult:
-    alpha: float
-    beta: float
-    inliers: int
-    total: int
-    rmse: float
+# --------------------------------------------------------------------------------------
+# Core helpers
+# --------------------------------------------------------------------------------------
 
-    def predict(self, s: int) -> float:
-        return self.alpha * s + self.beta
-
-
-@dataclass
-class ClipWindow:
-    start: int
-    end: int
-    pad_head: int
-    pad_tail: int
-
-
-@dataclass
-class MatchedWindow:
-    fid0: int
-    fid1: int
-    s0: int
-    s1: int
-    fps: float  # CFR computed from anchors (frames / audio duration)
-
-
-# ---------------------------------------------------------------------------
-# Stage 0 — Discovery
-# ---------------------------------------------------------------------------
+SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
 
 
-def cmd_discover(args: argparse.Namespace) -> int:
-    sess = run_discover(
-        Path(args.audio_dir),
-        Path(args.video_dir),
-        default_serial_channel=args.serial_channel,
-    )
-    ag = sess.audiogroup
-    vgs = sess.videogroups
-
-    print("\nAudioGroup:")
-    for ch in sorted(ag.audios.keys()):
-        a = ag.audios[ch]
-        print(
-            f"  ch {ch:02d}: {a.path.name} (ext={a.extension}, sr={a.sample_rate}, dur={a.duration:.2f}s)"
-        )
-    if ag.serial_audio:
-        print(
-            f"  serial channel: ch {ag.serial_audio.channel:02d} ({ag.serial_audio.path.name})"
-        )
-
-    print("\nSegments:")
-    for vg in vgs:
-        ts = vg.timestamp.isoformat() if vg.timestamp else "None"
-        cams = ", ".join(vg.cam_serials or [])
-        print(f"  * {vg.group_id}  ts={ts}  cams=[{cams}]  json={vg.json.path.name}")
-        if vg.videos:
-            for v in vg.videos:
-                print(f"      - cam {v.cam_serial}: {v.path.name}")
-    return 0
+def _name(p) -> str:
+    """Return just the basename for any path-like object."""
+    try:
+        return Path(p).name
+    except Exception:
+        return str(p)
 
 
-def load_serial_index(path: Path) -> Dict[int, int]:
+def list_segments(video_dir: Path) -> list[str]:
+    """Discover segment IDs from *.json basenames in video_dir."""
+    return sorted({p.stem for p in Path(video_dir).glob("*.json")})
+
+
+def list_cameras_for_segment(video_dir: Path, segment_id: str) -> list[str]:
     """
-    Load a CSV with columns: serial,start_sample,end_sample
-    Returns a mapping {serial: start_sample}, first occurrence wins.
+    Discover camera serials for a given segment by scanning <segment>.*.mp4 files.
+    Example: TRBD002_20250806_104707.23512909.mp4 → '23512909'
     """
-    mapping: Dict[int, int] = {}
-    with path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                serial_str = (row.get("serial") or "").strip()
-                start_str = (row.get("start_sample") or "").strip()
-                if not serial_str or not start_str:
-                    continue
-                serial = int(serial_str)
-                start_sample = int(start_str)
-                # keep the first occurrence
-                mapping.setdefault(serial, start_sample)
-            except (ValueError, TypeError, KeyError):
-                # skip malformed rows
+    cams: list[str] = []
+    for mp4 in Path(video_dir).glob(f"{segment_id}.*.mp4"):
+        cam = mp4.stem.split(".")[-1]
+        if cam not in cams:
+            cams.append(cam)
+    cams.sort()
+    return cams
+
+
+def build_targets(
+    video_dir: Path,
+    segments: list[str] | None,
+    cameras: list[str] | None,
+) -> dict[str, list[str]]:
+    """
+    Build a {segment_id: [cam_serial, ...]} map following selection rules.
+    Raises TargetBuildError on invalid inputs or empty results.
+    """
+    vd = Path(video_dir)
+    if not vd.exists() or not vd.is_dir():
+        raise TargetBuildError(f"video_dir does not exist or is not a directory: {vd}")
+
+    if segments:
+        missing = [s for s in segments if not (vd / f"{s}.json").exists()]
+        if missing:
+            raise TargetBuildError(
+                f"Missing segment JSON for: {', '.join(missing)} (in {vd})"
+            )
+
+    segs = segments or list_segments(vd)
+    targets: dict[str, list[str]] = {}
+
+    for seg in segs:
+        all_cams = set(list_cameras_for_segment(vd, seg))
+        if not all_cams:
+            logger.warning("no cameras found", seg)
+            continue
+
+        if cameras:
+            selected = [c for c in cameras if c in all_cams]
+            if not selected:
+                logger.warning(
+                    "none of the requested cameras exist: %s",
+                    seg,
+                    ",".join(cameras),
+                )
                 continue
-    return mapping
+        else:
+            selected = sorted(all_cams)
+
+        targets[seg] = selected
+
+    if not targets:
+        raise TargetBuildError(
+            "No targets found. Check --video-dir / --segment / --camera inputs."
+        )
+    return targets
 
 
-# ---------------------------------------------------------------------------
-# Stage 2 — Anchors & labeling
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# Pipeline
+# --------------------------------------------------------------------------------------
 
 
-def first_last_valid_serial(serials: Sequence[int]) -> Optional[Tuple[int, int]]:
-    vals = [s for s in serials if s is not None and s > 0]
-    return (vals[0], vals[-1]) if vals else None
-
-
-def compute_clip_window_for_segment(
-    serials: Sequence[int],
-    fit: FitResult,
-    *,
-    margin_samples: int,
-    audio_len_samples: int,
-) -> Optional[ClipWindow]:
-    """Compute the sample-accurate audio window for a segment using an affine fit."""
-    pair = first_last_valid_serial(serials)
-    if not pair:
-        return None
-    s_first, s_last = pair
-    start = math.floor(fit.predict(s_first) - margin_samples)
-    end = math.ceil(fit.predict(s_last) + margin_samples)
-    pad_head = max(0, -start)
-    pad_tail = max(0, end - audio_len_samples)
-    start = max(0, start)
-    end = min(audio_len_samples, end)
-    return ClipWindow(start, end, pad_head, pad_tail)
-
-
-def clip_program_audio(
-    a1: Path,
-    a2: Path,
-    window: "ClipWindow",
+def run_pipeline(
+    audio_dir: Path,
+    video_dir: Path,
     out_dir: Path,
-    tag: str,
-    out_fs: Optional[int] = None,
-    serial_fs: int = 48000,
-) -> Tuple[Path, Path]:
+    site: str,
+    segments: list[str] | None,
+    cameras: list[str] | None,
+    log_level: str = "INFO",
+    skip_decode: bool = False,
+) -> int:
     """
-    Trim A1/A2 to the serial-defined window. `window.start/end` are in SERIAL samples.
-    We convert to seconds and trim by time, then (optionally) resample to `out_fs`.
+    Orchestrate discovery + per-(segment,camera) processing.
+    Returns 0 on success, nonzero if any failures occurred.
     """
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not found on PATH.")
-    if window.end <= window.start:
-        raise RuntimeError(
-            f"Invalid clip window: start={window.start}, end={window.end}"
+    # Threshold (handlers already configured globally)
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logger.setLevel(level)
+
+    if site not in SITE_CHOICES:
+        logger.error(
+            "Invalid --site '%s'. Choose from: %s", site, ", ".join(SITE_CHOICES)
         )
-    if out_fs is not None and (not isinstance(out_fs, int) or out_fs <= 0):
-        raise ValueError(f"out_fs must be a positive int (Hz), got {out_fs!r}")
+        return 5
 
-    # Convert serial samples → seconds
-    start_sec = window.start / float(serial_fs)
-    end_sec = window.end / float(serial_fs)
-
-    def _run_trim(in_path: Path, out_path: Path) -> None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        base = f"atrim=start={start_sec:.9f}:end={end_sec:.9f},asetpts=PTS-STARTPTS"
-        filt = (
-            base
-            if out_fs is None
-            else f"{base},aresample=sample_rate={out_fs}:resampler=soxr"
-        )
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-vn",
-            "-i",
-            str(in_path),
-            "-af",
-            filt,
-            "-c:a",
-            "pcm_s16le",
-            str(out_path),
-        ]
-        proc = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg trim failed for '{in_path}':\n{proc.stderr}")
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_a1 = out_dir / f"{tag}.A1.wav"
-    out_a2 = out_dir / f"{tag}.A2.wav"
-    _run_trim(a1, out_a1)
-    _run_trim(a2, out_a2)
-
-    logger.info(
-        "Clipped A1/A2 to t=[%.6f, %.6f) s (serial_fs=%d)%s → %s, %s",
-        start_sec,
-        end_sec,
-        serial_fs,
-        f", out_fs={out_fs}" if out_fs else "",
-        out_a1.name,
-        out_a2.name,
-    )
-    return out_a1, out_a2
-
-
-def mux_video_audio(
-    mp4_in: Path, a1_clip: Path, a2_clip: Path, fps: Optional[float], out_path: Path
-) -> Path:
-    """
-    Mux one MP4 video with two mono program-audio clips into an MP4.
-    """
-    # Preconditions
-    if shutil.which("ffmpeg") is None:
-        raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Base command: inputs + stream mapping (video + two audio tracks)
-    cmd = [
-        "ffmpeg",
-        "-y",  # overwrite out_path if it exists
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(mp4_in),
-        "-i",
-        str(a1_clip),
-        "-i",
-        str(a2_clip),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-map",
-        "2:a:0",
-    ]
-
-    if fps is not None:
-        # Enforce CFR by re-encoding video. Keep this conservative & fast.
-        cmd += [
-            "-r",
-            f"{fps:.6f}",
-            "-vsync",
-            "cfr",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-        ]
-    else:
-        # Preserve original video stream/timestamps
-        cmd += ["-c:v", "copy"]
-
-    # Encode audio to AAC (WAV/FLAC/etc. will be transcoded)
-    cmd += [
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-shortest",
-        "-movflags",
-        "+faststart",
-        str(out_path),
-    ]
-
-    logger.info(
-        "Muxing %s with A1=%s, A2=%s %s → %s",
-        mp4_in.name,
-        a1_clip.name,
-        a2_clip.name,
-        f"(CFR {fps:.6f} fps)" if fps is not None else "(copy video)",
-        out_path.name,
-    )
-
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "ffmpeg failed during mux:\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stderr:\n{proc.stderr}"
-        )
-
-    return out_path
-
-
-def compute_window_from_anchors(
-    anchors_for_video: List[dict],
-    fs: int,
-    audio_len_samples: int,
-    *,
-    margin_samples: int = 0,
-) -> MatchedWindow:
-    if not anchors_for_video:
-        raise RuntimeError("No anchors for this video")
-
-    anchors_for_video = sorted(
-        anchors_for_video, key=lambda a: int(a["frame_id_reidx"])
-    )
-    a_start, a_end = anchors_for_video[0], anchors_for_video[-1]
-
-    fid0, fid1 = int(a_start["frame_id_reidx"]), int(a_end["frame_id_reidx"])
-    if fid1 < fid0:
-        fid0, fid1 = fid1, fid0
-
-    s0, s1 = int(a_start["audio_sample"]), int(a_end["audio_sample"])
-    if s1 < s0:
-        s0, s1 = s1, s0
-
-    if margin_samples:
-        _s0, _s1 = s0, s1
-        s0 = max(0, s0 - margin_samples)
-        s1 = min(audio_len_samples, s1 + margin_samples)
-        logger.debug(
-            "Applied margins: samples [%d:%d) → [%d:%d) (+/-%d)",
-            _s0,
-            _s1,
-            s0,
-            s1,
-            margin_samples,
-        )
-
-    n_frames = fid1 - fid0 + 1
-    if n_frames <= 0:
-        raise RuntimeError(f"Invalid frame span: [{fid0}, {fid1}]")
-
-    audio_dur_sec = (s1 - s0) / float(fs)
-    if audio_dur_sec <= 0:
-        raise RuntimeError(f"Invalid audio sample span: [{s0}, {s1}] @ fs={fs}")
-
-    fps = n_frames / audio_dur_sec
-
-    logger.info(
-        "Matched window: frames [%d..%d] (n=%d), samples [%d..%d) (%.3fs), CFR=%.6f fps",
-        fid0,
-        fid1,
-        n_frames,
-        s0,
-        s1,
-        audio_dur_sec,
-        fps,
-    )
-    return MatchedWindow(fid0=fid0, fid1=fid1, s0=s0, s1=s1, fps=fps)
-
-
-def clip_video_by_frames(
-    mp4_in: Path,
-    n0: int,
-    n1: int,
-    fps: float,
-    out_path: Path,
-) -> Path:
-    """
-    Extract frames in [n0, n1] inclusive by index and re-encode at true CFR `fps`
-    without dropping/duplicating frames.
-    """
-    if shutil.which("ffmpeg") is None:
-        raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
-    if n1 < n0:
-        raise RuntimeError(f"Invalid frame window: [{n0}, {n1}]")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # trim uses end_frame as EXCLUSIVE → add +1 to include n1
-    end_frame_excl = n1 + 1
-    vf = f"trim=start_frame={n0}:end_frame={end_frame_excl},setpts=(N/{fps:.9f})/TB"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(mp4_in),
-        "-vf",
-        vf,
-        "-vsync",
-        "vfr",
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
-        str(out_path),
-    ]
-
-    dur_sec = (n1 - n0 + 1) / float(fps)
-    logger.info(
-        "Video trim %s → frames [%d..%d] @ %.6f fps (≈%.3fs) → %s",
-        mp4_in.name,
-        n0,
-        n1,
-        fps,
-        dur_sec,
-        out_path.name,
-    )
-    logger.debug("FFmpeg (video-trim) cmd: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "ffmpeg failed during video frame-trim:\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stderr:\n{proc.stderr}"
-        )
-    return out_path
-
-
-def cmd_sync_segments(args: argparse.Namespace) -> int:
-    sess = run_discover(
-        Path(args.audio_dir),
-        Path(args.video_dir),
-        default_serial_channel=args.serial_channel,
-    )
-    ag = sess.audiogroup
-    vgs = sess.videogroups
-
-    assert ag.serial_audio is not None, "No serial channel found."
-    serial_ch = ag.serial_audio.channel
-    prog_channels = [ch for ch in sorted(ag.audios.keys()) if ch != serial_ch]
-    assert len(prog_channels) >= 1, "No program audio channels found."
-    a1 = Path(ag.audios[prog_channels[0]].path)
-    a2 = (
-        Path(ag.audios[prog_channels[1]].path)
-        if len(prog_channels) > 1
-        else Path(ag.audios[prog_channels[0]].path)
-    )
-
-    fs = int(ag.serial_audio.sample_rate)
-    logger.info("Audio sample rate: %d Hz", fs)
-    audio_len_samples = int(fs * float(ag.serial_audio.duration))
-
-    if not getattr(args, "anchors", None):
-        raise ValueError("--anchors is required for anchor-driven sync.")
+    # Discover audio group once (shared across segments/cams)
     try:
-        anchors_all = json.loads(Path(args.anchors).read_text())
-    except Exception as e:
-        raise RuntimeError(f"Failed to load anchors JSON ({args.anchors}): {e}") from e
-
-    out_audio = Path(args.out_audio)
-    out_video = Path(args.out_video)
-
-    total_videos = sum(len(vg.videos or []) for vg in vgs)
-    logger.info(
-        "Starting anchor-driven sync: %d segments, %d videos, fs=%d Hz",
-        len(vgs),
-        total_videos,
-        fs,
-    )
-    logger.info("Loaded %d anchors (global).", len(anchors_all))
-
-    produced = 0
-    for vg in vgs:
-        if not vg.videos:
-            logger.warning("%s: no videos.", vg.group_id)
-            continue
-
-        logger.info("Segment %s: %d videos", vg.group_id, len(vg.videos))
-        for v in vg.videos:
-            cam_serial = str(v.cam_serial)
-            tag = f"{vg.group_id}.serial{cam_serial}"
-
-            cand = [
-                a
-                for a in anchors_all
-                if a.get("segment_id") == vg.group_id
-                and a.get("cam_serial") == cam_serial
-            ]
-            if not cand:
-                logger.warning("No anchors for %s cam %s", vg.group_id, cam_serial)
-                continue
-            logger.info("%s: %d anchors", tag, len(cand))
-
-            # Compute matched window (anchors only)
-            mw = compute_window_from_anchors(
-                anchors_for_video=cand,
-                fs=fs,
-                audio_len_samples=audio_len_samples,
-                margin_samples=0,  # keep as-is
-            )
-
-            # 1) Clip program audio to [s0, s1)
-            awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
-            a1_clip, a2_clip = clip_program_audio(
-                a1, a2, awindow, out_audio, tag, out_fs=fs, serial_fs=fs
-            )
-
-            # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
-            clip_mp4 = out_video / f"{tag}_clip.mp4"
-            clip_video_by_frames(Path(v.path), mw.fid0, mw.fid1, mw.fps, clip_mp4)
-
-            # 3) Mux: copy video, add program audio
-            out_path = out_video / f"{tag}_synced.mp4"
-            logger.info("Mux → %s", out_path.name)
-            mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
-            produced += 1
-
-    logger.info("Anchor-driven sync complete. Wrote %d files.", produced)
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Public API — single segment/camera sync
-# ---------------------------------------------------------------------------
-
-
-def sync_one_segment(
-    *,
-    audio_dir: Union[str, Path],
-    video_dir: Union[str, Path],
-    segment_id: str,
-    cam_serial: str,
-    anchors_json: Union[str, Path],
-    out_audio_dir: Union[str, Path],
-    out_video_dir: Union[str, Path],
-    serial_channel: int = 3,
-) -> Path:
-    """
-    Programmatic API to sync exactly one (segment_id, cam_serial) pair using anchors.
-
-    This performs:
-      1) discovery (to locate program audio channels and the target video),
-      2) matched-window computation from the provided anchors,
-      3) trimming A1/A2 to the matched window,
-      4) frame-accurate video clip to [fid0..fid1] @ computed CFR,
-      5) muxing video with the two program-audio tracks (copy video timing, add audio).
-
-    Parameters
-    ----------
-    audio_dir : str | Path
-        Root directory containing audio files (A1/A2 and serial channel).
-    video_dir : str | Path
-        Root directory containing per-segment video groups.
-    segment_id : str
-        Target segment/group id (e.g., "TRBD002_20250806_104707").
-    cam_serial : str
-        Target camera serial string (stable camera identity).
-    anchors_json : str | Path
-        Path to the anchors JSON containing entries with fields
-        "segment_id", "cam_serial", "frame_id_reidx", and "audio_sample".
-    out_audio_dir : str | Path
-        Directory where clipped A1/A2 WAVs will be written.
-    out_video_dir : str | Path
-        Directory where the clipped and final muxed MP4s will be written.
-    serial_channel : int, default 3
-        Default serial channel index used during discovery.
-
-    Returns
-    -------
-    Path
-        Absolute path to the final muxed MP4 file.
-
-    Raises
-    ------
-    FileNotFoundError
-        If `anchors_json` does not exist or ffmpeg is not available.
-    RuntimeError, ValueError, AssertionError
-        For discovery failures, missing media, malformed anchors, or processing errors.
-    """
-    # Discovery
-    sess = run_discover(
-        Path(audio_dir),
-        Path(video_dir),
-        default_serial_channel=serial_channel,
-    )
-    ag = sess.audiogroup
-
-    assert ag.serial_audio is not None, "No serial channel found."
-    serial_ch = ag.serial_audio.channel
-    prog_channels = [ch for ch in sorted(ag.audios.keys()) if ch != serial_ch]
-    assert len(prog_channels) >= 1, "No program audio channels found."
-    a1 = Path(ag.audios[prog_channels[0]].path)
-    a2 = (
-        Path(ag.audios[prog_channels[1]].path)
-        if len(prog_channels) > 1
-        else Path(ag.audios[prog_channels[0]].path)
-    )
-
-    fs = int(ag.serial_audio.sample_rate)
-    audio_len_samples = int(fs * float(ag.serial_audio.duration))
-
-    # Load anchors
-    anchors_path = Path(anchors_json)
-    if not anchors_path.exists():
-        raise FileNotFoundError(f"Anchors JSON not found: {anchors_path}")
-    try:
-        anchors_all = json.loads(anchors_path.read_text())
-    except Exception as e:
-        raise RuntimeError(f"Failed to load anchors JSON ({anchors_path}): {e}") from e
-
-    # Locate the requested video in the discovered session
-    target_video = None
-    for vg in sess.videogroups:
-        if vg.group_id != segment_id or not vg.videos:
-            continue
-        for v in vg.videos:
-            if str(v.cam_serial) == str(cam_serial):
-                target_video = (vg, v)
-                break
-        if target_video:
-            break
-    if not target_video:
-        raise RuntimeError(
-            f"Could not find video for segment_id='{segment_id}' and cam_serial='{cam_serial}'."
-        )
-
-    vg, v = target_video
-    tag = f"{vg.group_id}.serial{cam_serial}"
-    logger.info("Syncing only: segment=%s, cam=%s", vg.group_id, cam_serial)
-
-    # Restrict anchors to this exact (segment, camera)
-    cand = [
-        a
-        for a in anchors_all
-        if a.get("segment_id") == vg.group_id and a.get("cam_serial") == str(cam_serial)
-    ]
-    if not cand:
-        raise RuntimeError(
-            f"No anchors found for segment '{segment_id}' cam '{cam_serial}'."
-        )
-    logger.info("%s: %d anchors", tag, len(cand))
-
-    # Compute matched window (anchors only)
-    mw = compute_window_from_anchors(
-        anchors_for_video=cand,
-        fs=fs,
-        audio_len_samples=audio_len_samples,
-        margin_samples=0,
-    )
-
-    # Outputs
-    out_audio = Path(out_audio_dir)
-    out_video = Path(out_video_dir)
-
-    # 1) Clip program audio to [s0, s1)
-    awindow = ClipWindow(start=mw.s0, end=mw.s1, pad_head=0, pad_tail=0)
-    a1_clip, a2_clip = clip_program_audio(
-        a1, a2, awindow, out_audio, tag, out_fs=fs, serial_fs=fs
-    )
-
-    # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
-    clip_mp4 = out_video / f"{tag}_clip.mp4"
-    clip_video_by_frames(Path(v.path), mw.fid0, mw.fid1, mw.fps, clip_mp4)
-
-    # 3) Mux: copy video, add program audio
-    out_path = out_video / f"{tag}_synced.mp4"
-    logger.info("Mux → %s", out_path.name)
-    mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
-
-    logger.info("Single-segment sync complete → %s", out_path)
-    return out_path.resolve()
-
-
-# ---------------------------------------------------------------------------
-# CLI — single segment/camera sync
-# ---------------------------------------------------------------------------
-
-
-def cmd_sync_one(args: argparse.Namespace) -> int:
-    """Anchor-driven sync for exactly one (segment_id, cam_serial) pair."""
-    try:
-        out_path = sync_one_segment(
-            audio_dir=args.audio_dir,
-            video_dir=args.video_dir,
-            segment_id=str(args.segment_id),
-            cam_serial=str(args.cam_serial),
-            anchors_json=args.anchors,
-            out_audio_dir=args.out_audio,
-            out_video_dir=args.out_video,
-            serial_channel=args.serial_channel,
-        )
-        logger.info("Wrote %s", out_path)
-        return 0
-    except Exception as e:
-        logger.exception(e)
+        ad = AudioDiscoverer(audio_dir=audio_dir, log=logger)
+        ag = ad.discover()
+        logger.info("Audio(s) discovered")
+    except AudioGroupDiscoverError as e:
+        logger.error("Audio group discovery failed: %s", e)
         return 2
 
+    try:
+        targets = build_targets(video_dir, segments, cameras)
+    except TargetBuildError as e:
+        logger.error("%s", e)
+        return 3
 
-# ---------------------------------------------------------------------------
+    failures = 0
+    for seg_id, cam_list in targets.items():
+        summary = process_segment(
+            video_in=video_dir,
+            audiogroup=ag,
+            seg_id=seg_id,
+            site=site,
+            parent_out=out_dir,
+            cam_serials=cam_list,
+            skip_decode=skip_decode,
+        )
+        if summary["fail"]:
+            failures += 1
+            logger.warning("done with failures: %s", seg_id, ", ".join(summary["fail"]))
+        else:
+            logger.info("done!", seg_id)
+
+    return 0 if failures == 0 else 4
+
+
+def process_segment(
+    video_in: str,
+    audiogroup: AudioGroup,
+    seg_id: str,
+    site: str,
+    parent_out: Path,
+    cam_serials: Iterable[str],
+    skip_decode: bool = False,
+) -> dict:
+    """Process one segment across one or more cameras. Returns a summary dict."""
+    segment_out = parent_out / seg_id
+    audio_decoded_dir = segment_out / "audio_decoded"
+    summary = {"segment": seg_id, "ok": [], "fail": []}
+
+    # ---- Stage: decode + analyze raw (segment-scoped context) ----
+    with log_context(seg=seg_id, cam="-"):
+        try:
+            if skip_decode:
+                decoded_raw_csv = audio_decoded_dir / "raw.csv"
+                if not decoded_raw_csv.exists():
+                    logger.error(
+                        "--skip-decode set but missing %s", seg_id, decoded_raw_csv
+                    )
+                    summary["fail"].append("decode-missing")
+                    return summary
+                logger.info("skip decode: using %s", seg_id, _name(decoded_raw_csv))
+                try:
+                    _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
+                    logger.info("raw.txt → %s", seg_id, _name(raw_txt))
+                except SerialAnalysisError as e:
+                    logger.error("raw analysis failed: %s", seg_id, e)
+                    summary["fail"].append("raw-analysis")
+            else:
+                logger.info("decoding serial…", seg_id)
+                decoded_raw_csv, _, _, _ = decode_to_raw(
+                    audiogroup.serial_audio.path, audio_decoded_dir, site=site
+                )
+                logger.info("raw.csv → %s", seg_id, _name(decoded_raw_csv))
+                try:
+                    _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
+                    logger.info("raw.txt → %s", seg_id, _name(raw_txt))
+                except SerialAnalysisError as e:
+                    logger.error("raw analysis failed: %s", seg_id, e)
+                    summary["fail"].append("raw-analysis")
+        except AudioDecodingError as e:
+            logger.error("decode failed: %s", seg_id, e)
+            summary["fail"].append("decode")
+            return summary
+
+        # ---- Stage: gapfill + analyze ----
+        try:
+            gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
+            logger.info("gapfilled.csv → %s", seg_id, _name(gapfilled_csv))
+            try:
+                _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
+                logger.info("gapfilled.txt → %s", seg_id, _name(gapfilled_txt))
+            except SerialAnalysisError as e:
+                logger.error("gapfilled analysis failed: %s", seg_id, e)
+                summary["fail"].append("gapfilled-analysis")
+        except GapFillError as e:
+            logger.error("gapfill failed: %s", seg_id, e)
+            summary["fail"].append("gapfill")
+            return summary
+
+        # ---- Stage: filter + analyze ----
+        try:
+            filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
+            logger.info("filtered.csv → %s", seg_id, _name(filtered_csv))
+            try:
+                _, filtered_txt = analyze_csv_serials(path=filtered_csv)
+                logger.info("filtered.txt → %s", seg_id, _name(filtered_txt))
+            except SerialAnalysisError as e:
+                logger.error("filtered analysis failed: %s", seg_id, e)
+                summary["fail"].append("filtered-analysis")
+        except FilteredError as e:
+            logger.error("filter failed: %s", seg_id, e)
+            summary["fail"].append("filter")
+            return summary
+
+    # ---- Per camera workflow (camera-scoped context) ----
+    for cam in cam_serials:
+        cam_out = segment_out / cam
+        (cam_out / "work").mkdir(parents=True, exist_ok=True)
+        (cam_out / "audio_padded").mkdir(parents=True, exist_ok=True)
+        (cam_out / "audio_clips").mkdir(parents=True, exist_ok=True)
+        (cam_out / "synced").mkdir(parents=True, exist_ok=True)
+
+        # Per-camera file logger (tag all lines with [seg/cam])
+        clog, cam_handler = attach_cam_logger(
+            seg_id=seg_id,
+            cam_serial=cam,
+            cam_dir=cam_out,
+            level=logging.getLogger().level,
+        )
+
+        with log_context(seg=seg_id, cam=cam):
+            filtered_anchors = cam_out / "work" / "gapfilled-filtered-anchors.json"
+            padded_anchors = cam_out / "work" / "gapfilled-filtered-padded-anchors.json"
+
+            try:
+                # Anchors from filtered CSV
+                try:
+                    save_anchors_for_camera(
+                        serial_csv=filtered_csv,
+                        video_dir=video_in,
+                        segment_id=seg_id,
+                        cam_serial=cam,
+                        out_json=filtered_anchors,
+                    )
+                    clog.info("anchors.json → %s", _name(filtered_anchors))
+                    try:
+                        analyze_anchors_file(anchors_json=filtered_anchors)
+                        clog.info("anchors analyzed")
+                    except AnchorError as e:
+                        clog.error("anchors analyze failed: %s", e)
+                        summary["fail"].append(f"{cam}:anchors-analyze")
+                except AnchorError as e:
+                    clog.error("anchors save failed: %s", e)
+                    summary["fail"].append(f"{cam}:anchors-save")
+                    # continue to next cam
+                    continue
+
+                # Clip CSV to video window
+                try:
+                    clipped_csv = clip_with_anchors(
+                        input_csv=filtered_csv,
+                        anchors_json=filtered_anchors,
+                        output_csv=cam_out / "work" / "gapfilled-filtered-clipped.csv",
+                    )
+                    clog.info("clipped.csv → %s", _name(clipped_csv))
+                    try:
+                        _, clipped_txt = analyze_csv_serials(path=clipped_csv)
+                        clog.info("clipped.txt → %s", _name(clipped_txt))
+                    except SerialAnalysisError as e:
+                        clog.error("clipped analysis failed: %s", e)
+                        summary["fail"].append(f"{cam}:clipped-analysis")
+                except ClipError as e:
+                    clog.error("clip failed: %s", e)
+                    summary["fail"].append(f"{cam}:clip")
+                    continue
+
+                # Pad (build plan + fixed CSV)
+                try:
+                    apadder = AudioPadder(
+                        csv_path=clipped_csv,
+                        include_synthetic=True,
+                        gap_policy="local",
+                        sample_rate=44100,
+                    )
+                    _, _, padded_csv, padplan = apadder.run()
+                    clog.info("padded.csv → %s", _name(padded_csv))
+                    clog.info("padplan.json → %s", _name(padplan))
+                    try:
+                        _, padded_txt = analyze_csv_serials(path=padded_csv)
+                        clog.info("padded.txt → %s", _name(padded_txt))
+                    except SerialAnalysisError as e:
+                        clog.error("padded analysis failed: %s", e)
+                        summary["fail"].append(f"{cam}:padded-analysis")
+                except AudioPaddingError as e:
+                    clog.error("padding failed: %s", e)
+                    summary["fail"].append(f"{cam}:padding")
+                    continue
+
+                # Apply plan to each program channel
+                for ch, audio in audiogroup.audios.items():
+                    try:
+                        applier = AudioPlanApplier(
+                            audio_path=audio.path,
+                            plan_path=padplan,
+                            out_dir=cam_out / "audio_padded",
+                        )
+                        out = applier.apply()
+                        clog.info("plan→ch%02d → %s", ch, _name(out))
+                    except AudioPlanError as e:
+                        clog.error("plan apply ch%02d failed: %s", ch, e)
+                        summary["fail"].append(f"{cam}:plan-ch{ch}")
+
+                # Anchors from padded CSV
+                try:
+                    save_anchors_for_camera(
+                        serial_csv=padded_csv,
+                        video_dir=video_in,
+                        segment_id=seg_id,
+                        cam_serial=cam,
+                        out_json=padded_anchors,
+                    )
+                    clog.info("padded-anchors.json → %s", _name(padded_anchors))
+                    try:
+                        analyze_anchors_file(anchors_json=padded_anchors)
+                        clog.info("padded-anchors analyzed")
+                    except AnchorError as e:
+                        clog.error("padded-anchors analyze failed: %s", e)
+                        summary["fail"].append(f"{cam}:padded-anchors-analyze")
+                except AnchorError as e:
+                    clog.error("padded-anchors save failed: %s", e)
+                    summary["fail"].append(f"{cam}:padded-anchors-save")
+                    continue
+
+                # Final sync
+                try:
+                    sync_one_segment(
+                        audio_dir=cam_out / "audio_padded",
+                        video_dir=video_in,
+                        segment_id=seg_id,
+                        cam_serial=cam,
+                        anchors_json=padded_anchors,
+                        out_audio_dir=cam_out / "audio_clips",
+                        out_video_dir=cam_out / "synced",
+                        serial_channel=3,
+                    )
+                    clog.info("synced ✔")
+                    summary["ok"].append(cam)
+                except SyncError as e:
+                    clog.error("sync failed: %s", e)
+                    summary["fail"].append(f"{cam}:sync")
+
+            finally:
+                # Detach per-camera file handler to avoid handler accumulation
+                try:
+                    logging.getLogger().removeHandler(cam_handler)
+                    cam_handler.close()
+                except Exception:
+                    pass
+
+    return summary
+
+
+# --------------------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="sync",
-        description="Audio/Video sync orchestrator (models.py + discover.py)",
-    )
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    d = sub.add_parser("discover", help="List discovered audio/video segments")
-    d.add_argument("--audio-dir", required=True)
-    d.add_argument("--video-dir", required=True)
-    d.add_argument("--serial-channel", type=int, default=3)
-    d.set_defaults(func=cmd_discover)
-
-    s = sub.add_parser(
-        "sync-segments",
-        help="Compute per-segment windows, clip A1/A2, and mux to synced MP4s (CFR)",
-    )
-    s.add_argument("--audio-dir", required=True)
-    s.add_argument("--video-dir", required=True)
-    s.add_argument("--serial-channel", type=int, default=3)
-    s.add_argument("--anchors", help="Path to anchors JSON saved during 'fit'")
-    s.add_argument("--out-audio", required=True)
-    s.add_argument("--out-video", required=True)
-    s.add_argument(
-        "--margin",
-        type=int,
-        default=1600,
-        help="Samples of safety margin (~1 serial block)",
-    )
-    s.set_defaults(func=cmd_sync_segments)
-
-    one = sub.add_parser(
-        "sync-one",
-        help="Sync exactly one (segment_id, cam_serial) using anchors; trims A1/A2 and muxes",
-    )
-    one.add_argument("--audio-dir", required=True)
-    one.add_argument("--video-dir", required=True)
-    one.add_argument("--serial-channel", type=int, default=3)
-    one.add_argument("--segment-id", required=True, help="Target segment/group id")
-    one.add_argument("--cam-serial", required=True, help="Target camera serial")
-    one.add_argument("--anchors", required=True, help="Path to anchors JSON")
-    one.add_argument("--out-audio", required=True)
-    one.add_argument("--out-video", required=True)
-    one.set_defaults(func=cmd_sync_one)
-
-    return p
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
-    try:
-        return args.func(args)
-    except Exception as e:
-        logger.exception(e)
-        return 2
-
+# --------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(
+        description="A/V sync driver: process all segments, one segment, or (segment, camera) subset."
+    )
+    parser.add_argument(
+        "--audio-dir",
+        required=True,
+        type=Path,
+        help="Directory containing TRBD...-01.mp3 etc.",
+    )
+    parser.add_argument(
+        "--video-dir",
+        required=True,
+        type=Path,
+        help="Directory containing <SEGMENT>.json and <SEGMENT>.<CAM>.mp4 files",
+    )
+    parser.add_argument(
+        "--out-dir", required=True, type=Path, help="Parent output directory"
+    )
+    parser.add_argument(
+        "--site",
+        default="jamail",
+        choices=SITE_CHOICES,
+        help="Site label (jamail | nbu_lounge | nbu_sleep)",
+    )
+    parser.add_argument(
+        "-s",
+        "--segment",
+        dest="segments",
+        action="append",
+        help="Segment ID to process (repeatable). If omitted, process ALL segments.",
+    )
+    parser.add_argument(
+        "-c",
+        "--camera",
+        dest="cameras",
+        action="append",
+        help="Camera serial to process (repeatable). If omitted, process ALL cams per segment.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--skip-decode",
+        action="store_true",
+        help="Reuse existing <out>/<segment>/audio_decoded/raw.csv and skip audio serial decoding.",
+    )
+    args = parser.parse_args()
+
+    configure_logging(args.out_dir, args.log_level)
+
+    rc = run_pipeline(
+        audio_dir=args.audio_dir,
+        video_dir=args.video_dir,
+        out_dir=args.out_dir,
+        site=args.site,
+        segments=args.segments,
+        cameras=args.cameras,
+        log_level=args.log_level,
+        skip_decode=args.skip_decode,
+    )
+    raise SystemExit(rc)
