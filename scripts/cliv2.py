@@ -52,10 +52,13 @@ from scripts.clip.audiocsvclipper import clip_with_anchors
 from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
 from scripts.cli import sync_one_segment
+from scripts.discover import AudioDiscoverer
+from scripts.models import AudioGroup
 from pathlib import Path
 import logging
 from typing import Iterable
 from scripts.errors import (
+    AudioGroupDiscoverError,
     AudioDecodingError,
     SyncError,
     SerialAnalysisError,
@@ -77,7 +80,7 @@ logger.setLevel(logging.INFO)
 
 def process_segment(
     video_in: str,
-    audio_in: str,
+    audiogroup: AudioGroup,
     seg_id: str,
     serial_audio_path: Path,
     site: str,
@@ -90,21 +93,18 @@ def process_segment(
     segment_out = parent_out / seg_id
     audio_decoded_dir = segment_out / "audio_decoded"
 
-    # Decode audio serial
-    # tested
-    # try:
-    #     logger.info("Decoding serial audio for %s ...", seg_id)
-    #     decoded_raw_csv, _, _, _ = decode_to_raw(
-    #         serial_audio_path, audio_decoded_dir, site=site
-    #     )
-    #     logger.info("Decoded → %s", decoded_raw_csv)
-    # except AudioDecodingError as e:
-    #     logger.exception("Segment %s: audio decode failed: %s", seg_id, e)
-    decoded_raw_csv = "/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/out/TRBD002_20250806_104707/audio_decoded/raw.csv"
+    try:
+        logger.info("Decoding serial audio for %s ...", seg_id)
+        decoded_raw_csv, _, _, _ = decode_to_raw(
+            serial_audio_path, audio_decoded_dir, site=site
+        )
+        logger.info("Audio Serial Decoded.")
+    except AudioDecodingError as e:
+        logger.exception("Segment %s: audio decode failed: %s", seg_id, e)
 
     try:
         _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-        logger.info("Analyzed → %s", raw_txt)
+        logger.info("Analyzed raw serial.")
     except SerialAnalysisError as e:
         logger.exception("Segment %s: audio analysis failed: %s", seg_id, e)
 
@@ -210,37 +210,23 @@ def process_segment(
                     "Segment %s cam %s: audio analysis failed: %s", seg_id, cam, e
                 )
 
-            try:
-                applier = AudioPlanApplier(
-                    audio_path="/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/audio/TRBD002_08062025-01.mp3",
-                    plan_path=padplan,
-                    out_dir=cam_out / "audio_padded",
-                )
-                out = applier.apply()
-                logger.info("Applied padding plan for cam %s → %s", cam, out)
-            except AudioPlanError as e:
-                logger.exception(
-                    "Segment %s cam %s: audio plan application failed: %s",
-                    seg_id,
-                    cam,
-                    e,
-                )
-
-            try:
-                applier = AudioPlanApplier(
-                    audio_path="/home/auto/CODE/utils/video-sync-nbu/data/nbu_lounge_example_2/audio/TRBD002_08062025-03.mp3",
-                    plan_path=padplan,
-                    out_dir=cam_out / "audio_padded",
-                )
-                out = applier.apply()
-                logger.info("Applied padding plan for cam %s → %s", cam, out)
-            except AudioPlanError as e:
-                logger.exception(
-                    "Segment %s cam %s: audio plan application failed: %s",
-                    seg_id,
-                    cam,
-                    e,
-                )
+            for ch, audio in audiogroup.audios.items():
+                try:
+                    applier = AudioPlanApplier(
+                        audio_path=audio.path,
+                        plan_path=padplan,
+                        out_dir=cam_out / "audio_padded",
+                    )
+                    out = applier.apply()
+                    logger.info("Applied padding plan for audio ch %s → %s", ch, out)
+                except AudioPlanError as e:
+                    logger.exception(
+                        "Segment %s cam %s ch %s: audio plan application failed: %s",
+                        seg_id,
+                        cam,
+                        ch,
+                        e,
+                    )
 
             try:
                 save_anchors_for_camera(
@@ -302,6 +288,15 @@ if __name__ == "__main__":
     )
     segments = ["TRBD002_20250806_104707"]
     cameras = ["23512909"]
+
+    try:
+        ag = AudioDiscoverer(
+            audio_dir=audio_in,
+            log=logger,
+        )
+        logger.info("Discovered Audios")
+    except AudioGroupDiscoverError as e:
+        logger.exception("Audio group discovery failed: %s", e)
 
     for seg in segments:
         report = process_segment(
