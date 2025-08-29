@@ -59,6 +59,7 @@ import logging
 from typing import Iterable
 from scripts.errors import (
     AudioGroupDiscoverError,
+    TargetBuildError,
     AudioDecodingError,
     SyncError,
     SerialAnalysisError,
@@ -122,19 +123,35 @@ def build_targets(
       - segments=None  → all segments
       - cameras=None   → all cameras per segment
       - cameras given  → restrict each segment to these cams (skip cams not present)
+
+    Raises
+    ------
+    TargetBuildError if video_dir is invalid, requested segments are missing, or
+    no targets remain after filtering.
     """
+    vd = Path(video_dir)
+    if not vd.exists() or not vd.is_dir():
+        raise TargetBuildError(f"video_dir does not exist or is not a directory: {vd}")
+
+    # If specific segments were requested, verify their JSONs exist
+    if segments:
+        missing = [s for s in segments if not (vd / f"{s}.json").exists()]
+        if missing:
+            raise TargetBuildError(
+                f"Missing segment JSON for: {', '.join(missing)} (in {vd})"
+            )
+
     # choose segments
-    segs = segments or list_segments(video_dir)
+    segs = segments or list_segments(vd)
     targets: dict[str, list[str]] = {}
 
     for seg in segs:
-        all_cams = set(list_cameras_for_segment(video_dir, seg))
+        all_cams = set(list_cameras_for_segment(vd, seg))
         if not all_cams:
             logger.warning("[%s] no cameras found", seg)
             continue
 
         if cameras:
-            # keep only cams that actually exist for this segment
             selected = [c for c in cameras if c in all_cams]
             if not selected:
                 logger.warning(
@@ -149,7 +166,7 @@ def build_targets(
         targets[seg] = selected
 
     if not targets:
-        logger.error(
+        raise TargetBuildError(
             "No targets found. Check --video-dir / --segment / --camera inputs."
         )
     return targets
@@ -178,14 +195,17 @@ def run_pipeline(
 
     # Discover audio group once (shared across segments/cams)
     try:
-        ag = AudioDiscoverer(audio_dir=audio_dir, log=logger)
+        ad = AudioDiscoverer(audio_dir=audio_dir, log=logger)
+        ag = ad.discover()
         logger.info("Audio(s) discovered")
     except AudioGroupDiscoverError as e:
         logger.error("Audio group discovery failed: %s", e)
         return 2
 
-    targets = build_targets(video_dir, segments, cameras)
-    if not targets:
+    try:
+        targets = build_targets(video_dir, segments, cameras)
+    except TargetBuildError as e:
+        logger.error("%s", e)
         return 3
 
     failures = 0
