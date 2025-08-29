@@ -56,6 +56,8 @@ from scripts.models import (
     AudioVideoSession,
 )
 
+from scripts.log.logutils import configure_standalone_logging, log_context
+
 __all__ = [
     "discover_audio",
     "discover_segments",
@@ -697,25 +699,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Exact segment BASE like 'TRBD001_20250715_143011'",
     )
 
+    ap.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver)",
+    )
+
     args = ap.parse_args(argv)
+
+    # Standalone: configure minimal console logging (no-op under driver),
+    # and set a log context so messages carry [seg/-] when segment is known.
+    configure_standalone_logging(args.log_level, seg=(args.segment_id or "-"), cam="-")
 
     # Fast path: just one VideoGroup (no audio scan, all cameras included)
     if args.segment_id:
-        vg = VideoDiscoverer(args.video_dir).discover_one(args.segment_id)
-        if not vg:
-            logger.error("Nothing found for segment %s", args.segment_id)
-            return 1
-        _print_videogroups([vg])
-        return 0
+        with log_context(seg=args.segment_id, cam="-"):
+            vg = VideoDiscoverer(args.video_dir).discover_one(args.segment_id)
+            if not vg:
+                logger.error("Nothing found for segment %s", args.segment_id)
+                return 1
+            _print_videogroups([vg])
+            return 0
 
     # Full discovery path requires audio-dir
     if not args.audio_dir:
         logger.error("--audio-dir is required when not using --segment-id")
         return 2
 
-    session = discover(
-        args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
-    )
+    with log_context(seg="-", cam="-"):
+        session = discover(
+            args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
+        )
 
     _print_audiogroup(session.audiogroup)
     _print_videogroups(session.videogroups)
