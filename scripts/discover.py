@@ -34,8 +34,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from scripts.videofileparser import VideoFileParser
-from scripts.jsonfileparser import JsonParser
+from scripts.parsers.videofileparser import VideoFileParser
+from scripts.parsers.jsonfileparser import JsonParser
 
 # Try optional MP3 probe (pydub)
 try:
@@ -56,6 +56,8 @@ from scripts.models import (
     AudioVideoSession,
 )
 
+from scripts.log.logutils import configure_standalone_logging, log_context
+
 __all__ = [
     "discover_audio",
     "discover_segments",
@@ -68,14 +70,9 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging (library module: no handlers/levels; let the driver configure root)
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    h = logging.StreamHandler()
-    h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(h)
-logger.setLevel(logging.INFO)
 
 DEFAULT_TZ = ZoneInfo("America/Chicago")
 
@@ -454,6 +451,21 @@ class VideoDiscoverer(_DirMixin):
                     )
                     fixed_frame_ids = None
 
+                try:
+                    fixed_reidx_frame_ids = (
+                        [f - fixed_frame_ids[0] for f in fixed_frame_ids]
+                        if fixed_frame_ids
+                        else None
+                    )
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_fixed_reindexed_frame_ids_list(%s): %s",
+                        json_path.name,
+                        s_str,
+                        e,
+                    )
+                    fixed_reidx_frame_ids = None
+
                 cam_jsons[s_str] = CamJson(
                     cam_serial=s_str,
                     timestamp=ts,
@@ -462,6 +474,7 @@ class VideoDiscoverer(_DirMixin):
                     raw_frame_ids=raw_frame_ids,
                     fixed_serials=fixed_serials,
                     fixed_frame_ids=fixed_frame_ids,
+                    fixed_reidx_frame_ids=fixed_reidx_frame_ids,
                 )
 
             return cam_serials_all, cam_jsons
@@ -686,25 +699,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Exact segment BASE like 'TRBD001_20250715_143011'",
     )
 
+    ap.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver)",
+    )
+
     args = ap.parse_args(argv)
+
+    # Standalone: configure minimal console logging (no-op under driver),
+    # and set a log context so messages carry [seg/-] when segment is known.
+    configure_standalone_logging(args.log_level, seg=(args.segment_id or "-"), cam="-")
 
     # Fast path: just one VideoGroup (no audio scan, all cameras included)
     if args.segment_id:
-        vg = VideoDiscoverer(args.video_dir).discover_one(args.segment_id)
-        if not vg:
-            logger.error("Nothing found for segment %s", args.segment_id)
-            return 1
-        _print_videogroups([vg])
-        return 0
+        with log_context(seg=args.segment_id, cam="-"):
+            vg = VideoDiscoverer(args.video_dir).discover_one(args.segment_id)
+            if not vg:
+                logger.error("Nothing found for segment %s", args.segment_id)
+                return 1
+            _print_videogroups([vg])
+            return 0
 
     # Full discovery path requires audio-dir
     if not args.audio_dir:
         logger.error("--audio-dir is required when not using --segment-id")
         return 2
 
-    session = discover(
-        args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
-    )
+    with log_context(seg="-", cam="-"):
+        session = discover(
+            args.audio_dir, args.video_dir, default_serial_channel=args.serial_channel
+        )
 
     _print_audiogroup(session.audiogroup)
     _print_videogroups(session.videogroups)

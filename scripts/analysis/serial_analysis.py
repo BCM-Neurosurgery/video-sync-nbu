@@ -36,7 +36,7 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
-from scripts.jsonfileparser import JsonParser
+from scripts.parsers.jsonfileparser import JsonParser
 
 # -----------------------------
 # Labels
@@ -301,6 +301,21 @@ def summarize_text(
     lines: List[str] = []
     add = lines.append
 
+    # --- Quick guide block (prepended doc) ---
+    add("Quick guide")
+    add("-----------")
+    add(f"• Step = ids[i+1] - ids[i]; expected step E = {res.expect_step}.")
+    add("• ok           : diff == E    → values increase as expected.")
+    add("• duplicate    : diff == 0    → adjacent repeated value (no increase).")
+    add("• forward_jump : diff >  E    → skipped/missing values;")
+    add("                  Total missing IDs = sum(diff - E) over all forward jumps.")
+    add("• drop         : diff <  E    → value decreased (e.g., reset/rollover).")
+    add(
+        "• Counts       : number of steps in each category (there are N-1 steps for N values)."
+    )
+    add("")
+
+    # --- Summary numbers ---
     add(
         f"Values={res.n_values}  Steps={res.total_steps}  ok={res.ok_steps} ({res.ok_ratio:.2%})"
     )
@@ -330,6 +345,7 @@ def summarize_text(
         if cross_block:
             add(cross_block)
 
+    # Forward jumps / missing IDs
     if res.forward_diff_hist:
         add(f"Total missing IDs (from forward jumps): {res.total_missing_ids}")
         add(
@@ -340,6 +356,7 @@ def summarize_text(
             )
         )
 
+    # Drops
     if res.drop_diff_hist:
         add(
             format_histogram_grid(
@@ -347,9 +364,11 @@ def summarize_text(
             )
         )
 
+    # Longest OK segment
     seg_start, seg_len = res.longest_ok_segment
     add(f"Longest OK segment: start={seg_start}  length={seg_len} steps")
 
+    # Top events
     if include_tops and res.top_forward_jumps:
         add("\nTop forward jumps: (index, prev, curr, diff)")
         for e in res.top_forward_jumps:

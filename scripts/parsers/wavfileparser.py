@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import csv
 import wave
@@ -9,6 +10,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import shutil
 import subprocess
+from datetime import datetime
 
 """
 Clean, MATLAB-style block decoder for frame IDs embedded in audio.
@@ -19,11 +21,11 @@ Usage
 python wavfileparser.py /path/to/audio.(wav|mp3) \
     --site jamail \
     --threshold 0.5 \
-    --csv out.csv
+    --outdir /path/to/output_dir
 
 CSV format
 ----------
-Columns: file,site,sample_rate,channels,index,serial,start_sample,end_sample
+Columns: serial,start_sample,end_sample
 Each row corresponds to one decoded serial value in chronological order.
 
 Recent additions
@@ -34,6 +36,9 @@ Recent additions
 3) **Size guards**:
    - Hard stop for MP3 near ≥4GB (pydub limitation).
    - Soft cap for any input via env VIDEOSYNC_DECODE_MAX_BYTES (default: 2 GiB).
+4) **Output directory**:
+   - Use --outdir to choose where outputs are written. Defaults to the audio file's directory.
+   - Output CSV name is fixed to raw.csv; a summary text raw_info.txt is also written.
 """
 
 # ---- Size guard thresholds ----
@@ -335,9 +340,7 @@ class WavSerialDecoder:
 
         N = bin_sig.size
         frames: List[int] = []
-        ranges_tmp: List[Tuple[int, int]] = (
-            []
-        )  # (start_idx_current_space, end_idx_exclusive)
+        ranges_tmp: List[Tuple[int, int]] = []
         starts = 0
         i = 0
         while i < N:
@@ -387,40 +390,17 @@ class WavSerialDecoder:
     ) -> Path:
         """Save decoded serials to CSV. Returns the output path.
 
-        CSV columns: file,site,sample_rate,channels,index,serial,start_sample,end_sample
+        CSV columns: serial,start_sample,end_sample
         """
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
-        meta = self.get_metadata()
         ranges = getattr(self, "frame_ranges", []) or []
         with out.open("w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(
-                [
-                    # "file",
-                    # "site",
-                    # "sample_rate",
-                    # "channels",
-                    # "index",
-                    "serial",
-                    "start_sample",
-                    "end_sample",
-                ]
-            )
+            w.writerow(["serial", "start_sample", "end_sample"])
             for i, val in enumerate(counts):
                 s, e = ranges[i] if i < len(ranges) else ("", "")
-                w.writerow(
-                    [
-                        # meta["filepath"],
-                        # site,
-                        # meta["sample_rate"],
-                        # meta["channels"],
-                        # i,
-                        int(val),
-                        s,
-                        e,
-                    ]
-                )
+                w.writerow([int(val), s, e])
         return out
 
     # ---------------------- Utilities ----------------------
@@ -436,6 +416,48 @@ class WavSerialDecoder:
     def __repr__(self) -> str:
         dur = self.audio.shape[0] / self.sample_rate if self.sample_rate else 0.0
         return f"<WavSerialDecoder {self.filepath!r}: {self.n_channels}ch, {self.sample_rate}Hz, {dur:.2f}s>"
+
+
+def decode_to_raw(
+    audio: str | Path,
+    outdir: str | Path | None = None,
+    *,
+    site: str = "jamail",
+    threshold: float = 0.5,
+) -> Tuple[Path, Path, List[int], DecodeStats]:
+    """
+    Public API: decode an audio file and write:
+      - raw.csv : decoded serials with start/end sample indices
+      - raw_info.txt : summary (audio path, sample rate, duration (s), processed timestamp)
+
+    Returns
+    -------
+    (csv_path, txt_path, counts, stats)
+    """
+    audio_path = Path(audio)
+    out_dir = Path(outdir) if outdir else audio_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = out_dir / "raw.csv"
+    txt_path = out_dir / "raw_info.txt"
+
+    dec = WavSerialDecoder(str(audio_path))
+    counts, stats = dec.parse_counts(site=site, threshold=threshold)
+    dec.save_counts_csv(csv_path, counts, site=site)
+
+    # Summary text
+    duration_s = (
+        dec.audio.shape[0] / dec.sample_rate if getattr(dec, "sample_rate", 0) else 0.0
+    )
+    summary = [
+        f"audio_input: {audio_path}",
+        f"sample_rate_hz: {dec.sample_rate}",
+        f"duration_s: {duration_s:.6f}",
+        f"processed_at: {datetime.now().isoformat(timespec='seconds')}",
+    ]
+    txt_path.write_text("\n".join(summary) + "\n", encoding="utf-8")
+
+    return csv_path, txt_path, counts, stats
 
 
 # ---------------------- ffmpeg-based splitter ----------------------
@@ -502,7 +524,7 @@ def split_audio_file(
 # ---------------------- CLI ----------------------
 def _main() -> None:
     p = argparse.ArgumentParser(
-        description="Decode frame IDs from WAV/MP3 and optionally save CSV."
+        description="Decode frame IDs from WAV/MP3 and save raw.csv + raw_info.txt next to the input or into --outdir."
     )
     p.add_argument("audio", help="Path to input audio (.wav or .mp3)")
     p.add_argument(
@@ -512,7 +534,8 @@ def _main() -> None:
         "--threshold", type=float, default=0.5, help="Binarization threshold in [0,1]"
     )
     p.add_argument(
-        "--csv", dest="csv_out", help="If set, save decoded serials to this CSV path"
+        "--outdir",
+        help="Directory to write outputs (default: same directory as input audio).",
     )
     p.add_argument(
         "--split-minutes",
@@ -546,23 +569,21 @@ def _main() -> None:
             print("  ...")
         return
 
-    dec = WavSerialDecoder(args.audio)
-    counts, stats = dec.parse_counts(site=args.site, threshold=args.threshold)
+    # Decode and write standardized outputs
+    out_csv, out_txt, counts, stats = decode_to_raw(
+        args.audio, args.outdir, site=args.site, threshold=args.threshold
+    )
 
     # Console preview
     print(stats)
     if counts:
         print("first 10:", counts[:10])
         print("last 10 :", counts[-10:])
-        # Optional peek at ranges
-        print("ranges first 3:", dec.frame_ranges[:3])
-        print("ranges last 3 :", dec.frame_ranges[-3:])
     else:
         print("No counts decoded.")
 
-    if args.csv_out:
-        out = dec.save_counts_csv(args.csv_out, counts, site=args.site)
-        print(f"Saved {len(counts)} rows to {out}")
+    print(f"Saved {len(counts)} rows to {out_csv}")
+    print(f"Wrote summary to {out_txt}")
 
 
 if __name__ == "__main__":

@@ -5,10 +5,8 @@ from datetime import datetime
 from scripts.utils import (
     replace_zeros,
 )
-from scripts.serialfixer import (
-    CamJsonSerialFixer,
-    FrameIDFixer,
-)
+from scripts.fix.jsonserialfixer import JsonSerialFixer
+from scripts.fix.frameidfixer import FrameIDFixer
 
 
 class JsonParser:
@@ -94,7 +92,7 @@ class JsonParser:
     def get_fixed_chunk_serial_list(self, cam_serial):
         """Return the fixed chunk serial"""
         serial = self.get_chunk_serial_list(cam_serial)
-        fixer = CamJsonSerialFixer()
+        fixer = JsonSerialFixer()
         fixed = fixer.fix(serial)
         return fixed
 
