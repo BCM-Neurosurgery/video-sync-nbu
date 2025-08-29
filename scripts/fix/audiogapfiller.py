@@ -26,11 +26,19 @@ from pathlib import Path
 import logging
 
 import pandas as pd
-from scripts.fix.serialfixer import SerialFixer  # uses apply_gap_passes_fast
+from scripts.fix.serialfixer import SerialFixer
+from scripts.log.logutils import configure_standalone_logging
 
 logger = logging.getLogger(__name__)
 
 REQUIRED_COLS = {"serial", "start_sample", "end_sample"}
+
+
+def _short_name(p: Path | str) -> str:
+    try:
+        return Path(p).name
+    except Exception:
+        return str(p)
 
 
 class AudioGapFiller:
@@ -205,13 +213,9 @@ def gapfill_csv_file(
     if not in_path.exists():
         raise FileNotFoundError(f"Input CSV not found: {in_path}")
 
-    try:
-        filler = AudioGapFiller(gaps=gaps)
-        logger.info("Reading %s", in_path)
-        df_out = filler.fill_csv(in_path)
-    except Exception:
-        # Let specific exceptions from fill_csv bubble up (already well-typed).
-        raise
+    filler = AudioGapFiller(gaps=gaps)
+    logger.info("Reading %s", _short_name(in_path))
+    df_out = filler.fill_csv(in_path)
 
     out = (
         Path(out_path)
@@ -225,7 +229,7 @@ def gapfill_csv_file(
     except Exception as exc:
         raise RuntimeError(f"Failed to write output CSV: {out}") from exc
 
-    logger.info("Wrote %s (%d rows)", out, len(df_out))
+    logger.info("Wrote %s (%d rows)", _short_name(out), len(df_out))
     return out
 
 
@@ -248,6 +252,9 @@ def _parse_gaps(gaps_arg: Optional[str]) -> Optional[List[int]]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
+
+    # Standalone console logging; no-op if the driver already configured root.
+    configure_standalone_logging("INFO", seg="-", cam="-")
 
     p = argparse.ArgumentParser(
         description="Gap-fill only: apply midpoint passes to 'serial' (no row filtering)."
@@ -278,7 +285,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(str(outp))
         return 0
     except (FileNotFoundError, ValueError) as e:
-        logger.error(str(e))
+        logger.error("%s", e)
         return 2
     except Exception as e:
         logger.exception("Failed to gap-fill: %s", e)
