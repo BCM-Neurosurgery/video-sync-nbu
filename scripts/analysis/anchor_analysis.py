@@ -33,6 +33,7 @@ python -m scripts.analysis.anchor_analysis /path/to/anchors.json
   [--out-text /path/to/report.txt]
   [--hist-cols 2]
   [--top 5]
+  [--log-level INFO]
 """
 from __future__ import annotations
 
@@ -42,14 +43,11 @@ from pathlib import Path
 from typing import Any, Iterable, List, Set, Optional, Union
 
 import pandas as pd
-from scripts.analysis.serial_analysis import analyze, summarize_text
 
-logger = logging.getLogger("anchor_analysis")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+from scripts.analysis.serial_analysis import analyze, summarize_text
+from scripts.log.logutils import configure_standalone_logging, log_context
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_KEYS = {"serial", "audio_sample", "cam_serial", "segment_id", "frame_id"}
 
@@ -149,6 +147,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Histogram entries per row for pretty print",
     )
     p.add_argument("--top", type=int, default=5, help="Top forward/drops to list")
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver)",
+    )
     return p
 
 
@@ -196,37 +200,41 @@ def analyze_anchors_file(
     anchors = load_anchors(in_path)
     segment_id, cam_serial = enforce_single_segment_and_cam(anchors)
 
-    serial_txt = build_serial_report(anchors, hist_cols=hist_cols, top=top)
-    frame_txt = build_frame_report(anchors, hist_cols=hist_cols, top=top)
+    with log_context(seg=segment_id, cam=cam_serial):
+        serial_txt = build_serial_report(anchors, hist_cols=hist_cols, top=top)
+        frame_txt = build_frame_report(anchors, hist_cols=hist_cols, top=top)
 
-    # Compose text report
-    report_lines = [
-        f"Source → {in_path.name}",
-        f"Segment  : {segment_id}",
-        f"Camera   : {cam_serial}",
-        "",
-        serial_txt,
-        "",
-        frame_txt,
-    ]
-    full_text = "\n".join(report_lines)
+        # Compose text report
+        report_lines = [
+            f"Source → {in_path.name}",
+            f"Segment  : {segment_id}",
+            f"Camera   : {cam_serial}",
+            "",
+            serial_txt,
+            "",
+            frame_txt,
+        ]
+        full_text = "\n".join(report_lines)
 
-    # Write text
-    out_text_path = Path(out_text) if out_text else in_path.with_suffix(".txt")
-    out_text_path.parent.mkdir(parents=True, exist_ok=True)
-    out_text_path.write_text(full_text.rstrip() + "\n", encoding="utf-8")
-    logger.info(f"Anchor analysis written to {out_text_path}")
+        # Write text
+        out_text_path = Path(out_text) if out_text else in_path.with_suffix(".txt")
+        out_text_path.parent.mkdir(parents=True, exist_ok=True)
+        out_text_path.write_text(full_text.rstrip() + "\n", encoding="utf-8")
+        logger.info("Anchor analysis written → %s", out_text_path.name)
 
-    return out_text_path.resolve()
+        return out_text_path.resolve()
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
 
+    # Standalone: minimal console logging (no-op under pipeline driver).
+    configure_standalone_logging(args.log_level, seg="-", cam="-")
+
     in_path = Path(args.path)
     if not in_path.exists():
-        logger.error(f"File not found: {in_path}")
+        logger.error("File not found: %s", in_path)
         return 2
 
     try:
