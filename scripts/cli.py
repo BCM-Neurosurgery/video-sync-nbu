@@ -100,6 +100,7 @@ from scripts.parsers.wavfileparser import decode_to_raw
 from scripts.analysis.csv_serial_analysis import analyze_csv_serials
 from scripts.analysis.anchor_analysis import analyze_anchors_file
 from scripts.analysis.video_analysis import analyze_and_write
+from scripts.analysis.video_frameid_analysis import analyze_video_frameids
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
 from scripts.align.collect_anchors import save_anchors_for_camera
@@ -118,6 +119,7 @@ from scripts.errors import (
     GapFillError,
     FilteredError,
     VideoAnalysisError,
+    VideoFrameIDAnalysisError,
     AnchorError,
     ClipError,
     AudioPaddingError,
@@ -393,6 +395,17 @@ def process_segment(
                 except VideoAnalysisError as e:
                     clog.error("video analysis failed: %s", e)
                     summary["fail"].append(f"{cam}:video-analysis")
+
+                # Video frame id analysis
+                try:
+                    analyze_video_frameids(
+                        video=video_in / f"{seg_id}.{cam}.mp4",
+                        outdir=cam_out / "work",
+                    )
+                    clog.info("video frame id analysis completed")
+                except VideoFrameIDAnalysisError as e:
+                    clog.error("video frame id analysis failed: %s", e)
+                    summary["fail"].append(f"{cam}:video-frame-id-analysis")
 
                 # Anchors from filtered CSV
                 try:
