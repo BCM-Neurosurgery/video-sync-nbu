@@ -99,6 +99,7 @@ from typing import Iterable
 from scripts.parsers.wavfileparser import decode_to_raw
 from scripts.analysis.csv_serial_analysis import analyze_csv_serials
 from scripts.analysis.anchor_analysis import analyze_anchors_file
+from scripts.analysis.video_analysis import analyze_and_write
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
 from scripts.align.collect_anchors import save_anchors_for_camera
@@ -116,6 +117,7 @@ from scripts.errors import (
     SerialAnalysisError,
     GapFillError,
     FilteredError,
+    VideoAnalysisError,
     AnchorError,
     ClipError,
     AudioPaddingError,
@@ -381,6 +383,17 @@ def process_segment(
             padded_anchors = cam_out / "work" / "gapfilled-filtered-padded-anchors.json"
 
             try:
+                # Video analysis
+                try:
+                    analyze_and_write(
+                        video_path=video_in / f"{seg_id}.{cam}.mp4",
+                        out_dir=cam_out / "work",
+                    )
+                    clog.info("video analysis completed")
+                except VideoAnalysisError as e:
+                    clog.error("video analysis failed: %s", e)
+                    summary["fail"].append(f"{cam}:video-analysis")
+
                 # Anchors from filtered CSV
                 try:
                     save_anchors_for_camera(

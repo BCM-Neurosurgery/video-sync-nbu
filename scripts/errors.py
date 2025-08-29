@@ -1,0 +1,70 @@
+class AudioGroupDiscoverError(Exception):
+    """Raised when audio group discovery fails."""
+
+    pass
+
+
+class TargetBuildError(Exception):
+    """Raised when target building fails."""
+
+    pass
+
+
+class AudioDecodingError(Exception):
+    """Raised when audio decoding fails."""
+
+    pass
+
+
+class SyncError(Exception):
+    """Raised when syncing fails."""
+
+    pass
+
+
+class SerialAnalysisError(Exception):
+    """Raised when serial analysis fails."""
+
+    pass
+
+
+class GapFillError(Exception):
+    """Raised when gap filling fails."""
+
+    pass
+
+
+class FilteredError(Exception):
+    """Raised when filtering fails."""
+
+    pass
+
+
+class VideoAnalysisError(Exception):
+    """Raised when video analysis fails."""
+
+    pass
+
+
+class AnchorError(Exception):
+    """Raised when anchor-related errors occur."""
+
+    pass
+
+
+class ClipError(Exception):
+    """Raised when clipping fails."""
+
+    pass
+
+
+class AudioPaddingError(Exception):
+    """Raised when audio padding fails."""
+
+    pass
+
+
+class AudioPlanError(Exception):
+    """Raised when audio plan application fails."""
+
+    pass
