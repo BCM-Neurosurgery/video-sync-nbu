@@ -8,7 +8,7 @@ containing: duration (s), FPS, resolution, and total frame count.
 
 Usage
 -----
-python video_analysis.py /path/to/video.mp4 --outdir /path/to/output
+python video_analysis.py /path/to/video.mp4 --outdir /path/to/output [--log-level INFO]
 
 Output
 ------
@@ -27,16 +27,10 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
-# Import your helper (must be in PYTHONPATH or same directory)
 from scripts.parsers.videofileparser import VideoFileParser
+from scripts.log.logutils import configure_standalone_logging, log_context
 
-
-logger = logging.getLogger("video_analysis")
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(_h)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def _format_report(
@@ -64,7 +58,7 @@ def analyze_and_write(video_path: Path, outdir: Path) -> Path:
     if video_path.suffix.lower() != ".mp4":
         raise ValueError(f"Expected an .mp4 file, got: {video_path.suffix}")
 
-    logger.info("Probing video with ffprobe: %s", video_path)
+    logger.info("Probing video with ffprobe: %s", video_path.name)
     parser = VideoFileParser(str(video_path))
 
     report = _format_report(
@@ -79,7 +73,7 @@ def analyze_and_write(video_path: Path, outdir: Path) -> Path:
     report_path = outdir / f"{video_path.stem}.txt"
     report_path.write_text(report, encoding="utf-8")
 
-    logger.info("Wrote report → %s", report_path)
+    logger.info("Wrote report → %s", report_path.name)
     return report_path
 
 
@@ -91,13 +85,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--outdir", required=True, type=Path, help="Directory to write the .txt report"
     )
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Logging verbosity (standalone only; ignored when called from driver)",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Standalone logging: only attaches a console handler if root has none.
+    root = logging.getLogger()
+    was_handlerless = not root.handlers
+    configure_standalone_logging(args.log_level, seg="-", cam="-")
+
     try:
-        analyze_and_write(args.video, args.outdir)
+        # Stamp a helpful seg/cam only in standalone so we don't override driver context.
+        if was_handlerless:
+            with log_context(seg=args.video.stem, cam="-"):
+                analyze_and_write(args.video, args.outdir)
+        else:
+            analyze_and_write(args.video, args.outdir)
         return 0
     except Exception as e:
         logger.error("%s", e)
