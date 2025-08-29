@@ -68,14 +68,9 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging (library module: no handlers/levels; let the driver configure root)
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    h = logging.StreamHandler()
-    h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(h)
-logger.setLevel(logging.INFO)
 
 DEFAULT_TZ = ZoneInfo("America/Chicago")
 
