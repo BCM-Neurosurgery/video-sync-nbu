@@ -64,6 +64,10 @@ from typing import List, Dict, Tuple
 import numpy as np
 import pandas as pd
 
+from scripts.log.logutils import configure_standalone_logging
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class EditOp:
@@ -172,18 +176,22 @@ class AudioPadder:
             else self._estimate_block_len(df)
         )
 
-        logging.info(
-            f"Using fallback global period P={P_global} samples; block length L={L} samples; "
-            f"gap_policy={self.gap_policy} (sr={self.sample_rate}, fps={self.fps})"
+        logger.info(
+            "Using fallback global period P=%d samples; block length L=%d samples; gap_policy=%s (sr=%d, fps=%.3f)",
+            P_global,
+            L,
+            self.gap_policy,
+            self.sample_rate,
+            self.fps,
         )
 
         ops, fixed_df = self._build_plan_and_fixed(df, centers, P_global, L)
 
         out_csv, out_plan = self._emit_outputs(fixed_df, ops)
 
-        logging.info(f"Wrote fixed CSV: {out_csv}")
-        logging.info(f"Wrote edit plan: {out_plan}")
-        logging.info(
+        logger.info("Wrote fixed CSV: %s", Path(out_csv).name)
+        logger.info("Wrote edit plan: %s", Path(out_plan).name)
+        logger.info(
             "Summary: %d input rows → %d output rows (incl. %d synthetic), %d ops, total inserted %d samples",
             len(df),
             len(fixed_df),
@@ -202,7 +210,6 @@ class AudioPadder:
         return df.copy()
 
     def _sort_by_time(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Sort by start_sample to enforce time order deterministically.
         return df.sort_values(by=["start_sample", "end_sample"]).reset_index(drop=True)
 
     def _ensure_centers(self, df: pd.DataFrame) -> np.ndarray:
@@ -219,11 +226,10 @@ class AudioPadder:
         candidates = d_center[mask]
         if candidates.size == 0:
             # Fallback to nominal 44100/30 ≈ 1470
-            logging.warning(
+            logger.warning(
                 "No Δserial==1 pairs for period estimation; falling back to 1470"
             )
             return 1470
-        # Robust center-to-center period: median of plausible candidates
         nominal = 1470
         plausible = candidates[
             (candidates >= nominal * 0.5) & (candidates <= nominal * 2.0)
@@ -231,7 +237,7 @@ class AudioPadder:
         use = plausible if plausible.size > 0 else candidates
         P = int(np.rint(np.median(use)))
         if P <= 0:
-            logging.warning("Estimated non-positive period; forcing to 1470")
+            logger.warning("Estimated non-positive period; forcing to 1470")
             return 1470
         return P
 
@@ -241,8 +247,7 @@ class AudioPadder:
         ).astype(np.int64)
         pos = lengths[lengths > 0]
         if pos.size == 0:
-            # Conservative small block if input looks degenerate
-            logging.warning("Cannot estimate block length; falling back to 64 samples")
+            logger.warning("Cannot estimate block length; falling back to 64 samples")
             return 64
         return int(np.rint(np.median(pos)))
 
@@ -309,15 +314,24 @@ class AudioPadder:
 
         n = len(df)
         if n == 0:
-            # Empty input: emit empty outputs
-            return ops, pd.DataFrame(columns=["serial", "start_sample", "end_sample", "center_sample", "is_synthetic"])  # type: ignore
+            return ops, pd.DataFrame(
+                columns=[
+                    "serial",
+                    "start_sample",
+                    "end_sample",
+                    "center_sample",
+                    "is_synthetic",
+                ]
+            )  # type: ignore
 
-        # --------- budget policy precomputation: distribute a total insert budget ---------
+        # --------- budget policy precomputation ---------
         per_gap_budget: Dict[int, int] = {}
         tail_budget = 0
         if self.gap_policy == "budget":
             observed_total_samples = int(ends[-1] - starts[0] + 1)
-            target_total_samples = int(round((self.target_frames * self.sample_rate) / self.fps))  # type: ignore[arg-type]
+            target_total_samples = int(
+                round((self.target_frames * self.sample_rate) / self.fps)  # type: ignore[arg-type]
+            )
             total_insert_budget = max(0, target_total_samples - observed_total_samples)
 
             # Find all gap indices (i where Δserial > 1) and their missing frames
@@ -348,10 +362,9 @@ class AudioPadder:
                     for gap_i in gap_indices:
                         per_gap_budget[gap_i] = 0
 
-                # Preserve previous logging line (unchanged)
                 base = total_insert_budget // len(gap_indices)
                 rem = total_insert_budget - base * len(gap_indices)
-                logging.info(
+                logger.info(
                     "budget policy: observed=%d samples, target=%d samples, total_insert=%d distributed across %d gaps (base=%d, rem=%d)",
                     observed_total_samples,
                     target_total_samples,
@@ -363,7 +376,7 @@ class AudioPadder:
             else:
                 # No gaps → insert once at tail
                 tail_budget = total_insert_budget
-                logging.info(
+                logger.info(
                     "budget policy: no gaps → tail insertion of %d samples (observed=%d, target=%d)",
                     tail_budget,
                     observed_total_samples,
@@ -404,17 +417,16 @@ class AudioPadder:
             D = c_j - c_i  # observed center gap on original timeline
 
             if delta_s <= 0:
-                logging.warning(
+                logger.warning(
                     "Non-forward serial pair at rows %d→%d (Δs=%d). Treating as no-gap.",
                     i,
                     i + 1,
                     delta_s,
                 )
             elif delta_s == 1:
-                # No insertion
                 pass
             else:
-                # Gap detected: compute ideal span per gap policy
+                # Gap detected
                 M = delta_s - 1
                 if self.gap_policy == "video":
                     ideal_span = int(round(delta_s * (self.sample_rate / self.fps)))
@@ -440,20 +452,20 @@ class AudioPadder:
                 if S > 0:
                     ops.append(
                         EditOp(
-                            insert_after_sample=end_i,  # original timeline anchor
+                            insert_after_sample=end_i,
                             insert_len_samples=S,
                             note=f"gap Δserial={delta_s} (policy={self.gap_policy}) around serial {s_i}->{s_j}",
                         )
                     )
                 else:
-                    logging.debug(
+                    logger.debug(
                         "Computed non-positive insert length S=%d at rows %d→%d; skipping op.",
                         S,
                         i,
                         i + 1,
                     )
 
-                # Optional synthetic rows placed by evenly slicing the *ideal* span on NEW timeline
+                # Synthetic rows (NEW timeline) by slicing the ideal span evenly
                 if self.include_synthetic and M > 0:
                     c_i_new = int(c_i + C)
                     step = ideal_span / float(delta_s)
@@ -461,10 +473,9 @@ class AudioPadder:
                         c_syn = int(round(c_i_new + m * step))
                         append_row(s_i + m, c_syn, is_synth=True)
 
-                # Update cumulative shift
                 C += max(0, S)
 
-            # Append the (i+1)-th observed row on the NEW timeline
+            # Append next observed row on the NEW timeline
             center_next_new = int(centers[i + 1] + C)
             L_next = int(ends[i + 1] - starts[i + 1] + 1)
             append_row(serials[i + 1], center_next_new, is_synth=False, L_local=L_next)
@@ -621,9 +632,8 @@ def main():
     ap = _build_argparser()
     args = ap.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.loglevel), format="%(levelname)s: %(message)s"
-    )
+    # Standalone console logging that won't interfere with the driver
+    configure_standalone_logging(level=args.loglevel, seg="-", cam="-")
 
     padder = AudioPadder(
         csv_path=args.csv,
@@ -639,7 +649,7 @@ def main():
     try:
         padder.run()
     except Exception as e:
-        logging.error("Failed: %s", e)
+        logger.error("Failed: %s", e)
         raise
 
 
