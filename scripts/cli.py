@@ -23,7 +23,7 @@ python sync_driver.py \
 Speed-ups / resume
 ------------------
 - Use **--skip-decode** to reuse an existing decoded CSV at:
-  <out_dir>/<segment_id>/audio_decoded/raw.csv
+  <out_dir>/audio_decoded/raw.csv
   This skips the slow serial decoding and goes straight to gapfill→filter→… stages.
 
 Input folder layout (discover expects this)
@@ -44,15 +44,14 @@ Output folder layout (what this tool writes)
 --------------------------------------------
 output_dir structure
 - parent_out
+    - audio_decoded (shared across segments)
+        - raw.csv
+        - raw.txt
+        - raw-gapfilled.csv
+        - raw-gapfilled.txt
+        - raw-gapfilled-filtered.csv
+        - raw-gapfilled-filtered.txt
     - <segment_id> (e.g. TRBD002_20250806_104707)
-        - audio_decoded   (shared across cameras)
-            - raw.csv
-            - raw.txt
-            - raw-gapfilled.csv
-            - raw-gapfilled.txt
-            - raw-gapfilled-filtered.csv
-            - raw-gapfilled-filtered.txt
-
         - <camera_serial1> (e.g. 23512909)
             - work (intermediate artifacts)
                 - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
@@ -71,6 +70,7 @@ output_dir structure
 
         - <camera_serial2>
         ...
+    - <segment_id> (e.g. TRBD002_20250806_105724)
 
 Logging (clean + consistent)
 ----------------------------
@@ -296,8 +296,8 @@ def process_segment(
     skip_decode: bool = False,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
+    audio_decoded_dir = parent_out / "audio_decoded"
     segment_out = parent_out / seg_id
-    audio_decoded_dir = segment_out / "audio_decoded"
     summary = {"segment": seg_id, "ok": [], "fail": []}
 
     # ---- Stage: decode + analyze raw (segment-scoped context) ----
@@ -598,7 +598,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-decode",
         action="store_true",
-        help="Reuse existing <out>/<segment>/audio_decoded/raw.csv and skip audio serial decoding.",
+        help="Reuse existing <out>/audio_decoded/raw.csv and skip audio serial decoding.",
     )
     args = parser.parse_args()
 
