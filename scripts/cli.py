@@ -108,7 +108,7 @@ from scripts.clip.audiocsvclipper import clip_with_anchors
 from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
 from scripts.align.sync import sync_one_segment
-from scripts.discover import AudioDiscoverer
+from scripts.index.discover import AudioDiscoverer
 from scripts.models import AudioGroup
 from scripts.errors import (
     AudioGroupDiscoverError,

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 import wave
 from pathlib import Path
 from datetime import datetime
@@ -36,6 +35,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from scripts.parsers.videofileparser import VideoFileParser
 from scripts.parsers.jsonfileparser import JsonParser
+from scripts.index.filepatterns import FilePatterns
 
 # Try optional MP3 probe (pydub)
 try:
@@ -75,60 +75,6 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 DEFAULT_TZ = ZoneInfo("America/Chicago")
-
-
-# ---------------------------------------------------------------------------
-# Filename Patterns & Utilities
-# ---------------------------------------------------------------------------
-class FilePatterns:
-    """Centralizes filename parsing logic."""
-
-    RE_TAIL = re.compile(r"(?P<date>\d{8})_(?P<time>\d{6})$")
-    RE_VIDEO = re.compile(
-        r"^(?P<base>.+?_\d{8}_\d{6})\.(?P<cam>[0-9A-Za-z]+)\.mp4$", re.IGNORECASE
-    )
-    RE_JSON = re.compile(r"^(?P<base>.+?_\d{8}_\d{6})\.json$", re.IGNORECASE)
-    RE_AUDIO = re.compile(
-        r"^(?P<prefix>.+)-(?P<chan>\d{2})\.(?P<ext>wav|mp3)$", re.IGNORECASE
-    )
-
-    @classmethod
-    def parse_video_filename(cls, p: Path) -> Optional[Tuple[str, str]]:
-        m = cls.RE_VIDEO.match(p.name)
-        return (m.group("base"), m.group("cam")) if m else None
-
-    @classmethod
-    def parse_json_filename(cls, p: Path) -> Optional[str]:
-        m = cls.RE_JSON.match(p.name)
-        return m.group("base") if m else None
-
-    @classmethod
-    def parse_audio_filename(cls, p: Path) -> Optional[Tuple[int, str]]:
-        m = cls.RE_AUDIO.match(p.name)
-        if not m:
-            return None
-        try:
-            ch = int(m.group("chan"))
-        except ValueError:
-            return None
-        return ch, m.group("ext").lower()
-
-    @classmethod
-    def videogroup_sort_key(cls, seg_id: str) -> Tuple[int, int, str]:
-        m = cls.RE_TAIL.search(seg_id)
-        if m:
-            return int(m.group("date")), int(m.group("time")), seg_id
-        return (10**12, 10**8, seg_id)
-
-    @classmethod
-    def parse_tail_datetime(
-        cls, seg_id: str, tz: ZoneInfo = DEFAULT_TZ
-    ) -> Optional[datetime]:
-        m = cls.RE_TAIL.search(seg_id)
-        if not m:
-            return None
-        dt = datetime.strptime(m.group("date") + m.group("time"), "%Y%m%d%H%M%S")
-        return dt.replace(tzinfo=tz)
 
 
 # ---------------------------------------------------------------------------

@@ -283,7 +283,7 @@ def save_anchors_for_camera(
     -------
     Path to the written JSON.
     """
-    from scripts.discover import (
+    from scripts.index.discover import (
         discover_segment,
     )  # local import to avoid heavy import at module load
 

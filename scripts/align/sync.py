@@ -34,7 +34,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 import shutil
 import subprocess
 
-from scripts.discover import discover as run_discover
+from scripts.index.discover import discover as run_discover
 
 logger = logging.getLogger(__name__)
 
