@@ -46,6 +46,12 @@ class VideoAnalysisError(Exception):
     pass
 
 
+class VideoFrameIDAnalysisError(Exception):
+    """Raised when video frame ID analysis fails."""
+
+    pass
+
+
 class AnchorError(Exception):
     """Raised when anchor-related errors occur."""
 

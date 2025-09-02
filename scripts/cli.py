@@ -389,7 +389,7 @@ def process_segment(
                 try:
                     analyze_and_write(
                         video_path=video_in / f"{seg_id}.{cam}.mp4",
-                        out_dir=cam_out / "work",
+                        outdir=cam_out / "work",
                     )
                     clog.info("video analysis completed")
                 except VideoAnalysisError as e:
