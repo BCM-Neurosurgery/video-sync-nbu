@@ -309,57 +309,65 @@ def process_segment(
                     logger.error("--skip-decode set but missing %s", decoded_raw_csv)
                     summary["fail"].append("decode-missing")
                     return summary
-                logger.info("skip decode: using %s", _name(decoded_raw_csv))
+                logger.info("Skip decode: using %s", _name(decoded_raw_csv))
                 try:
                     _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("raw.txt → %s", _name(raw_txt))
+                    logger.info("Analyzed raw.csv → %s", _name(raw_txt))
                 except SerialAnalysisError as e:
-                    logger.error("raw analysis failed: %s", e)
+                    logger.error("Raw analysis failed: %s", e)
                     summary["fail"].append("raw-analysis")
             else:
-                logger.info("decoding serial…")
+                logger.info("Decoding serial…")
                 decoded_raw_csv, _, _, _ = decode_to_raw(
                     audiogroup.serial_audio.path, audio_decoded_dir, site=site
                 )
-                logger.info("raw.csv → %s", _name(decoded_raw_csv))
+                logger.info("Decoded audio serial → %s", _name(decoded_raw_csv))
                 try:
                     _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("raw.txt → %s", _name(raw_txt))
+                    logger.info(
+                        "Analyzed %s → %s", _name(decoded_raw_csv), _name(raw_txt)
+                    )
                 except SerialAnalysisError as e:
-                    logger.error("raw analysis failed: %s", e)
+                    logger.error("Raw analysis failed: %s", e)
                     summary["fail"].append("raw-analysis")
         except AudioDecodingError as e:
-            logger.error("decode failed: %s", e)
+            logger.error("Decode failed: %s", e)
             summary["fail"].append("decode")
             return summary
 
         # ---- Stage: gapfill + analyze ----
         try:
             gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-            logger.info("gapfilled.csv → %s", _name(gapfilled_csv))
+            logger.info(
+                "Gap-filled %s → %s", _name(decoded_raw_csv), _name(gapfilled_csv)
+            )
             try:
                 _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-                logger.info("gapfilled.txt → %s", _name(gapfilled_txt))
+                logger.info(
+                    "Analyzed %s → %s", _name(gapfilled_csv), _name(gapfilled_txt)
+                )
             except SerialAnalysisError as e:
-                logger.error("gapfilled analysis failed: %s", e)
+                logger.error("Gap-filled analysis failed: %s", e)
                 summary["fail"].append("gapfilled-analysis")
         except GapFillError as e:
-            logger.error("gapfill failed: %s", e)
+            logger.error("Gap-fill failed: %s", e)
             summary["fail"].append("gapfill")
             return summary
 
         # ---- Stage: filter + analyze ----
         try:
             filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-            logger.info("filtered.csv → %s", _name(filtered_csv))
+            logger.info("Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv))
             try:
                 _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-                logger.info("filtered.txt → %s", _name(filtered_txt))
+                logger.info(
+                    "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
+                )
             except SerialAnalysisError as e:
-                logger.error("filtered analysis failed: %s", e)
+                logger.error("Filtered analysis failed: %s", e)
                 summary["fail"].append("filtered-analysis")
         except FilteredError as e:
-            logger.error("filter failed: %s", e)
+            logger.error("Filter failed: %s", e)
             summary["fail"].append("filter")
             return summary
 
@@ -391,9 +399,9 @@ def process_segment(
                         video_path=video_in / f"{seg_id}.{cam}.mp4",
                         outdir=cam_out / "work",
                     )
-                    clog.info("video analysis completed")
+                    clog.info("Video analysis completed")
                 except VideoAnalysisError as e:
-                    clog.error("video analysis failed: %s", e)
+                    clog.error("Video analysis failed: %s", e)
                     summary["fail"].append(f"{cam}:video-analysis")
 
                 # Video frame id analysis
@@ -402,9 +410,9 @@ def process_segment(
                         video=video_in / f"{seg_id}.{cam}.mp4",
                         outdir=cam_out / "work",
                     )
-                    clog.info("video frame id analysis completed")
+                    clog.info("Video frame id analysis completed")
                 except VideoFrameIDAnalysisError as e:
-                    clog.error("video frame id analysis failed: %s", e)
+                    clog.error("Video frame id analysis failed: %s", e)
                     summary["fail"].append(f"{cam}:video-frame-id-analysis")
 
                 # Anchors from filtered CSV
@@ -416,7 +424,7 @@ def process_segment(
                         cam_serial=cam,
                         out_json=filtered_anchors,
                     )
-                    clog.info("anchors.json → %s", _name(filtered_anchors))
+                    clog.info("Saved %s", _name(filtered_anchors))
                     try:
                         analyze_anchors_file(anchors_json=filtered_anchors)
                         clog.info("anchors analyzed")
@@ -436,10 +444,12 @@ def process_segment(
                         anchors_json=filtered_anchors,
                         output_csv=cam_out / "work" / "gapfilled-filtered-clipped.csv",
                     )
-                    clog.info("clipped.csv → %s", _name(clipped_csv))
+                    clog.info("Clipped %s → %s", _name(clipped_csv), _name(clipped_csv))
                     try:
                         _, clipped_txt = analyze_csv_serials(path=clipped_csv)
-                        clog.info("clipped.txt → %s", _name(clipped_txt))
+                        clog.info(
+                            "Analyzed %s → %s", _name(clipped_csv), _name(clipped_txt)
+                        )
                     except SerialAnalysisError as e:
                         clog.error("clipped analysis failed: %s", e)
                         summary["fail"].append(f"{cam}:clipped-analysis")
@@ -457,16 +467,18 @@ def process_segment(
                         sample_rate=44100,
                     )
                     _, _, padded_csv, padplan = apadder.run()
-                    clog.info("padded.csv → %s", _name(padded_csv))
-                    clog.info("padplan.json → %s", _name(padplan))
+                    clog.info("Padded %s → %s", _name(clipped_csv), _name(padded_csv))
+                    clog.info("Padding plan saved to %s", _name(padplan))
                     try:
                         _, padded_txt = analyze_csv_serials(path=padded_csv)
-                        clog.info("padded.txt → %s", _name(padded_txt))
+                        clog.info(
+                            "Analyzed %s → %s", _name(padded_csv), _name(padded_txt)
+                        )
                     except SerialAnalysisError as e:
-                        clog.error("padded analysis failed: %s", e)
+                        clog.error("Padded analysis failed: %s", e)
                         summary["fail"].append(f"{cam}:padded-analysis")
                 except AudioPaddingError as e:
-                    clog.error("padding failed: %s", e)
+                    clog.error("Padding failed: %s", e)
                     summary["fail"].append(f"{cam}:padding")
                     continue
 
@@ -493,7 +505,7 @@ def process_segment(
                         cam_serial=cam,
                         out_json=padded_anchors,
                     )
-                    clog.info("padded-anchors.json → %s", _name(padded_anchors))
+                    clog.info("Saved %s", _name(padded_anchors))
                     try:
                         analyze_anchors_file(anchors_json=padded_anchors)
                         clog.info("padded-anchors analyzed")
