@@ -580,7 +580,7 @@ def sync_one_segment(
     logger.info("Mux → %s", out_path.name)
     mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
 
-    logger.info("Single-segment sync complete → %s", out_path)
+    logger.info("Single-segment sync complete → %s", out_path.name)
     return out_path.resolve()
 
 

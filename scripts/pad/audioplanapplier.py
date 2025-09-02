@@ -132,13 +132,12 @@ class AudioPlanApplier:
         """Apply the plan to the input audio and write the edited WAV."""
         logger.info(
             "Starting plan application: audio=%s plan=%s outdir=%s",
-            self.audio_path,
-            self.plan_path,
-            self.out_dir,
+            self.audio_path.name,
+            self.plan_path.name,
+            self.out_dir.name,
         )
         ops = self._load_plan()
         logger.info("Loaded plan with %d ops", len(ops))
-        logger.info("Decoding audio…")
         data, sr = self._load_audio(self.audio_path)
         channels = data.shape[1] if data.ndim == 2 else 1
         logger.info("Audio decoded: shape=%s  sr=%d  ch=%d", data.shape, sr, channels)
@@ -151,7 +150,7 @@ class AudioPlanApplier:
         logger.info("Insertions applied. New length = %d samples", len(edited))
 
         out_path = self._make_out_path()
-        logger.info("Writing edited WAV to %s", out_path)
+        logger.info("Writing edited WAV to %s", out_path.name)
         self._write_audio(out_path, edited, sr)
         logger.info("Done.")
         return out_path
