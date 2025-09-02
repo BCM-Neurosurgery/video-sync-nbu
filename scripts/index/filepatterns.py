@@ -3,8 +3,7 @@ from typing import Optional, Tuple
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime
-
-DEFAULT_TZ = ZoneInfo("America/Chicago")
+from scripts.index.common import DEFAULT_TZ
 
 
 class FilePatterns:

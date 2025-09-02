@@ -252,7 +252,7 @@ def run_pipeline(
     # Discover audio group once (shared across segments/cams)
     try:
         ad = AudioDiscoverer(audio_dir=audio_dir, log=logger)
-        ag = ad.discover()
+        ag = ad.get_audio_group()
         logger.info("Audio(s) discovered")
     except AudioGroupDiscoverError as e:
         logger.error("Audio group discovery failed: %s", e)
