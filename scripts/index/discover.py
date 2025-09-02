@@ -102,23 +102,30 @@ class Discoverer:
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
-def discover_audio(audio_dir: Path, default_serial_channel: int = 3) -> AudioGroup:
-    return AudioDiscoverer(audio_dir, default_serial_channel).get_audio_group()
+def discover_audio(
+    audio_dir: Path, log: logging.Logger, default_serial_channel: int = 3
+) -> AudioGroup:
+    return AudioDiscoverer(audio_dir, default_serial_channel, log=log).get_audio_group()
 
 
-def discover_segments(video_dir: Path) -> List[VideoGroup]:
-    return VideoDiscoverer(video_dir).discover()
+def discover_segments(video_dir: Path, log: logging.Logger) -> List[VideoGroup]:
+    return VideoDiscoverer(video_dir, log=log).discover()
 
 
-def discover_segment(video_dir: Path, segment_id: str) -> Optional[VideoGroup]:
-    return VideoDiscoverer(video_dir).discover_one(segment_id)
+def discover_segment(
+    video_dir: Path, segment_id: str, log: logging.Logger
+) -> Optional[VideoGroup]:
+    return VideoDiscoverer(video_dir, log=log).discover_one(segment_id)
 
 
 def discover(
-    audio_dir: Path, video_dir: Path, default_serial_channel: int = 3
+    audio_dir: Path,
+    video_dir: Path,
+    log: logging.Logger,
+    default_serial_channel: int = 3,
 ) -> AudioVideoSession:
     return Discoverer(
-        audio_dir, video_dir, default_serial_channel=default_serial_channel
+        audio_dir, video_dir, default_serial_channel=default_serial_channel, log=log
     ).run()
 
 

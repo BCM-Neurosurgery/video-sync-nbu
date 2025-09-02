@@ -1,10 +1,12 @@
 """
-Audio discovery (fast path, no probing)
-======================================
+Audio discovery (fast path, WAV header sr; MP3 sr via ffprobe; no duration probing)
+==================================================================================
 
 Lightweight, naming-driven discovery of channelized audio files for the A/V pipeline.
-This module **does not probe** audio durations or sample rates to keep directory
-scans fast even when files span many hours/days.
+This module **does not probe durations** (to stay fast on multi-day recordings), but
+it **does determine sampling rate**:
+- **WAV**: read the RIFF/WAVE `fmt ` chunk (header-only, O(1) bytes).
+- **MP3**: query **ffprobe** for the audio stream sample rate (fast, no full decode).
 
 Validation rules (enforced)
 ---------------------------
@@ -18,26 +20,15 @@ Validation rules (enforced)
 
 Notes
 -----
-- Since we skip probing, created `Audio`/`SerialAudio` objects populate
-  ``duration=0.0`` and ``sample_rate=0`` as placeholders.
-- Any duration equality checks are therefore **informational only** unless a later
-  step fills in accurate metadata.
-
-Examples
---------
-Typical directory (either 2 or 3 files sharing the same extension)::
-
-    TRBD002_08062025-01.mp3
-    TRBD002_08062025-02.mp3
-    TRBD002_08062025-03.mp3
-
-or::
-
-    TRBD002_08062025-01.wav
-    TRBD002_08062025-03.wav
+- We set `Audio.duration = 0.0` as a placeholder (no duration probing).
+- `Audio.sample_rate` is filled via a **WAV header read** or **ffprobe (MP3)**.
+  If ffprobe is unavailable or fails to report, we fall back to ``0`` and log.
 """
 
 import logging
+import shutil
+import struct
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Iterable
 
@@ -57,7 +48,8 @@ from scripts.models import (
 
 class AudioDiscoverer(_DirMixin):
     """
-    Discover channelized audio files and build an `AudioGroup` (no probing).
+    Discover channelized audio files and build an `AudioGroup`
+    using filename rules and fast sampling-rate detection.
 
     Parameters
     ----------
@@ -71,10 +63,8 @@ class AudioDiscoverer(_DirMixin):
 
     Notes
     -----
-    - Discovery enforces filename/structure invariants (see module docstring)
-      but intentionally **skips** duration/sample-rate probing for performance.
-    - `Audio.duration` and `Audio.sample_rate` are set to placeholder values
-      (``0.0`` and ``0``) in this fast mode.
+    - Duration probing is intentionally **skipped** for performance.
+    - Sampling rate is obtained via **WAV header** (RIFF `fmt `) or **ffprobe** (MP3).
     """
 
     def __init__(
@@ -240,9 +230,132 @@ class AudioDiscoverer(_DirMixin):
             )
         return None
 
+    # ---- sampling-rate helpers ---------------------------------------------
+
+    def _sniff_wav_samplerate(self, p: Path) -> int:
+        """
+        Read WAV `fmt ` chunk to obtain sample rate (header-only).
+
+        Parameters
+        ----------
+        p : pathlib.Path
+            Path to a WAV file.
+
+        Returns
+        -------
+        int
+            Sample rate in Hz, or ``0`` if parsing fails.
+        """
+        try:
+            with p.open("rb") as f:
+                header = f.read(12)
+                if (
+                    len(header) < 12
+                    or header[0:4] != b"RIFF"
+                    or header[8:12] != b"WAVE"
+                ):
+                    return 0
+                # Iterate chunks until `fmt ` is found
+                while True:
+                    chunk_hdr = f.read(8)
+                    if len(chunk_hdr) < 8:
+                        return 0
+                    chunk_id, chunk_size = (
+                        chunk_hdr[0:4],
+                        struct.unpack("<I", chunk_hdr[4:8])[0],
+                    )
+                    if chunk_id == b"fmt ":
+                        fmt_data = f.read(chunk_size)
+                        if len(fmt_data) < 8:
+                            return 0
+                        # sampleRate is at offset 4..8 in fmt chunk
+                        return struct.unpack("<I", fmt_data[4:8])[0]
+                    else:
+                        # Skip chunk (account for padding to even)
+                        f.seek(chunk_size + (chunk_size & 1), 1)
+        except Exception:
+            return 0
+
+    def _sniff_mp3_samplerate(self, p: Path) -> int:
+        """
+        Use `ffprobe` to obtain MP3 stream sample rate.
+
+        Parameters
+        ----------
+        p : pathlib.Path
+            Path to an MP3 file.
+
+        Returns
+        -------
+        int
+            Sample rate in Hz, or ``0`` if ffprobe is unavailable or fails.
+
+        Notes
+        -----
+        - Fast query (no full decode): reads container/stream headers.
+        - Falls back to a larger probe window if the first attempt yields nothing.
+        """
+        if shutil.which("ffprobe") is None:
+            self.log.error(
+                "ffprobe not found on PATH; cannot sniff MP3 sample rate for %s", p.name
+            )
+            return 0
+
+        base_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate",
+            "-of",
+            "csv=p=0",
+            str(p),
+        ]
+        try:
+            r = subprocess.run(
+                base_cmd, capture_output=True, text=True, check=True, timeout=10
+            )
+            out = r.stdout.strip()
+            if out.isdigit():
+                return int(out)
+        except Exception as e:
+            self.log.debug("ffprobe quick sr query failed for %s: %s", p.name, e)
+
+        # Second attempt with larger probe/analyzeduration
+        deep_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-probesize",
+            "5M",
+            "-analyzeduration",
+            "5M",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate",
+            "-of",
+            "csv=p=0",
+            str(p),
+        ]
+        try:
+            r2 = subprocess.run(
+                deep_cmd, capture_output=True, text=True, check=True, timeout=20
+            )
+            out2 = r2.stdout.strip()
+            if out2.isdigit():
+                return int(out2)
+        except Exception as e:
+            self.log.debug("ffprobe deep sr query failed for %s: %s", p.name, e)
+
+        self.log.warning("Could not obtain sample rate via ffprobe for %s", p.name)
+        return 0
+
     def _build_audio_obj(self, ch: int, p: Path) -> Audio:
         """
-        Construct an `Audio` object without probing (fast placeholders).
+        Construct an `Audio` object with fast sample rate (no duration probe).
 
         Parameters
         ----------
@@ -254,15 +367,22 @@ class AudioDiscoverer(_DirMixin):
         Returns
         -------
         Audio
-            Object with `duration=0.0` and `sample_rate=0` (not probed). File size
-            is filled for convenience.
+            Object with `duration=0.0` (placeholder) and `sample_rate` from
+            WAV header or ffprobe (MP3); falls back to ``0`` if detection fails.
         """
         ext = p.suffix.lower().lstrip(".")
-        # Fast path: skip probes to avoid heavy I/O on long recordings.
-        dur, sr = 0.0, 0
+        if ext == "wav":
+            sr = self._sniff_wav_samplerate(p)
+        elif ext == "mp3":
+            sr = self._sniff_mp3_samplerate(p)
+        else:
+            sr = 0
+        if sr == 0:
+            self.log.warning("Could not determine sample rate for %s", p.name)
+
         return Audio(
             path=p,
-            duration=dur,
+            duration=0.0,
             file_size=_filesize_mb(p),
             sample_rate=sr,
             extension=ext,
@@ -271,7 +391,7 @@ class AudioDiscoverer(_DirMixin):
 
     def _build_serial_audio_obj(self, ch: int, p: Path) -> SerialAudio:
         """
-        Construct a `SerialAudio` object without probing (fast placeholders).
+        Construct a `SerialAudio` object (no duration probe, fast SR).
 
         Parameters
         ----------
@@ -283,7 +403,8 @@ class AudioDiscoverer(_DirMixin):
         Returns
         -------
         SerialAudio
-            Object mirroring `Audio` fields with placeholder duration/sample_rate.
+            Object mirroring `Audio` fields with placeholder duration and detected
+            sample rate when available.
         """
         a = self._build_audio_obj(ch, p)
         return SerialAudio(
@@ -344,9 +465,8 @@ class AudioDiscoverer(_DirMixin):
 
         Notes
         -----
-        In fast (no-probe) mode, all durations are placeholders (0.0), so this
-        check is informational only. Consider running a separate verification step
-        that fills accurate metadata before relying on duration equality.
+        In fast (no-duration-probe) mode, all durations are placeholders (0.0),
+        so this check is informational only.
         """
         if not audios:
             return
@@ -366,7 +486,7 @@ class AudioDiscoverer(_DirMixin):
 
     def get_audio_group(self) -> AudioGroup:
         """
-        Discover and return an `AudioGroup` from `audio_dir` (no probing).
+        Discover and return an `AudioGroup` from `audio_dir` (no duration probing).
 
         Workflow
         --------
@@ -374,7 +494,7 @@ class AudioDiscoverer(_DirMixin):
         2) Validate naming/count/channel rules.
         3) Choose a single file per channel, preferring WAV.
         4) Infer shared extension (warn if mixed).
-        5) Build `Audio`/`SerialAudio` objects with placeholder metadata.
+        5) Build `Audio`/`SerialAudio` objects with WAV-header or ffprobe (MP3) SR.
         6) Optionally log duration equality (informational in fast mode).
 
         Returns

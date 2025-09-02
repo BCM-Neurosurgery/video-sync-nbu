@@ -495,6 +495,7 @@ def sync_one_segment(
         Path(audio_dir),
         Path(video_dir),
         default_serial_channel=serial_channel,
+        log=logger,
     )
     ag = sess.audiogroup
 

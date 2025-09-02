@@ -293,7 +293,7 @@ def save_anchors_for_camera(
 
     index_map = load_serial_index_csv(serial_csv)
 
-    vg = discover_segment(video_dir, segment_id)
+    vg = discover_segment(video_dir, segment_id, logger)
     if vg is None:
         raise RuntimeError(f"Segment '{segment_id}' not found under {video_dir}")
 
