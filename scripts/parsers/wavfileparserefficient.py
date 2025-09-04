@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 wavfileparserefficient.py — Streaming, two-pass decoder for frame IDs embedded in audio,
-with project logging integration.
+with project logging integration + progress + memory usage.
 
 - Streaming FFmpeg decode (handles arbitrarily long MP3/WAV)
-- Pass 1: global min/max via streaming
-- Pass 2: normalize→binarize→fixed-window sampler
+- Pass 1: global min/max via streaming (with progress)
+- Pass 2: normalize→binarize→fixed-window sampler (with progress)
 - Outputs:
     raw.csv  (serial,start_sample,end_sample)
     raw_info.txt
@@ -24,7 +24,8 @@ python wavfileparserefficient.py /path/to/audio.(mp3|wav) \
     --site jamail \
     --threshold 0.5 \
     --outdir /path/to/output_dir \
-    [--log-level INFO] [--seg SEGID] [--cam CAMSERIAL]
+    [--log-level INFO] [--seg SEGID] [--cam CAMSERIAL] \
+    [--progress auto|bar|log|none] [--progress-interval 5] [--mem-interval 10]
 """
 
 from __future__ import annotations
@@ -33,7 +34,10 @@ import argparse
 import csv
 import logging
 import math
+import os
+import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +51,17 @@ from scripts.log.logutils import (
     configure_standalone_logging,
     log_context,
 )
+
+
+# Try tqdm lazily only if needed
+def _try_import_tqdm():
+    try:
+        from tqdm import tqdm  # type: ignore
+
+        return tqdm
+    except Exception:
+        return None
+
 
 # ---------------------------- Site presets (same as original) ----------------------------
 
@@ -77,6 +92,8 @@ BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
     },
 }
 
+# ---------------------------- Logger ----------------------------
+log = logging.getLogger("sync")
 
 # ---------------------------- Data classes ----------------------------
 
@@ -88,6 +105,72 @@ class DecodeStats:
     flips: bool
     best_offset: int
     monotonic_span: int
+
+
+# ---------------------------- Utils: memory + human formatting ----------------------------
+
+
+def _fmt_bytes(b: int) -> str:
+    # human-friendly binary units
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    n = float(b)
+    for u in units:
+        if abs(n) < 1024.0 or u == units[-1]:
+            return f"{n:.1f} {u}"
+        n /= 1024.0
+    return f"{b} B"
+
+
+def _rss_and_peak() -> Tuple[int, Optional[int]]:
+    """
+    Return (rss_bytes, peak_bytes or None). Tries psutil, then resource, then /proc/self/status.
+    """
+    # 1) psutil
+    try:
+        import psutil  # type: ignore
+
+        p = psutil.Process()
+        mem = p.memory_info()
+        rss = int(mem.rss)
+        peak = getattr(mem, "peak_wset", None) or getattr(mem, "peak_pagefile", None)
+        # psutil peak fields are platform-specific; often None on Linux
+        return rss, int(peak) if peak is not None else None
+    except Exception:
+        pass
+
+    # 2) resource (ru_maxrss: kilobytes on Linux, bytes on macOS)
+    try:
+        import resource  # type: ignore
+
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        rss = None  # no current RSS via resource
+        peak = ru.ru_maxrss
+        # Heuristic: Linux returns KiB, macOS returns bytes
+        if sys.platform != "darwin":
+            peak = int(peak) * 1024
+        else:
+            peak = int(peak)
+        # Try /proc for current
+        cur = _rss_from_proc_status()
+        return cur if cur is not None else 0, peak
+    except Exception:
+        pass
+
+    # 3) /proc/self/status (Linux)
+    cur = _rss_from_proc_status()
+    return cur if cur is not None else 0, None
+
+
+def _rss_from_proc_status() -> Optional[int]:
+    try:
+        with open("/proc/self/status", "r") as f:
+            text = f.read()
+        m = re.search(r"VmRSS:\s+(\d+)\s+kB", text)
+        if m:
+            return int(m.group(1)) * 1024
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------- FFmpeg helpers ----------------------------
@@ -141,6 +224,31 @@ def ffprobe_sample_rate(input_path: str | Path) -> int:
         ) from e
 
 
+def ffprobe_duration_seconds(input_path: str | Path) -> float:
+    """Probe container-reported duration (seconds), best-effort."""
+    _, ffprobe = require_ffmpeg()
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=nw=1:nk=1",
+        str(input_path),
+    ]
+    try:
+        out = (
+            subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            .decode("utf-8")
+            .strip()
+        )
+        dur = float(out)
+        return dur if dur > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
 def spawn_ffmpeg_pcm_pipe(
     input_path: str | Path, force_sample_rate: Optional[int] = None
 ) -> subprocess.Popen:
@@ -164,13 +272,7 @@ def spawn_ffmpeg_pcm_pipe(
     ]
     if force_sample_rate:
         args += ["-ar", str(force_sample_rate)]
-    args += [
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "pipe:1",
-    ]
+    args += ["-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"]
     log.debug("spawn ffmpeg: %s", " ".join(map(str, args)))
     return subprocess.Popen(
         args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=256 * 1024
@@ -206,12 +308,81 @@ def iter_pcm_blocks(proc: subprocess.Popen, block_samples: int) -> Iterator[np.n
             leftover = data
 
 
+# ---------------------------- Progress helpers ----------------------------
+
+
+def _should_bar(progress_mode: str) -> bool:
+    if progress_mode == "bar":
+        return True
+    if progress_mode == "auto":
+        try:
+            return sys.stderr.isatty()
+        except Exception:
+            return False
+    return False
+
+
+class _LogProgress:
+    """Throttled progress via logger with memory usage in messages."""
+
+    def __init__(
+        self,
+        total: Optional[int],
+        label: str,
+        interval: float,
+        mem_interval: float,
+        sample_rate: Optional[int],
+    ):
+        self.total = total
+        self.label = label
+        self.interval = max(0.25, float(interval))
+        self.mem_interval = max(0.5, float(mem_interval))
+        self.sample_rate = sample_rate
+        self.done = 0
+        self._t0 = time.perf_counter()
+        self._last = self._t0
+        self._last_mem = self._t0
+
+    def update(self, n: int):
+        self.done += int(n)
+        t = time.perf_counter()
+        if t - self._last >= self.interval:
+            pct = f"{(100.0 * self.done / self.total):.1f}%" if self.total else "…"
+            dur = t - self._t0
+            rss, peak = _rss_and_peak()
+            mem_txt = ""
+            if t - self._last_mem >= self.mem_interval:
+                mem_txt = f" | rss={_fmt_bytes(rss)}" + (
+                    f", peak≈{_fmt_bytes(peak)}" if peak else ""
+                )
+                self._last_mem = t
+            if self.sample_rate and self.total:
+                secs_done = self.done / float(self.sample_rate)
+                secs_total = self.total / float(self.sample_rate)
+                log.info(
+                    "%s %s (%0.1fs/%0.1fs)%s",
+                    self.label,
+                    pct,
+                    secs_done,
+                    secs_total,
+                    mem_txt,
+                )
+            else:
+                log.info("%s %s (processed %d)%s", self.label, pct, self.done, mem_txt)
+            self._last = t
+
+    def close(self):
+        # final line
+        if self.total:
+            log.info("%s 100.0%% done.", self.label)
+
+
 # ---------------------------- Core decoder (streaming two-pass) ----------------------------
 
 
 class StreamingSerialDecoder:
     """
-    Streaming two-pass decoder; logs key milestones/timings.
+    Streaming two-pass decoder; logs key milestones/timings; supports progress + mem logs.
     """
 
     def __init__(
@@ -221,10 +392,17 @@ class StreamingSerialDecoder:
         target_sample_rate: Optional[int] = None,
         block_seconds: float = 2.0,
         ring_seconds: float = 2.0,
+        progress_mode: str = "log",  # auto|bar|log|none
+        progress_interval: float = 5.0,  # seconds between log updates
+        mem_interval: float = 10.0,  # seconds between mem stats in progress logs
     ) -> None:
         self.filepath = str(filepath)
         self._sr_probe = ffprobe_sample_rate(self.filepath)
         self.sample_rate = int(target_sample_rate or self._sr_probe)
+        self._dur_probe = ffprobe_duration_seconds(self.filepath)
+        self._expected_samples = (
+            int(self.sample_rate * self._dur_probe) if self._dur_probe > 0 else None
+        )
 
         # Derived sizes (in samples)
         self.block_samples = max(int(self.sample_rate * block_seconds), 1)
@@ -242,13 +420,19 @@ class StreamingSerialDecoder:
         self.counts: List[int] = []
         self.starts_total: int = 0
 
+        # progress config
+        self.progress_mode = progress_mode
+        self.progress_interval = progress_interval
+        self.mem_interval = mem_interval
+
         log.info(
-            "Init decoder: sr=%d Hz, block=%d samples (%.2fs), ring=%d samples (%.2fs)",
+            "Init decoder: sr=%d Hz, block=%d samples (%.2fs), ring=%d samples (%.2fs)%s",
             self.sample_rate,
             self.block_samples,
             self.block_samples / self.sample_rate,
             self.ring_capacity,
             self.ring_capacity / self.sample_rate,
+            f", dur≈{self._dur_probe:.2f}s" if self._dur_probe else "",
         )
 
     # -------------------- Pass 1: stats --------------------
@@ -260,7 +444,31 @@ class StreamingSerialDecoder:
         gmin = math.inf
         gmax = -math.inf
         n_total = 0
+
+        total_est = self._expected_samples
+        use_bar = _should_bar(self.progress_mode)
+        tqdm = _try_import_tqdm() if use_bar else None
+        pbar = None
+        lp = None
+
         try:
+            if use_bar and tqdm is not None and total_est:
+                pbar = tqdm(
+                    total=total_est,
+                    unit="smp",
+                    desc="Pass1 (min/max)",
+                    leave=False,
+                    dynamic_ncols=True,
+                )
+            elif self.progress_mode in ("auto", "log"):
+                lp = _LogProgress(
+                    total_est,
+                    "Pass1",
+                    self.progress_interval,
+                    self.mem_interval,
+                    self.sample_rate,
+                )
+
             for block in iter_pcm_blocks(proc, self.block_samples):
                 if block.size == 0:
                     continue
@@ -271,6 +479,20 @@ class StreamingSerialDecoder:
                     gmin = bmin
                 if bmax > gmax:
                     gmax = bmax
+
+                if pbar:
+                    pbar.update(block.size)
+                    # put mem in postfix occasionally
+                    if (
+                        int(pbar.n)
+                        % (self.sample_rate * max(1, int(self.mem_interval)))
+                        == 0
+                    ):
+                        rss, peak = _rss_and_peak()
+                        pbar.set_postfix_str(f"rss {_fmt_bytes(rss)}")
+                elif lp:
+                    lp.update(block.size)
+
         finally:
             try:
                 proc.stdout and proc.stdout.close()
@@ -278,6 +500,11 @@ class StreamingSerialDecoder:
             except Exception:
                 pass
             proc.kill()
+            if pbar:
+                pbar.close()
+            if lp:
+                lp.close()
+
         if not math.isfinite(gmin) or not math.isfinite(gmax) or n_total == 0:
             log.warning("Pass1: empty/invalid input (n_total=%d).", n_total)
             self._gmin = 0.0
@@ -290,13 +517,16 @@ class StreamingSerialDecoder:
         self._gmax = gmax
         self._n_total = n_total
         dt = time.perf_counter() - t0
+        rss, peak = _rss_and_peak()
         log.info(
-            "Pass1: done in %.2fs (min=%+.6f, max=%+.6f, samples=%d, dur=%.2fs)",
+            "Pass1: done in %.2fs (min=%+.6f, max=%+.6f, samples=%d, dur=%.2fs, rss=%s%s)",
             dt,
             self._gmin,
             self._gmax,
             self._n_total,
-            self._n_total / self.sample_rate,
+            self._n_total / self.sample_rate if self.sample_rate else 0.0,
+            _fmt_bytes(rss),
+            f", peak≈{_fmt_bytes(peak)}" if peak else "",
         )
 
     # -------------------- Helpers for pass 2 --------------------
@@ -375,10 +605,49 @@ class StreamingSerialDecoder:
         )
         t0 = time.perf_counter()
         proc = spawn_ffmpeg_pcm_pipe(self.filepath, self.sample_rate)
+
+        total_known = self._n_total if self._n_total > 0 else None
+        use_bar = _should_bar(self.progress_mode)
+        tqdm = _try_import_tqdm() if use_bar else None
+        pbar = None
+        lp = None
+        processed = 0
+
         try:
+            if use_bar and tqdm is not None and total_known:
+                pbar = tqdm(
+                    total=total_known,
+                    unit="smp",
+                    desc="Pass2 (decode)",
+                    leave=False,
+                    dynamic_ncols=True,
+                )
+            elif self.progress_mode in ("auto", "log"):
+                lp = _LogProgress(
+                    total_known,
+                    "Pass2",
+                    self.progress_interval,
+                    self.mem_interval,
+                    self.sample_rate,
+                )
+
             for pcm_block in iter_pcm_blocks(proc, self.block_samples):
                 if pcm_block.size == 0:
                     continue
+                processed += pcm_block.size
+
+                if pbar:
+                    pbar.update(pcm_block.size)
+                    if (
+                        int(pbar.n)
+                        % (self.sample_rate * max(1, int(self.mem_interval)))
+                        == 0
+                    ):
+                        rss, peak = _rss_and_peak()
+                        pbar.set_postfix_str(f"rss {_fmt_bytes(rss)}")
+                elif lp:
+                    lp.update(pcm_block.size)
+
                 sig01 = self._normalize01(pcm_block, self._gmin, self._gmax)
                 if sig01 is None:
                     continue
@@ -422,15 +691,22 @@ class StreamingSerialDecoder:
             except Exception:
                 pass
             proc.kill()
+            if pbar:
+                pbar.close()
+            if lp:
+                lp.close()
 
         span = self._longest_plus_one_span(self.counts)
         dt = time.perf_counter() - t0
+        rss, peak = _rss_and_peak()
         log.info(
-            "Pass2: done in %.2fs (decoded=%d frames, longest +1 span=%d, starts_total=%d)",
+            "Pass2: done in %.2fs (decoded=%d frames, longest +1 span=%d, starts_total=%d, rss=%s%s)",
             dt,
             len(self.counts),
             span,
             starts_total,
+            _fmt_bytes(rss),
+            f", peak≈{_fmt_bytes(peak)}" if peak else "",
         )
         return DecodeStats(
             bytes_total=len(self.counts) * 5,
@@ -495,12 +771,16 @@ def write_info_txt(
     n_total_samples: int,
 ) -> Path:
     dur_s = (n_total_samples / sample_rate) if sample_rate else 0.0
+    rss, peak = _rss_and_peak()
     lines = [
         f"audio_input: {audio_input}",
         f"sample_rate_hz: {sample_rate}",
         f"duration_s: {dur_s:.6f}",
         f"processed_at: {datetime.now().isoformat(timespec='seconds')}",
+        f"rss_bytes: {rss}",
     ]
+    if peak:
+        lines.append(f"peak_bytes: {peak}")
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -513,7 +793,7 @@ def write_info_txt(
 
 def _main() -> None:
     ap = argparse.ArgumentParser(
-        description="Efficient, streaming decoder for frame IDs (FFmpeg-backed) with project logging."
+        description="Efficient, streaming decoder for frame IDs (FFmpeg-backed) with project logging + progress."
     )
     ap.add_argument("audio", help="Path to input audio (.mp3 or .wav)")
     ap.add_argument(
@@ -532,13 +812,13 @@ def _main() -> None:
         "--block-seconds",
         type=float,
         default=2.0,
-        help="Streaming PCM block size in seconds (default: 2.0)",
+        help="Streaming PCM block size in seconds",
     )
     ap.add_argument(
         "--ring-seconds",
         type=float,
         default=2.0,
-        help="Ring buffer capacity in seconds (default: 2.0)",
+        help="Ring buffer capacity in seconds",
     )
     ap.add_argument(
         "--target-sample-rate",
@@ -547,12 +827,31 @@ def _main() -> None:
         help="Optional resample rate (0 = keep source rate)",
     )
 
-    # ---- Logging-specific CLI (new) ----
+    # ---- Progress & Logging CLI ----
+    ap.add_argument(
+        "--progress",
+        choices=["auto", "bar", "log", "none"],
+        default="log",
+        help="Progress display: bar=use tqdm when possible, log=periodic logs, auto=bar if TTY else log, none=off",
+    )
+    ap.add_argument(
+        "--progress-interval",
+        type=float,
+        default=5.0,
+        help="Seconds between progress log lines",
+    )
+    ap.add_argument(
+        "--mem-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between memory stats in progress",
+    )
+
     ap.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging level for standalone mode (default: INFO)",
+        help="Logging level for standalone mode",
     )
     ap.add_argument(
         "--seg",
@@ -572,7 +871,6 @@ def _main() -> None:
     seg_for_log = args.seg or audio_path.stem
     cam_for_log = args.cam or "-"
     configure_standalone_logging(args.log_level, seg=seg_for_log, cam=cam_for_log)
-    # Refresh logger ref after potential config
     global log
     log = logging.getLogger("sync")
 
@@ -585,6 +883,9 @@ def _main() -> None:
             target_sample_rate=(args.target_sample_rate or None),
             block_seconds=max(0.25, float(args.block_seconds)),
             ring_seconds=max(float(args.ring_seconds), 2.0),
+            progress_mode=args.progress,
+            progress_interval=args.progress_interval,
+            mem_interval=args.mem_interval,
         )
 
         # Run decode
