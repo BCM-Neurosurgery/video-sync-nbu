@@ -74,3 +74,11 @@ class AudioPlanError(Exception):
     """Raised when audio plan application fails."""
 
     pass
+
+
+class FFmpegNotFoundError(RuntimeError):
+    """Raised when ffmpeg binary is not found."""
+
+
+class SplitFailureError(RuntimeError):
+    """Raised when ffmpeg completes without producing expected output."""
