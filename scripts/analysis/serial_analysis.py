@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-serial_diag_cli_jsonparser.py — Diagnose discontinuities in integer sequences from:
-  • a CSV column (pandas), or
-  • a camera JSON via the provided JsonParser (chunk_serial_data, frame_id, frame_id_reconstructed).
+serial_analysis.py — Diagnose discontinuities in integer sequences from a CSV column.
 
 Categories (expect +1):
 - ok        : diff == +1
@@ -16,14 +14,6 @@ Extras
 - Reports:
     1) Adjacent-duplicate events (value -> how many times it repeated immediately)
     2) Values that appear in ≥2 non-consecutive groups (a “group” is a maximal block of the same value)
-
-Behavior change (JSON input):
-- If you pass a .json and DO NOT provide --cam-serial, the script will:
-    * process ALL available cameras in that JSON, and
-    * for EACH camera, analyze BOTH 'chunk_serial_data' and 'frame_id',
-    * saving text reports next to the JSON as:
-          <json_stem>.<CAM>-chunk-serial.txt
-          <json_stem>.<CAM>-frame-id.txt
 """
 from __future__ import annotations
 
@@ -36,7 +26,6 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
-from scripts.parsers.jsonfileparser import JsonParser
 
 # -----------------------------
 # Labels
@@ -98,44 +87,6 @@ def load_series_from_csv(path: str, column: str = "serial") -> pd.Series:
     if s.size < 2:
         raise ValueError("Fewer than 2 numeric values in the specified column.")
     return s.reset_index(drop=True)
-
-
-def load_series_from_json_with_parser(
-    path: str, field: str, cam_serial: str
-) -> pd.Series:
-    """Use the provided JsonParser to extract a per-camera series.
-
-    field: one of 'chunk_serial_data', 'frame_id', 'frame_id_reconstructed'
-    """
-    parser = JsonParser(path)
-    if cam_serial not in parser.get_camera_serials():
-        raise ValueError(
-            f"Camera serial {cam_serial!r} not found. Available: {parser.get_camera_serials()}"
-        )
-
-    df = parser.get_camera_df(cam_serial)
-    if field == "chunk_serial_data":
-        series = (
-            pd.to_numeric(df["chunk_serial_data"], errors="coerce")
-            .dropna()
-            .astype("int64")
-        )
-    elif field == "frame_id":
-        series = pd.to_numeric(df["frame_id"], errors="coerce").dropna().astype("int64")
-    elif field == "frame_id_reconstructed":
-        col = "frame_ids_reconstructed"
-        if col not in df.columns:
-            raise ValueError(f"Expected column '{col}' not found in camera dataframe")
-        series = pd.to_numeric(df[col], errors="coerce").dropna().astype("int64")
-    else:
-        raise ValueError(
-            "field must be one of: chunk_serial_data, frame_id, frame_id_reconstructed"
-        )
-
-    if series.size < 2:
-        raise ValueError("Fewer than 2 numeric values extracted from JSON field.")
-
-    return series.reset_index(drop=True)
 
 
 # -----------------------------
@@ -389,37 +340,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Analyze discontinuities (ok, duplicate, forward, drop) in a monotonically increasing "
-            "integer sequence from a CSV column or a camera JSON via JsonParser.\n\n"
-            "JSON default: if --cam-serial is omitted, all cameras are processed and per-camera text "
-            "reports are written next to the JSON: <stem>.<CAM>-chunk-serial.txt and <stem>.<CAM>-frame-id.txt."
+            "integer sequence from a CSV column."
         )
     )
-    p.add_argument("path", help="Path to the CSV or JSON file")
-    p.add_argument(
-        "--input",
-        choices=["auto", "csv", "json"],
-        default="auto",
-        help="Treat input as csv/json (default: auto by extension)",
-    )
-
-    # CSV options
+    p.add_argument("path", help="Path to the CSV file")
     p.add_argument(
         "--column", default="serial", help="CSV column name (default: serial)"
-    )
-
-    # JSON options (via JsonParser)
-    p.add_argument(
-        "--field",
-        choices=["chunk_serial_data", "frame_id", "frame_id_reconstructed"],
-        default="chunk_serial_data",
-        help="JSON field to analyze (when a single camera is specified)",
-    )
-    p.add_argument(
-        "--cam-serial",
-        help="Camera serial string, e.g., '24253458'. If omitted for JSON, ALL cameras are processed.",
-    )
-    p.add_argument(
-        "--list-cameras", action="store_true", help="Print JSON camera serials and exit"
     )
 
     # Analysis/reporting
@@ -446,27 +372,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Write a text report to this path. "
-            "For CSV input, defaults to saving next to the CSV with the same name but .txt."
+            "Default: save next to the CSV with the same name but .txt."
         ),
     )
     p.add_argument(
         "--out-json",
         default=None,
-        help="Write a JSON report to this path (optional; single series modes only)",
+        help="Write a JSON report to this path (optional; single series only)",
     )
     return p
-
-
-def _detect_input_kind(path: str, forced: str) -> str:
-    if forced != "auto":
-        return forced
-    lower = path.lower()
-    if lower.endswith(".csv"):
-        return "csv"
-    if lower.endswith(".json"):
-        return "json"
-    # default to csv if unknown
-    return "csv"
 
 
 def _write_text(path: Path, content: str) -> None:
@@ -494,153 +408,31 @@ def _analyze_and_report_series(
     return report
 
 
-def _process_json_all_cameras(
-    json_path: Path, *, expect_step: int, top: int, hist_cols: int
-) -> int:
-    """Process all cameras in the JSON; write per-camera text files for chunk_serial_data and frame_id."""
-    try:
-        parser = JsonParser(str(json_path))
-        cams = parser.get_camera_serials()
-    except Exception as e:
-        logging.error(f"{json_path.name}: {e}")
-        return 2
-
-    if not cams:
-        logging.error(f"No cameras found in {json_path.name}")
-        return 2
-
-    written = 0
-    for cam in cams:
-        cam_str = str(cam)
-
-        # chunk_serial_data
-        try:
-            s_chunk = load_series_from_json_with_parser(
-                str(json_path), field="chunk_serial_data", cam_serial=cam_str
-            )
-            rep_chunk = _analyze_and_report_series(
-                s_chunk,
-                src_desc=f"JSON:chunk_serial_data:cam={cam_str}",
-                expect_step=expect_step,
-                top=top,
-                hist_cols=hist_cols,
-            )
-            out_chunk = json_path.with_name(
-                f"{json_path.stem}.{cam_str}-chunk-serial.txt"
-            )
-            _write_text(out_chunk, rep_chunk)
-            logging.info(f"Analysis written to {out_chunk}")
-            written += 1
-        except Exception as e:
-            logging.warning(f"{json_path.name} cam={cam_str} chunk_serial_data: {e}")
-
-        # frame_id
-        try:
-            s_frame = load_series_from_json_with_parser(
-                str(json_path), field="frame_id", cam_serial=cam_str
-            )
-            rep_frame = _analyze_and_report_series(
-                s_frame,
-                src_desc=f"JSON:frame_id:cam={cam_str}",
-                expect_step=expect_step,
-                top=top,
-                hist_cols=hist_cols,
-            )
-            out_frame = json_path.with_name(f"{json_path.stem}.{cam_str}-frame-id.txt")
-            _write_text(out_frame, rep_frame)
-            logging.info(f"Analysis written to {out_frame}")
-            written += 1
-        except Exception as e:
-            logging.warning(f"{json_path.name} cam={cam_str} frame_id: {e}")
-
-    if written == 0:
-        return 3
-    logging.info(f"{written} report(s) written next to {json_path.name}")
-    return 0
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    kind = _detect_input_kind(args.path, args.input)
-
-    # CSV mode
-    if kind == "csv":
-        try:
-            series = load_series_from_csv(args.path, args.column)
-            report = _analyze_and_report_series(
-                series,
-                src_desc=f"CSV:{args.column}",
-                expect_step=args.expect_step,
-                top=args.top,
-                hist_cols=args.hist_cols,
-            )
-
-            # Default: same directory/name as CSV, but with .txt
-            out_text_path = (
-                Path(args.out_text)
-                if args.out_text
-                else Path(args.path).with_suffix(".txt")
-            )
-            _write_text(out_text_path, report)
-            logging.info(f"Serial Analysis written to {out_text_path}")
-
-            if args.out_json:
-                ids = series.astype(int).tolist()
-                result = analyze(ids, expect_step=args.expect_step, top_k=args.top)
-                with open(args.out_json, "w", encoding="utf-8") as f:
-                    json.dump(asdict(result), f, indent=2)
-                logging.info(f"JSON report written to {args.out_json}")
-
-            return 0
-        except Exception as e:
-            logging.error(str(e))
-            return 2
-
-    # JSON mode
-    json_path = Path(args.path)
-    if args.list_cameras:
-        try:
-            parser = JsonParser(str(json_path))
-            logging.info(f"serials: {parser.get_camera_serials()}")
-            return 0
-        except Exception as e:
-            logging.error(str(e))
-            return 2
-
-    # Default behavior: process ALL cameras if --cam-serial not provided
-    if not args.cam_serial:
-        return _process_json_all_cameras(
-            json_path,
-            expect_step=args.expect_step,
-            top=args.top,
-            hist_cols=args.hist_cols,
-        )
-
-    # Single-camera JSON analysis (respects --field, --out-text, --out-json)
+    # CSV mode only
     try:
-        series = load_series_from_json_with_parser(
-            str(json_path), field=args.field, cam_serial=str(args.cam_serial)
-        )
+        series = load_series_from_csv(args.path, args.column)
         report = _analyze_and_report_series(
             series,
-            src_desc=f"JSON:{args.field}:cam={args.cam_serial}",
+            src_desc=f"CSV:{args.column}",
             expect_step=args.expect_step,
             top=args.top,
             hist_cols=args.hist_cols,
         )
 
-        if args.out_text:
-            outp = Path(args.out_text)
-            _write_text(outp, report)
-            logging.info(f"Serial analysis written to {outp}")
-        else:
-            logging.info(
-                "Serial analysis complete (no text file requested; use --out-text to save)."
-            )
+        # Default: same directory/name as CSV, but with .txt
+        out_text_path = (
+            Path(args.out_text)
+            if args.out_text
+            else Path(args.path).with_suffix(".txt")
+        )
+        _write_text(out_text_path, report)
+        logging.info(f"Serial Analysis written to {out_text_path}")
 
         if args.out_json:
             ids = series.astype(int).tolist()
@@ -652,7 +444,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     except Exception as e:
         logging.error(str(e))
-        return 3
+        return 2
 
 
 if __name__ == "__main__":

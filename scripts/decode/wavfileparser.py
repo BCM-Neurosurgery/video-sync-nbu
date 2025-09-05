@@ -8,38 +8,59 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 import numpy as np
-import shutil
-import subprocess
 from datetime import datetime
+import json
+import logging
+
+from scripts.log.logutils import (
+    configure_standalone_logging,
+    log_context,
+)
 
 """
 Clean, MATLAB-style block decoder for frame IDs embedded in audio.
-Supports WAV (strict mono) and MP3 (via pydub+ffmpeg). Adds CSV export of decoded serials.
+Supports WAV (strict mono) and MP3 (via pydub+ffmpeg). Exports decoded serials to CSV.
 
 Usage
 -----
+# Single-file decode (writes raw.csv + raw_info.txt)
 python wavfileparser.py /path/to/audio.(wav|mp3) \
     --site jamail \
     --threshold 0.5 \
     --outdir /path/to/output_dir
 
+# Batch decode over split WAVs like '*-03-0XX.wav'
+# If you also pass a splitter manifest JSON, start/end samples become ABSOLUTE
+# offsets relative to the original MP3; otherwise they are per-file (relative).
+python wavfileparser.py \
+    --decode-split-dir /path/to/splits \
+    --outdir /path/to/csv_out \
+    --site jamail \
+    --pattern "*-03-[0-9][0-9][0-9].wav" \
+    --manifest /path/to/<stem>_manifest.json   # optional, enables absolute indices
+
 CSV format
 ----------
 Columns: serial,start_sample,end_sample
-Each row corresponds to one decoded serial value in chronological order.
+- Single-file mode: indices are relative to the provided file.
+- Batch mode:
+    • without --manifest → per-file (relative) indices
+    • with --manifest    → ABSOLUTE indices using each chunk’s start_sample from the manifest
 
 Recent additions
 ----------------
 1) Per-frame sample ranges (start/end indices) recorded to CSV.
-2) ffmpeg-based splitter: --split-minutes K [--split-outdir DIR --split-suffix SFX]
-   Writes mono 16-bit WAV chunks <stem>_<suffix>NNN.wav and EXITS before decoding.
-3) **Size guards**:
+2) **Size guards**:
    - Hard stop for MP3 near ≥4GB (pydub limitation).
    - Soft cap for any input via env VIDEOSYNC_DECODE_MAX_BYTES (default: 2 GiB).
-4) **Output directory**:
+3) **Output directory**:
    - Use --outdir to choose where outputs are written. Defaults to the audio file's directory.
-   - Output CSV name is fixed to raw.csv; a summary text raw_info.txt is also written.
+   - Output CSV name is fixed to raw.csv; a summary text raw_info.txt is also written (single-file mode).
+4) **Manifest support in batch mode**:
+   - Pass --manifest pointing to the splitter’s JSON to write absolute sample indices.
 """
+
+logger = logging.getLogger(__name__)
 
 # ---- Size guard thresholds ----
 MP3_PYDUB_SIZE_HARD_LIMIT = 4_000_000_000  # ~4GB; pydub/ffmpeg temp WAV header limit
@@ -386,7 +407,12 @@ class WavSerialDecoder:
         return self.decode_by_block(site=site, threshold=threshold)
 
     def save_counts_csv(
-        self, out_path: str | Path, counts: List[int], site: str = ""
+        self,
+        out_path: str | Path,
+        counts: List[int],
+        site: str = "",
+        *,
+        offset_samples: int = 0,
     ) -> Path:
         """Save decoded serials to CSV. Returns the output path.
 
@@ -400,6 +426,9 @@ class WavSerialDecoder:
             w.writerow(["serial", "start_sample", "end_sample"])
             for i, val in enumerate(counts):
                 s, e = ranges[i] if i < len(ranges) else ("", "")
+                # apply absolute offset if provided
+                s = (s + offset_samples) if s != "" else s
+                e = (e + offset_samples) if e != "" else e
                 w.writerow([int(val), s, e])
         return out
 
@@ -438,12 +467,18 @@ def decode_to_raw(
     out_dir = Path(outdir) if outdir else audio_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info(
+        "Decoding %s (site=%s, threshold=%.3f)", audio_path.name, site, threshold
+    )
+
     csv_path = out_dir / "raw.csv"
     txt_path = out_dir / "raw_info.txt"
 
     dec = WavSerialDecoder(str(audio_path))
     counts, stats = dec.parse_counts(site=site, threshold=threshold)
-    dec.save_counts_csv(csv_path, counts, site=site)
+    dec.save_counts_csv(
+        csv_path, counts, site=site
+    )  # offset default keeps current behavior
 
     # Summary text
     duration_s = (
@@ -457,133 +492,174 @@ def decode_to_raw(
     ]
     txt_path.write_text("\n".join(summary) + "\n", encoding="utf-8")
 
+    logger.info(
+        "Done: %d frames, sr=%d Hz, dur=%.3fs, span(+1)=%d → %s ; %s",
+        len(counts),
+        dec.sample_rate,
+        duration_s,
+        getattr(stats, "monotonic_span", 0),
+        csv_path.name,
+        txt_path.name,
+    )
+
     return csv_path, txt_path, counts, stats
 
 
-# ---------------------- ffmpeg-based splitter ----------------------
-def split_audio_file(
-    input_path: str | Path,
-    minutes: int,
-    outdir: str | Path | None = None,
-    suffix: str = "chunk",
-    mono: bool = True,
-) -> List[Path]:
-    """Split an audio file into K-minute chunks using ffmpeg segment muxer.
-    - Works for huge MP3/WAV without loading into memory.
-    - Outputs mono 16-bit WAV chunks named <stem>_<suffix>NNN.wav in outdir (default: input's dir).
-    Returns a sorted list of created Paths.
+def _load_manifest_offsets(manifest: str | Path) -> Dict[str, int]:
     """
-    if minutes <= 0:
-        raise ValueError("minutes must be a positive integer")
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg not found on PATH. Please install ffmpeg.")
+    Load manifest JSON and return {filename -> start_sample} mapping.
+    Expects entries like: {"file": "name.wav", "start_sample": 123, ...} under "segments".
+    """
+    p = Path(manifest)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    segs = data.get("segments", []) or []
+    return {
+        str(seg.get("file")): int(seg.get("start_sample", 0))
+        for seg in segs
+        if "file" in seg
+    }
 
-    inp = Path(input_path)
-    outd = Path(outdir) if outdir else inp.parent
-    outd.mkdir(parents=True, exist_ok=True)
-    stem = inp.stem
-    pattern = outd / f"{stem}_{suffix}%03d.wav"
 
-    # Clean up any existing matching chunks to avoid mixing old/new files
-    for old in outd.glob(f"{stem}_{suffix}[0-9][0-9][0-9].wav"):
-        try:
-            old.unlink()
-        except Exception:
-            pass
+def decode_split_dir_to_csvs(
+    split_dir: str | Path,
+    outdir: str | Path,
+    *,
+    site: str = "jamail",
+    threshold: float = 0.5,
+    pattern: str = "*-03-[0-9][0-9][0-9].wav",
+    manifest: str | Path | None = None,
+) -> List[Path]:
+    """
+    Decode all split audio files in `split_dir` that match `pattern`
+    (e.g., '*-03-0XX.wav' / '*-03-XXX.wav') and save one CSV per file
+    with the **same base name** into `outdir`.
 
-    seg_seconds = int(minutes * 60)
-    cmd = [
-        ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(inp),
-        "-f",
-        "segment",
-        "-segment_time",
-        str(seg_seconds),
-        "-reset_timestamps",
-        "1",
-    ]
-    if mono:
-        cmd += ["-ac", "1"]
-    # Write PCM 16-bit WAV to be friendly with the existing decoder
-    cmd += ["-c:a", "pcm_s16le", str(pattern)]
+    The CSVs contain columns: serial,start_sample,end_sample.
+    """
+    in_dir = Path(split_dir)
+    out_dir = Path(outdir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(cmd, check=True)
+    logger.info(
+        "Batch decode: dir=%s, pattern=%s, manifest=%s",
+        in_dir,
+        pattern,
+        manifest if manifest else "-",
+    )
 
-    out_files = sorted(outd.glob(f"{stem}_{suffix}[0-9][0-9][0-9].wav"))
-    if not out_files:
-        raise RuntimeError("ffmpeg completed but produced no chunks (unexpected).")
-    return out_files
+    wav_paths = sorted(in_dir.glob(pattern))
+    logger.info("Found %d input file(s).", len(wav_paths))
+
+    offsets: Dict[str, int] = _load_manifest_offsets(manifest) if manifest else {}
+    outputs: List[Path] = []
+
+    for wav_path in wav_paths:
+        # stamp each file’s stem as seg for readability
+        with log_context(seg=wav_path.stem, cam="-"):
+            dec = WavSerialDecoder(str(wav_path))
+            counts, _stats = dec.parse_counts(site=site, threshold=threshold)
+
+            csv_out = out_dir / (wav_path.stem + ".csv")  # same name as input file
+            base = wav_path.name
+            offset = int(offsets.get(base, 0))
+            logger.info("Decoding %s (offset=%d)", base, offset)
+            dec.save_counts_csv(csv_out, counts, site=site, offset_samples=offset)
+            logger.info("→ %s (%d rows)", csv_out.name, len(counts))
+
+            outputs.append(csv_out)
+
+    logger.info("Batch complete → wrote %d CSV file(s) into %s", len(outputs), out_dir)
+    return outputs
 
 
 # ---------------------- CLI ----------------------
 def _main() -> None:
     p = argparse.ArgumentParser(
-        description="Decode frame IDs from WAV/MP3 and save raw.csv + raw_info.txt next to the input or into --outdir."
+        description=(
+            "Decode frame IDs from WAV/MP3 into CSV. "
+            "Single-file mode (AUDIO provided) or batch mode (--decode-split-dir)."
+        )
     )
-    p.add_argument("audio", help="Path to input audio (.wav or .mp3)")
     p.add_argument(
-        "--site", default="jamail", help="Site preset (jamail|nbu_sleep|nbu_lounge)"
+        "audio",
+        nargs="?",
+        help="Path to input audio (.wav or .mp3). Required unless --decode-split-dir is used.",
+    )
+    p.add_argument(
+        "--site", required=True, help="Site preset (jamail|nbu_sleep|nbu_lounge)"
     )
     p.add_argument(
         "--threshold", type=float, default=0.5, help="Binarization threshold in [0,1]"
     )
     p.add_argument(
         "--outdir",
-        help="Directory to write outputs (default: same directory as input audio).",
+        help=(
+            "Output directory. "
+            "Single-file mode: where raw.csv/raw_info.txt go. "
+            "Batch mode (--decode-split-dir): where per-file CSVs go."
+        ),
     )
     p.add_argument(
-        "--split-minutes",
-        type=int,
-        help="Split the input into K-minute chunks and save WAVs (runs before decoding).",
+        "--decode-split-dir",
+        type=Path,
+        help="Batch mode: directory with split WAVs (e.g., *-03-0XX.wav).",
     )
     p.add_argument(
-        "--split-outdir",
-        help="Optional directory to write split chunks (default: same directory as input).",
+        "--pattern",
+        default="*-03-[0-9][0-9][0-9].wav",
+        help="Glob pattern for batch mode (default: '*-03-XXX.wav').",
     )
     p.add_argument(
-        "--split-suffix",
-        default="chunk",
-        help="Suffix in output names, e.g., 'chunk' -> <name>_chunkNNN.wav",
+        "--manifest",
+        type=Path,
+        help="Path to manifest JSON produced by the splitter; enables absolute sample indices in batch mode.",
     )
     args = p.parse_args()
 
-    # If splitting is requested, do it first and exit early to avoid loading huge files.
-    if args.split_minutes:
-        outs = split_audio_file(
-            input_path=args.audio,
-            minutes=args.split_minutes,
-            outdir=args.split_outdir,
-            suffix=args.split_suffix,
-            mono=True,
+    # --- Standalone console logging (no-op under driver) ---
+    seg_hint = (
+        (
+            Path(args.decode_split_dir).name
+            if args.decode_split_dir
+            else Path(args.audio).stem
         )
-        print(f"Split into {len(outs)} file(s):")
-        for pth in outs[:10]:
-            print("  ", pth)
-        if len(outs) > 10:
-            print("  ...")
+        if (args.decode_split_dir or args.audio)
+        else "-"
+    )
+    configure_standalone_logging(level="INFO", seg=seg_hint, cam="-")
+
+    if args.decode_split_dir:
+        # Batch mode
+        if not args.outdir:
+            p.error("--outdir is required when using --decode-split-dir")
+        with log_context(seg=seg_hint, cam="-"):
+            outputs = decode_split_dir_to_csvs(
+                split_dir=args.decode_split_dir,
+                outdir=args.outdir,
+                site=args.site,
+                threshold=args.threshold,
+                pattern=args.pattern,
+                manifest=args.manifest,
+            )
+            logger.info("Wrote %d CSV file(s) to %s", len(outputs), args.outdir)
         return
 
-    # Decode and write standardized outputs
-    out_csv, out_txt, counts, stats = decode_to_raw(
-        args.audio, args.outdir, site=args.site, threshold=args.threshold
-    )
+    # Single-file mode requires AUDIO
+    if not args.audio:
+        p.error("AUDIO is required unless --decode-split-dir is used")
 
-    # Console preview
-    print(stats)
-    if counts:
-        print("first 10:", counts[:10])
-        print("last 10 :", counts[-10:])
-    else:
-        print("No counts decoded.")
+    with log_context(seg=Path(args.audio).stem, cam="-"):
+        out_csv, out_txt, counts, stats = decode_to_raw(
+            args.audio, args.outdir, site=args.site, threshold=args.threshold
+        )
 
-    print(f"Saved {len(counts)} rows to {out_csv}")
-    print(f"Wrote summary to {out_txt}")
+        logger.info("Stats: %s", stats)
+        if counts:
+            logger.info("first 10: %s", counts[:10])
+            logger.info("last 10 : %s", counts[-10:])
+        else:
+            logger.warning("No counts decoded.")
+        logger.info("Saved %d rows to %s; summary → %s", len(counts), out_csv, out_txt)
 
 
 if __name__ == "__main__":
