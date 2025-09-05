@@ -1,10 +1,6 @@
 import json
-import pandas as pd
 import numpy as np
 from datetime import datetime
-from scripts.utils import (
-    replace_zeros,
-)
 from scripts.fix.jsonserialfixer import JsonSerialFixer
 from scripts.fix.frameidfixer import FrameIDFixer
 
@@ -49,34 +45,6 @@ class JsonParser:
 
     def get_camera_serials(self) -> list:
         return list(self.dic["serials"])
-
-    def get_camera_df(self, cam_serial: int):
-        """
-        Reader df with one camera
-        header
-        chunk_serial_data timestamp frame_id real_times
-        """
-        assert (
-            cam_serial in self.get_camera_serials()
-        ), "Camera serial not found in JSON"
-        cam_idx = self.get_camera_serials().index(cam_serial)
-        headers = [
-            "chunk_serial_data",
-            "frame_id",
-        ]
-        res = []
-        for i in range(self.get_length_of_recording()):
-            temp = {}
-            for header in headers:
-                if header == "real_times":
-                    temp[header] = self.dic[header][i]
-                else:
-                    temp[header] = self.dic[header][i][cam_idx]
-            res.append(temp)
-        df = pd.DataFrame.from_records(res)
-        df = self.reconstruct_frame_id(df)
-        df = replace_zeros(df, "chunk_serial_data")
-        return df
 
     def get_chunk_serial_list(self, cam_serial):
         """Return the list of chunk serial"""
