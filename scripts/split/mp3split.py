@@ -8,9 +8,27 @@ mp3split.py — Split a long MP3 into fixed-length WAV chunks (default: 1 hour)
 - CLI: python -m scripts.split.mp3split INPUT.mp3 [--outdir DIR] [--chunk-seconds 3600]
        [--overwrite | --clean] [-v] [--seg SEG] [--cam CAM] [--print-paths]
 - Logs a readable line RIGHT AFTER each chunk is finished (size stabilized).
+- Writes a manifest JSON alongside the chunks with absolute offsets.
 
-Outputs: "<stem>-NNN.wav" in the output folder (001, 002, …).
+Outputs: "<stem>-NNN.wav" and "<stem>_manifest.json" in the output folder (001, 002, …).
+
+Manifest schema (summary):
+{
+  "input": "<abs path to original mp3>",
+  "output_dir": "<abs outdir>",
+  "sample_rate_hz": 44100,
+  "channels": 1,
+  "chunk_seconds": 3600,
+  "start_number": 1,
+  "overwrite": false,
+  "clean": true,
+  "segments": [
+    {"file": "…-001.wav", "start_sample": 0, "num_samples": 158760000},
+    {"file": "…-002.wav", "start_sample": 158760000, "num_samples": 158760000}
+  ]
+}
 """
+
 
 from __future__ import annotations
 
@@ -20,6 +38,9 @@ import shutil
 import subprocess
 import time
 import re
+import json
+import wave
+import contextlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -140,6 +161,12 @@ def _delete_matching_chunks(outdir: Path, stem: str) -> int:
         except FileNotFoundError:
             pass
     return count
+
+
+def _wav_frames_and_rate(path: Path) -> Tuple[int, int, int]:
+    """Return (nframes, samplerate, nchannels) for a WAV file."""
+    with contextlib.closing(wave.open(str(path), "rb")) as wf:
+        return wf.getnframes(), wf.getframerate(), wf.getnchannels()
 
 
 # -----------------------------
@@ -279,6 +306,65 @@ def split_mp3_to_wav(
     if not produced:
         raise SplitFailureError("No chunks produced. Check the input and arguments.")
     log.info("Produced %d chunk(s).", len(produced))
+
+    # ---- Write manifest with absolute start_sample per chunk ----
+    segments: List[Dict[str, int | str]] = []
+    offset = 0
+    sr_seen: Optional[int] = None
+    ch_seen: Optional[int] = None
+
+    for p in produced:
+        try:
+            nframes, sr, nch = _wav_frames_and_rate(p)
+        except Exception as e:
+            log.warning("Failed to read WAV header for %s: %s", p.name, e)
+            continue
+
+        if sr_seen is None:
+            sr_seen = sr
+            ch_seen = nch
+        else:
+            if sr != sr_seen:
+                log.warning(
+                    "Sample rate mismatch: %s has %d Hz, expected %d Hz",
+                    p.name,
+                    sr,
+                    sr_seen,
+                )
+            if nch != ch_seen:
+                log.warning(
+                    "Channel count mismatch: %s has %d ch, expected %d ch",
+                    p.name,
+                    nch,
+                    ch_seen,
+                )
+
+        segments.append(
+            {
+                "file": p.name,
+                "start_sample": int(offset),  # absolute offset from original start
+                "num_samples": int(
+                    nframes
+                ),  # frames in this chunk (per channel frame count)
+            }
+        )
+        offset += nframes
+
+    manifest = {
+        "input": str(input_path.resolve()),
+        "output_dir": str(outdir_path.resolve()),
+        "sample_rate_hz": sr_seen,
+        "channels": ch_seen,
+        "chunk_seconds": int(chunk_seconds),
+        "start_number": int(start_number),
+        "overwrite": bool(overwrite),
+        "clean": bool(clean),
+        "segments": segments,
+    }
+    manifest_path = outdir_path / f"{input_path.stem}_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    log.info("Wrote manifest: %s", manifest_path.name)
+
     return produced
 
 
