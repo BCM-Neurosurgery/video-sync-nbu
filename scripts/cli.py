@@ -44,6 +44,15 @@ Output folder layout (what this tool writes)
 --------------------------------------------
 output_dir structure
 - parent_out
+    - serial_audio_splitted (if --split used)
+        - TRBD002_08062025-03-001.wav
+        - TRBD002_08062025-03-002.wav
+        - ...
+        - TRBD002_08062025-03_manifest.json
+    - split_decoded (if --split used)
+        - TRBD002_08062025-03-001.csv
+        - TRBD002_08062025-03-002.csv
+        - ...
     - audio_decoded (shared across segments)
         - raw.csv
         - raw.txt
@@ -96,7 +105,7 @@ import argparse
 import logging
 from typing import Iterable
 
-from scripts.parsers.wavfileparser import decode_to_raw
+from scripts.parsers.wavfileparser import decode_to_raw, decode_split_dir_to_csvs
 from scripts.analysis.csv_serial_analysis import analyze_csv_serials
 from scripts.analysis.anchor_analysis import analyze_anchors_file
 from scripts.analysis.video_analysis import analyze_and_write
@@ -109,6 +118,8 @@ from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
 from scripts.align.sync import sync_one_segment
 from scripts.index.discover import AudioDiscoverer
+from scripts.merge.mergecsv import merge_split_csvs
+from scripts.split.mp3split import split_mp3_to_wav
 from scripts.models import AudioGroup
 from scripts.errors import (
     AudioGroupDiscoverError,
@@ -126,19 +137,13 @@ from scripts.errors import (
     AudioPlanError,
 )
 
-# Shared logging utilities
 from scripts.log.logutils import (
-    configure_logging,  # console + run log at <out_dir>/sync-run.log
-    attach_cam_logger,  # per-camera rotating file handler + adapter
-    log_context,  # context manager to stamp [seg/cam]
+    configure_logging,
+    attach_cam_logger,
+    log_context,
 )
 
-# Application logger (handlers live on root, configured by configure_logging)
 logger = logging.getLogger("cli")
-
-# --------------------------------------------------------------------------------------
-# Core helpers
-# --------------------------------------------------------------------------------------
 
 SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
 
@@ -220,11 +225,6 @@ def build_targets(
     return targets
 
 
-# --------------------------------------------------------------------------------------
-# Pipeline
-# --------------------------------------------------------------------------------------
-
-
 def run_pipeline(
     audio_dir: Path,
     video_dir: Path,
@@ -234,6 +234,12 @@ def run_pipeline(
     cameras: list[str] | None,
     log_level: str = "INFO",
     skip_decode: bool = False,
+    *,
+    do_split: bool = False,
+    split_chunk_seconds: int = 3600,
+    split_overwrite: bool = False,
+    split_clean: bool = False,
+    split_outdir: Path | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -274,6 +280,11 @@ def run_pipeline(
             parent_out=out_dir,
             cam_serials=cam_list,
             skip_decode=skip_decode,
+            do_split=do_split,
+            split_chunk_seconds=split_chunk_seconds,
+            split_overwrite=split_overwrite,
+            split_clean=split_clean,
+            split_outdir=split_outdir,
         )
         if summary["fail"]:
             failures += 1
@@ -294,6 +305,12 @@ def process_segment(
     parent_out: Path,
     cam_serials: Iterable[str],
     skip_decode: bool = False,
+    *,
+    do_split: bool = False,
+    split_chunk_seconds: int = 3600,
+    split_overwrite: bool = False,
+    split_clean: bool = False,
+    split_outdir: Path | None = None,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
     audio_decoded_dir = parent_out / "audio_decoded"
@@ -304,6 +321,8 @@ def process_segment(
     with log_context(seg=seg_id, cam="-"):
         try:
             if skip_decode:
+                if do_split:
+                    logger.info("--skip-decode is set; ignoring --split.")
                 decoded_raw_csv = audio_decoded_dir / "raw.csv"
                 if not decoded_raw_csv.exists():
                     logger.error("--skip-decode set but missing %s", decoded_raw_csv)
@@ -317,11 +336,68 @@ def process_segment(
                     logger.error("Raw analysis failed: %s", e)
                     summary["fail"].append("raw-analysis")
             else:
-                logger.info("Decoding serial…")
-                decoded_raw_csv, _, _, _ = decode_to_raw(
-                    audiogroup.serial_audio.path, audio_decoded_dir, site=site
-                )
-                logger.info("Decoded audio serial → %s", _name(decoded_raw_csv))
+                if do_split:
+                    # Split audio to <out>/serial_audio_splitted (or custom)
+                    serial_mp3 = Path(audiogroup.serial_audio.path)
+                    chunks_dir = split_outdir or (parent_out / "serial_audio_splitted")
+                    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+                    logger.info(
+                        "Splitting serial MP3 into %ds chunks at %s",
+                        split_chunk_seconds,
+                        _name(chunks_dir),
+                    )
+                    split_mp3_to_wav(
+                        input_mp3=serial_mp3,
+                        outdir=chunks_dir,
+                        chunk_seconds=split_chunk_seconds,
+                        start_number=1,
+                        overwrite=split_overwrite,
+                        clean=split_clean,
+                        ffmpeg_bin="ffmpeg",
+                        ffmpeg_loglevel="info",
+                    )
+
+                    # Manifest is written by the splitter; use it automatically if present.
+                    manifest_path = chunks_dir / f"{serial_mp3.stem}_manifest.json"
+                    if not manifest_path.exists():
+                        logger.warning("Manifest not found: %s", _name(manifest_path))
+                        manifest_path = None
+
+                    # Batch decode chunks and merge
+                    split_csv_dir = parent_out / "split_decoded"
+                    split_csv_dir.mkdir(parents=True, exist_ok=True)
+
+                    decode_split_dir_to_csvs(
+                        split_dir=chunks_dir,
+                        outdir=split_csv_dir,
+                        site=site,
+                        threshold=0.5,
+                        pattern=f"{serial_mp3.stem}-[0-9][0-9][0-9].wav",
+                        manifest=manifest_path,
+                    )
+
+                    merged = merge_split_csvs(
+                        split_dir=split_csv_dir,
+                        outdir=audio_decoded_dir,
+                        pattern="*.csv",
+                        manifest=manifest_path,
+                        output_name="raw.csv",
+                        gzip_output=False,
+                        dedupe=True,
+                        tolerance_samples=0,
+                        logger=logger,
+                    )
+                    decoded_raw_csv = merged
+                    logger.info("Merged per-chunk CSVs → %s", _name(decoded_raw_csv))
+                else:
+                    # Single-file decode
+                    logger.info("Decoding serial…")
+                    decoded_raw_csv, _, _, _ = decode_to_raw(
+                        audiogroup.serial_audio.path, audio_decoded_dir, site=site
+                    )
+                    logger.info("Decoded audio serial → %s", _name(decoded_raw_csv))
+
                 try:
                     _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
                     logger.info(
@@ -335,7 +411,7 @@ def process_segment(
             summary["fail"].append("decode")
             return summary
 
-        # ---- Stage: gapfill + analyze ----
+        # Gapfill
         try:
             gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
             logger.info(
@@ -600,6 +676,35 @@ if __name__ == "__main__":
         action="store_true",
         help="Reuse existing <out>/audio_decoded/raw.csv and skip audio serial decoding.",
     )
+    parser.add_argument(
+        "--split",
+        dest="do_split",
+        action="store_true",
+        help="Batch mode: split the serial MP3 into chunks, then decode+merge (manifest used automatically).",
+    )
+    parser.add_argument(
+        "--split-chunk-seconds",
+        type=int,
+        default=3600,
+        help="Chunk size in seconds when splitting.",
+    )
+    gsplit = parser.add_mutually_exclusive_group()
+    gsplit.add_argument(
+        "--split-overwrite",
+        action="store_true",
+        help="Allow overwriting existing chunk files when splitting.",
+    )
+    gsplit.add_argument(
+        "--split-clean",
+        action="store_true",
+        help="Delete existing chunk files before splitting.",
+    )
+    parser.add_argument(
+        "--split-outdir",
+        type=Path,
+        help="Where to place chunks when splitting (default: <out>/serial_audio_splitted).",
+    )
+
     args = parser.parse_args()
 
     configure_logging(args.out_dir, args.log_level)
@@ -613,5 +718,10 @@ if __name__ == "__main__":
         cameras=args.cameras,
         log_level=args.log_level,
         skip_decode=args.skip_decode,
+        do_split=args.do_split,
+        split_chunk_seconds=args.split_chunk_seconds,
+        split_overwrite=args.split_overwrite,
+        split_clean=args.split_clean,
+        split_outdir=args.split_outdir,
     )
     raise SystemExit(rc)
