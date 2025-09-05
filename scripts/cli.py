@@ -54,7 +54,7 @@ output_dir structure
         - TRBD002_08062025-03-002.csv (global index with --manifest)
         - ...
     - audio_decoded (shared across segments)
-        - raw.csv
+        - raw.csv (merged)
         - raw.txt
         - raw-gapfilled.csv
         - raw-gapfilled.txt
@@ -65,13 +65,17 @@ output_dir structure
             - work (intermediate artifacts)
                 - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
                 - gapfilled-filtered-anchors.txt
+
                 - gapfilled-filtered-clipped.csv              (CSV clipped to video window)
                 - gapfilled-filtered-clipped.txt
+
                 - gapfilled-filtered-clipped-local.csv        (clipped, localized to audio dir)
                 - gapfilled-filtered-clipped-local.txt
+
                 - gapfilled-filtered-clipped-local-editplan.json
                 - gapfilled-filtered-clipped-local-padded.csv
                 - gapfilled-filtered-clipped-local-padded.txt
+
                 - gapfilled-filtered-padded-anchors.json      (anchors after padding)
                 - gapfilled-filtered-padded-anchors.txt
             - audio_clipped
@@ -80,8 +84,8 @@ output_dir structure
             - audio_padded
                 - TRBD002_08062025-clipped-padded-01.mp3
                 - TRBD002_08062025-clipped-padded-03.mp3
-            - audio_clips                                     (intermediate audio outputs during sync)
-            - synced  (final synced videos)
+            - synced_audio
+            - synced_video  (final synced videos)
             - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
 
         - <camera_serial2>
@@ -643,8 +647,8 @@ def process_segment(
                         segment_id=seg_id,
                         cam_serial=cam,
                         anchors_json=padded_anchors,
-                        out_audio_dir=cam_out / "audio_clips",
-                        out_video_dir=cam_out / "synced",
+                        out_audio_dir=cam_out / "synced_audio",
+                        out_video_dir=cam_out / "synced_video",
                         serial_channel=3,
                     )
                     clog.info("synced ✔")
