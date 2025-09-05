@@ -51,7 +51,7 @@ output_dir structure
         - TRBD002_08062025-03_manifest.json
     - split_decoded (if --split used)
         - TRBD002_08062025-03-001.csv
-        - TRBD002_08062025-03-002.csv
+        - TRBD002_08062025-03-002.csv (global index with --manifest)
         - ...
     - audio_decoded (shared across segments)
         - raw.csv
@@ -64,16 +64,23 @@ output_dir structure
         - <camera_serial1> (e.g. 23512909)
             - work (intermediate artifacts)
                 - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
+                - gapfilled-filtered-anchors.txt
                 - gapfilled-filtered-clipped.csv              (CSV clipped to video window)
                 - gapfilled-filtered-clipped.txt
-                - gapfilled-filtered-clipped-editplan.json
-                - gapfilled-filtered-clipped-padded.csv
-                - gapfilled-filtered-clipped-padded.txt
+                - gapfilled-filtered-clipped-local.csv        (clipped, localized to audio dir)
+                - gapfilled-filtered-clipped-local.txt
+                - gapfilled-filtered-clipped-local-editplan.json
+                - gapfilled-filtered-clipped-local-padded.csv
+                - gapfilled-filtered-clipped-local-padded.txt
                 - gapfilled-filtered-padded-anchors.json      (anchors after padding)
+                - gapfilled-filtered-padded-anchors.txt
+            - audio_clipped
+                - TRBD002_08062025-clipped-01.mp3
+                - TRBD002_08062025-clipped-03.mp3
             - audio_padded
-                - TRBD002_08062025-padded-01.mp3
-                - TRBD002_08062025-padded-03.mp3
-            - audio_clips
+                - TRBD002_08062025-clipped-padded-01.mp3
+                - TRBD002_08062025-clipped-padded-03.mp3
+            - audio_clips                                     (intermediate audio outputs during sync)
             - synced  (final synced videos)
             - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
 
@@ -114,6 +121,7 @@ from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
 from scripts.align.collect_anchors import save_anchors_for_camera
 from scripts.clip.audiocsvclipper import clip_with_anchors
+from scripts.clip.audioclip import clip_from_csv
 from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
 from scripts.align.sync import sync_one_segment
@@ -274,6 +282,7 @@ def run_pipeline(
     for seg_id, cam_list in targets.items():
         summary = process_segment(
             video_in=video_dir,
+            audio_in=audio_dir,
             audiogroup=ag,
             seg_id=seg_id,
             site=site,
@@ -299,6 +308,7 @@ def run_pipeline(
 
 def process_segment(
     video_in: str,
+    audio_in: str,
     audiogroup: AudioGroup,
     seg_id: str,
     site: str,
@@ -520,7 +530,9 @@ def process_segment(
                         anchors_json=filtered_anchors,
                         output_csv=cam_out / "work" / "gapfilled-filtered-clipped.csv",
                     )
-                    clog.info("Clipped %s → %s", _name(clipped_csv), _name(clipped_csv))
+                    clog.info(
+                        "Clipped %s → %s", _name(filtered_csv), _name(clipped_csv)
+                    )
                     try:
                         _, clipped_txt = analyze_csv_serials(path=clipped_csv)
                         clog.info(
@@ -534,16 +546,40 @@ def process_segment(
                     summary["fail"].append(f"{cam}:clip")
                     continue
 
-                # Pad (build plan + fixed CSV)
+                # Clip audio and write localized CSV
+                try:
+                    _, _, local_csv = clip_from_csv(
+                        csv_path=clipped_csv,
+                        audio_dir=audio_in,
+                        out_dir=cam_out / "audio_clipped",
+                        sr=44100,
+                        margin_sec=5,
+                    )
+                    clog.info(
+                        "Clipped Audio, localized clipped CSV → %s", _name(local_csv)
+                    )
+                    try:
+                        _, local_txt = analyze_csv_serials(path=local_csv)
+                        clog.info(
+                            "Analyzed %s → %s", _name(local_csv), _name(local_txt)
+                        )
+                    except SerialAnalysisError as e:
+                        clog.error("local analysis failed: %s", e)
+                        summary["fail"].append(f"{cam}:local-analysis")
+                except ClipError as e:
+                    clog.error("Audio clip failed: %s", e)
+                    summary["fail"].append(f"{cam}:audio-clip")
+                    continue
+
                 try:
                     apadder = AudioPadder(
-                        csv_path=clipped_csv,
+                        csv_path=local_csv,
                         include_synthetic=True,
                         gap_policy="local",
                         sample_rate=44100,
                     )
                     _, _, padded_csv, padplan = apadder.run()
-                    clog.info("Padded %s → %s", _name(clipped_csv), _name(padded_csv))
+                    clog.info("Padded CSV → %s", _name(padded_csv))
                     clog.info("Padding plan saved to %s", _name(padplan))
                     try:
                         _, padded_txt = analyze_csv_serials(path=padded_csv)
@@ -559,18 +595,24 @@ def process_segment(
                     continue
 
                 # Apply plan to each program channel
-                for ch, audio in audiogroup.audios.items():
+                wavs = sorted((cam_out / "audio_clipped").glob("*.wav"))
+                if not wavs:
+                    clog.warning(
+                        "no clipped WAVs found in %s", _name(cam_out / "audio_clipped")
+                    )
+
+                for wav_path in wavs:
                     try:
                         applier = AudioPlanApplier(
-                            audio_path=audio.path,
+                            audio_path=wav_path,
                             plan_path=padplan,
                             out_dir=cam_out / "audio_padded",
                         )
                         out = applier.apply()
-                        clog.info("plan→ch%02d → %s", ch, _name(out))
+                        clog.info("plan applied → %s", _name(out))
                     except AudioPlanError as e:
-                        clog.error("plan apply ch%02d failed: %s", ch, e)
-                        summary["fail"].append(f"{cam}:plan-ch{ch}")
+                        clog.error("plan apply failed for %s: %s", wav_path.name, e)
+                        summary["fail"].append(f"{cam}:plan-{wav_path.stem}")
 
                 # Anchors from padded CSV
                 try:
