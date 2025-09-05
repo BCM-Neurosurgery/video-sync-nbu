@@ -112,7 +112,7 @@ import argparse
 import logging
 from typing import Iterable
 
-from scripts.parsers.wavfileparser import decode_to_raw, decode_split_dir_to_csvs
+from scripts.decode.wavfileparser import decode_to_raw, decode_split_dir_to_csvs
 from scripts.analysis.csv_serial_analysis import analyze_csv_serials
 from scripts.analysis.anchor_analysis import analyze_anchors_file
 from scripts.analysis.video_analysis import analyze_and_write
