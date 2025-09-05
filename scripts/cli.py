@@ -84,6 +84,7 @@ output_dir structure
             - audio_padded
                 - TRBD002_08062025-clipped-padded-01.mp3
                 - TRBD002_08062025-clipped-padded-03.mp3
+            - video_padded (TODO)
             - synced_audio
             - synced_video  (final synced videos)
             - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
