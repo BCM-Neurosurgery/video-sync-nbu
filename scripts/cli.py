@@ -22,9 +22,9 @@ python sync_driver.py \
 
 Speed-ups / resume
 ------------------
-- Use **--skip-decode** to reuse an existing decoded CSV at:
-  <out_dir>/audio_decoded/raw.csv
-  This skips the slow serial decoding and goes straight to gapfill→filter→… stages.
+- Use **--skip-decode** to reuse existing decoded + processed CSVs in:
+  <out_dir>/audio_decoded/raw.csv and raw-gapfilled-filtered.csv
+  This skips decoding, gapfill, and filter, and starts at per-camera steps.
 
 Input folder layout (discover expects this)
 -------------------------------------------
@@ -332,24 +332,38 @@ def process_segment(
     segment_out = parent_out / seg_id
     summary = {"segment": seg_id, "ok": [], "fail": []}
 
-    # ---- Stage: decode + analyze raw (segment-scoped context) ----
+    # We'll ensure filtered_csv is set in both paths
+    filtered_csv = None
+
+    # ---- Stage: decode/gapfill/filter (segment-scoped context) ----
     with log_context(seg=seg_id, cam="-"):
         try:
             if skip_decode:
                 if do_split:
                     logger.info("--skip-decode is set; ignoring --split.")
                 decoded_raw_csv = audio_decoded_dir / "raw.csv"
+                prefiltered_csv = audio_decoded_dir / "raw-gapfilled-filtered.csv"
+
+                missing_any = False
                 if not decoded_raw_csv.exists():
                     logger.error("--skip-decode set but missing %s", decoded_raw_csv)
                     summary["fail"].append("decode-missing")
+                    missing_any = True
+                if not prefiltered_csv.exists():
+                    logger.error("--skip-decode set but missing %s", prefiltered_csv)
+                    summary["fail"].append("filtered-missing")
+                    missing_any = True
+                if missing_any:
                     return summary
-                logger.info("Skip decode: using %s", _name(decoded_raw_csv))
-                try:
-                    _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("Analyzed raw.csv → %s", _name(raw_txt))
-                except SerialAnalysisError as e:
-                    logger.error("Raw analysis failed: %s", e)
-                    summary["fail"].append("raw-analysis")
+
+                logger.info(
+                    "Skip decode: using %s and %s",
+                    _name(decoded_raw_csv),
+                    _name(prefiltered_csv),
+                )
+
+                filtered_csv = prefiltered_csv
+
             else:
                 if do_split:
                     # Split audio to <out>/serial_audio_splitted (or custom)
@@ -421,45 +435,52 @@ def process_segment(
                 except SerialAnalysisError as e:
                     logger.error("Raw analysis failed: %s", e)
                     summary["fail"].append("raw-analysis")
+
+                # Gapfill
+                try:
+                    gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
+                    logger.info(
+                        "Gap-filled %s → %s",
+                        _name(decoded_raw_csv),
+                        _name(gapfilled_csv),
+                    )
+                    try:
+                        _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
+                        logger.info(
+                            "Analyzed %s → %s",
+                            _name(gapfilled_csv),
+                            _name(gapfilled_txt),
+                        )
+                    except SerialAnalysisError as e:
+                        logger.error("Gap-filled analysis failed: %s", e)
+                        summary["fail"].append("gapfilled-analysis")
+                except GapFillError as e:
+                    logger.error("Gap-fill failed: %s", e)
+                    summary["fail"].append("gapfill")
+                    return summary
+
+                # ---- Stage: filter + analyze ----
+                try:
+                    filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
+                    logger.info(
+                        "Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv)
+                    )
+                    try:
+                        _, filtered_txt = analyze_csv_serials(path=filtered_csv)
+                        logger.info(
+                            "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
+                        )
+                    except SerialAnalysisError as e:
+                        logger.error("Filtered analysis failed: %s", e)
+                        summary["fail"].append("filtered-analysis")
+                except FilteredError as e:
+                    logger.error("Filter failed: %s", e)
+                    summary["fail"].append("filter")
+                    return summary
+
         except AudioDecodingError as e:
             logger.error("Decode failed: %s", e)
             summary["fail"].append("decode")
-            return summary
-
-        # Gapfill
-        try:
-            gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-            logger.info(
-                "Gap-filled %s → %s", _name(decoded_raw_csv), _name(gapfilled_csv)
-            )
-            try:
-                _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-                logger.info(
-                    "Analyzed %s → %s", _name(gapfilled_csv), _name(gapfilled_txt)
-                )
-            except SerialAnalysisError as e:
-                logger.error("Gap-filled analysis failed: %s", e)
-                summary["fail"].append("gapfilled-analysis")
-        except GapFillError as e:
-            logger.error("Gap-fill failed: %s", e)
-            summary["fail"].append("gapfill")
-            return summary
-
-        # ---- Stage: filter + analyze ----
-        try:
-            filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-            logger.info("Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv))
-            try:
-                _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-                logger.info(
-                    "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
-                )
-            except SerialAnalysisError as e:
-                logger.error("Filtered analysis failed: %s", e)
-                summary["fail"].append("filtered-analysis")
-        except FilteredError as e:
-            logger.error("Filter failed: %s", e)
-            summary["fail"].append("filter")
             return summary
 
     # ---- Per camera workflow (camera-scoped context) ----
@@ -719,7 +740,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-decode",
         action="store_true",
-        help="Reuse existing <out>/audio_decoded/raw.csv and skip audio serial decoding.",
+        help="Reuse existing <out>/audio_decoded/raw.csv and raw-gapfilled-filtered.csv; skip decoding+gapfill+filter and start per-camera workflow.",
     )
     parser.add_argument(
         "--split",
