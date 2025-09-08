@@ -467,8 +467,6 @@ def process_segment(
         cam_out = segment_out / cam
         (cam_out / "work").mkdir(parents=True, exist_ok=True)
         (cam_out / "audio_padded").mkdir(parents=True, exist_ok=True)
-        (cam_out / "audio_clips").mkdir(parents=True, exist_ok=True)
-        (cam_out / "synced").mkdir(parents=True, exist_ok=True)
 
         # Per-camera file logger (tag all lines with [seg/cam])
         clog, cam_handler = attach_cam_logger(
