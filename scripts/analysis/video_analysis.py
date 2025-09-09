@@ -22,7 +22,7 @@ Outputs
       "video_meta": {"fps": <float>, "duration": <float>, "resolution": "<WxH>", "frame_count": <int>},
       "counts": {"ok": ..., "forward_jump": ..., "drop": ..., "duplicate": ...},
       "missing_frames": <int>,
-      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...],
+      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop", "serial_prev": <int|null>, "serial_curr": <int|null>}, ...],
       "events_unreidx": [
         {
           "i": <int>,
@@ -141,6 +141,16 @@ def analyze_video(
             for i in range(1, len(fixed_ids)):
                 curr = int(fixed_ids[i])
                 diff = curr - prev
+                serial_prev = (
+                    int(fixed_serials[i - 1])
+                    if fixed_serials and len(fixed_serials) > i - 1
+                    else None
+                )
+                serial_curr = (
+                    int(fixed_serials[i])
+                    if fixed_serials and len(fixed_serials) > i
+                    else None
+                )
                 if diff == exp:
                     pass  # OK
                 elif diff == 0:
@@ -151,6 +161,8 @@ def analyze_video(
                             "curr": curr,
                             "diff": diff,
                             "type": "duplicate",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 elif diff > exp:
@@ -161,6 +173,8 @@ def analyze_video(
                             "curr": curr,
                             "diff": diff,
                             "type": "forward_jump",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 else:
@@ -171,6 +185,8 @@ def analyze_video(
                             "curr": curr,
                             "diff": diff,
                             "type": "drop",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 prev = curr
