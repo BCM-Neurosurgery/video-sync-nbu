@@ -80,6 +80,7 @@ def analyze_video(
     outdir: Optional[Path | str] = None,
     expect_step: int = 1,
     log_level: str = "INFO",
+    suffix: str = "analysis",
 ) -> FrameIDAnalysisResult:
     """
     Analyze a video's fixed, reindexed frame-id stream using a `scripts.models.Video`.
@@ -275,7 +276,7 @@ def analyze_video(
             Path(outdir).expanduser().resolve() if outdir else video_path.parent
         )
         outdir_path.mkdir(parents=True, exist_ok=True)
-        json_out_path = outdir_path / f"{video_path.stem}-analysis.json"
+        json_out_path = outdir_path / f"{video_path.stem}-{suffix}.json"
         json_out_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
 
         # Concise status
