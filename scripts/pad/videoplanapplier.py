@@ -34,7 +34,7 @@ import logging
 import math
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -264,16 +264,18 @@ def apply_video_padding_plan(
     override_target_fps: Optional[float] = None,
     override_policy: Optional[str] = None,
     progress_every: int = 2000,
-) -> Path:
+) -> Tuple[Path, Video]:
     """
-    Apply a videopad plan to `video` and write the padded MP4 to `out_dir`
-    under the same filename as the source. Also pads the in-memory companion
-    CamJson arrays (fixed_serials, fixed_frame_ids, fixed_reidx_frame_ids).
+    Apply a videopad plan to `video`, write the padded MP4 to `out_dir`
+    under the same filename as the source, and return:
+      (output_path, NEW Video with updated metadata and padded CamJson arrays).
 
     Returns
     -------
-    Path
-        Output MP4 path.
+    (Path, Video)
+        Output MP4 path and an updated, immutable Video object whose
+        companion_json arrays (fixed_serials, fixed_frame_ids, fixed_reidx_frame_ids)
+        are padded to match the inserted frames.
     """
     _require_ffmpeg()
     plan = _load_plan(Path(plan_json))
@@ -410,60 +412,62 @@ def apply_video_padding_plan(
                 adapter.info("Output frame count verified: %d", out_frames)
         except Exception as e:
             adapter.warning("Could not parse output for verification: %s", e)
+            out_frames = expected_out_frames  # fallback
 
         # ------------------------------------------------------------------
-        # Pad the companion CamJson arrays in-memory to match inserted frames
+        # Construct NEW CamJson and NEW Video (no in-place mutation)
         # ------------------------------------------------------------------
         cj = getattr(video, "companion_json", None)
         if cj is None:
-            adapter.warning("No companion_json on Video; skipping JSON padding.")
-        else:
-            serials = list(getattr(cj, "fixed_serials", None) or [])
-            fids_u = list(getattr(cj, "fixed_frame_ids", None) or [])
-            fids_r = list(getattr(cj, "fixed_reidx_frame_ids", None) or [])
-            if not (len(serials) == len(fids_u) == len(fids_r) == src_frames):
-                adapter.warning(
-                    "CamJson array lengths (%s/%s/%s) != src_frames (%d); skipping JSON padding.",
-                    len(serials),
-                    len(fids_u),
-                    len(fids_r),
-                    src_frames,
-                )
-            else:
-                padded_serials: list[int] = []
-                padded_fids_u: list[int] = []
-                padded_fids_r: list[int] = []
-                for idx in range(src_frames):
-                    # original frame
-                    padded_serials.append(int(serials[idx]))
-                    padded_fids_u.append(int(fids_u[idx]))
-                    padded_fids_r.append(int(fids_r[idx]))
-                    # insertions after this index
-                    ins = dup_after.get(idx, 0)
-                    if ins > 0:
-                        last_u = int(fids_u[idx])
-                        last_r = int(fids_r[idx])
-                        for k in range(1, ins + 1):
-                            # mark serial=0 for synthetic frames (so anchor collection ignores them)
-                            padded_serials.append(0)
-                            padded_fids_u.append(last_u + k)
-                            padded_fids_r.append(last_r + k)
-                try:
-                    setattr(cj, "fixed_serials", padded_serials)
-                    setattr(cj, "fixed_frame_ids", padded_fids_u)
-                    setattr(cj, "fixed_reidx_frame_ids", padded_fids_r)
-                    adapter.info(
-                        "Padded CamJson arrays in memory: +%d frames (now %d).",
-                        plan.total_insertions,
-                        len(padded_fids_r),
-                    )
-                except Exception as e:
-                    adapter.warning(
-                        "CamJson appears immutable; could not update in place: %s", e
-                    )
+            raise RuntimeError(
+                "Video has no companion_json; cannot construct updated Video."
+            )
 
-        adapter.info("Output written: %s", out_path)
-        return out_path
+        serials = list(getattr(cj, "fixed_serials", None) or [])
+        fids_u = list(getattr(cj, "fixed_frame_ids", None) or [])
+        fids_r = list(getattr(cj, "fixed_reidx_frame_ids", None) or [])
+        if not (len(serials) == len(fids_u) == len(fids_r) == src_frames):
+            raise RuntimeError(
+                f"CamJson array lengths ({len(serials)}/{len(fids_u)}/{len(fids_r)}) "
+                f"!= src_frames ({src_frames}); cannot construct updated arrays."
+            )
+
+        padded_serials: list[int] = []
+        padded_fids_u: list[int] = []
+        padded_fids_r: list[int] = []
+        for idx in range(src_frames):
+            # original frame
+            padded_serials.append(int(serials[idx]))
+            padded_fids_u.append(int(fids_u[idx]))
+            padded_fids_r.append(int(fids_r[idx]))
+            # insertions after this index
+            ins = dup_after.get(idx, 0)
+            if ins > 0:
+                last_u = int(fids_u[idx])
+                last_r = int(fids_r[idx])
+                for k in range(1, ins + 1):
+                    padded_serials.append(0)  # mark synthetic frames
+                    padded_fids_u.append(last_u + k)  # keep +1 progression
+                    padded_fids_r.append(last_r + k)
+
+        new_cj = replace(
+            cj,
+            fixed_serials=padded_serials,
+            fixed_frame_ids=padded_fids_u,
+            fixed_reidx_frame_ids=padded_fids_r,
+        )
+
+        # Use the actual encoded fps (target_fps) in the new Video
+        new_video = replace(
+            video,
+            path=out_path,
+            frame_rate=float(target_fps),
+            frame_count=int(out_frames),
+            companion_json=new_cj,
+        )
+
+        adapter.info("Output written: %s (new Video constructed)", out_path)
+        return out_path, new_video
 
 
 # -----------------------------
