@@ -27,7 +27,7 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
-from scripts.parsers.videofileparser import VideoFileParser
+from scripts.models import Video
 from scripts.log.logutils import configure_standalone_logging, log_context
 
 logger = logging.getLogger(__name__)
@@ -51,26 +51,25 @@ def _format_report(
     )
 
 
-def analyze_and_write(video_path: Path, outdir: Path) -> Path:
-    """Parse `video_path` and write a text report into `outdir`. Returns the report path."""
-    if not video_path.is_file():
-        raise FileNotFoundError(f"No such file: {video_path}")
-    if video_path.suffix.lower() != ".mp4":
-        raise ValueError(f"Expected an .mp4 file, got: {video_path.suffix}")
+def write_video_report(video: Video, outdir: Path) -> Path:
+    """Write a text report for `video` into `outdir`. Returns the report path."""
+    if not video.path.is_file():
+        raise FileNotFoundError(f"No such file: {video.path}")
+    if video.path.suffix.lower() != ".mp4":
+        raise ValueError(f"Expected an .mp4 file, got: {video.path.suffix}")
 
-    logger.info("Probing video with ffprobe: %s", video_path.name)
-    parser = VideoFileParser(str(video_path))
+    logger.info("Using metadata for: %s", video.path.name)
 
     report = _format_report(
-        video_path=video_path,
-        duration=parser.duration,
-        fps=parser.fps,
-        resolution=parser.resolution,
-        frames=parser.frame_count,
+        video_path=video.path,
+        duration=video.duration,
+        fps=video.frame_rate,
+        resolution=video.resolution,
+        frames=video.frame_count,
     )
 
     outdir.mkdir(parents=True, exist_ok=True)
-    report_path = outdir / f"{video_path.stem}.txt"
+    report_path = outdir / f"{video.path.stem}.txt"
     report_path.write_text(report, encoding="utf-8")
 
     logger.info("Wrote report → %s", report_path.name)
@@ -106,9 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         # Stamp a helpful seg/cam only in standalone so we don't override driver context.
         if was_handlerless:
             with log_context(seg=args.video.stem, cam="-"):
-                analyze_and_write(args.video, args.outdir)
+                write_video_report(args.video, args.outdir)
         else:
-            analyze_and_write(args.video, args.outdir)
+            write_video_report(args.video, args.outdir)
         return 0
     except Exception as e:
         logger.error("%s", e)
