@@ -144,12 +144,14 @@ def _validate_operations(ops: List[PlanOp], frame_count: int) -> None:
         last = op.after_index
 
 
-def _dup_map(ops: List[PlanOp]) -> Dict[int, int]:
-    """Collapse operations to {after_index: total_insert}."""
-    m: Dict[int, int] = {}
+def _dup_map(ops: Sequence[PlanOp]) -> Dict[int, int]:
+    from collections import defaultdict
+
+    m = defaultdict(int)
     for op in ops:
-        m[op.after_index] = m.get(op.after_index, 0) + int(op.insert)
-    return m
+        # treat plan.after_index as i, and insert AFTER i-1
+        m[int(op.after_index) - 1] += int(op.insert)
+    return dict(m)
 
 
 def _spawn_decoder(video: Path) -> subprocess.Popen:
@@ -458,11 +460,13 @@ def apply_video_padding_plan(
         )
 
         # Use the actual encoded fps (target_fps) in the new Video
+        new_duration = out_frames / float(target_fps)
         new_video = replace(
             video,
             path=out_path,
             frame_rate=float(target_fps),
             frame_count=int(out_frames),
+            duration=float(new_duration),
             companion_json=new_cj,
         )
 
