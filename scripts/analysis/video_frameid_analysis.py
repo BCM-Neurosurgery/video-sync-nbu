@@ -10,6 +10,22 @@ Given a video .mp4 path, this script:
 4) Analyzes monotonicity (expect +1) and missing frames.
 5) Writes a formatted text report to --outdir (default: alongside the video) as:
       <video_stem>-frameid.txt
+6) Writes a machine-readable JSON analysis (same basename) as:
+      <video_stem>-frameid.json
+
+Outputs
+-------
+- Text report:    <SEGMENT_ID>.<CAM_SERIAL>-frameid.txt
+- JSON analysis:  <SEGMENT_ID>.<CAM_SERIAL>-frameid.json
+  Schema (key fields):
+    {
+      "segment_id": "<SEGMENT_ID>",
+      "cam_serial": "<CAM_SERIAL>",
+      "video": "/full/path/to/<SEGMENT_ID>.<CAM_SERIAL>.mp4",
+      "counts": {"ok": ..., "forward_jump": ..., "drop": ..., "duplicate": ...},
+      "missing_frames": <int>,
+      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...]
+    }
 
 Logging
 -------
@@ -20,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple, Union
@@ -178,16 +195,74 @@ def analyze_video_frameids(
         out_path = outdir_path / f"{video_path.stem}-frameid.txt"
         out_path.write_text(report_text, encoding="utf-8")
 
+        # --- JSON analysis next to the text report (same basename, .json) ---
+        # Prefer events from `result` if present; otherwise derive them here.
+        events = getattr(result, "events", None)
+        if events is None:
+            events = []
+            exp = int(expect_step)
+            prev = int(fixed_ids[0])
+            for i in range(1, len(fixed_ids)):
+                curr = int(fixed_ids[i])
+                diff = curr - prev
+                if diff == exp:
+                    pass  # OK
+                elif diff == 0:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "duplicate",
+                        }
+                    )
+                elif diff > exp:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "forward_jump",
+                        }
+                    )
+                else:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "drop",
+                        }
+                    )
+                prev = curr
+
+        analysis = {
+            "segment_id": segment_id,
+            "cam_serial": cam_serial,
+            "video": str(video_path),
+            "counts": counts,
+            "missing_frames": n_missing,
+            "events": events,
+        }
+        json_out_path = out_path.with_suffix(".json")
+        json_out_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
+        # --------------------------------------------------------------------
+
         # Concise status
         if strictly_monotonic:
             log.info(
-                f"{video_path.name}: frame_id strictly monotonic (+{expect_step}); report → {out_path.name}"
+                f"{video_path.name}: frame_id strictly monotonic (+{expect_step}); "
+                f"report → {out_path.name}, json → {json_out_path.name}"
             )
         else:
             log.warning(
                 f"{video_path.name}: NOT monotonic — missing_frames={n_missing}, "
                 f"dups={counts.get('duplicate', 0)}, drops={counts.get('drop', 0)}, "
-                f"forward_jumps={counts.get('forward_jump', 0)}; report → {out_path.name}"
+                f"forward_jumps={counts.get('forward_jump', 0)}; "
+                f"report → {out_path.name}, json → {json_out_path.name}"
             )
 
         return FrameIDAnalysisResult(
