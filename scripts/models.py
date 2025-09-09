@@ -117,24 +117,26 @@ class Video:
 
     Attributes
     ----------
-    path: Path to this mp4 video file.
+    path: absolute path to this mp4 video file.
+    segment_id: derived from the file name, e.g. "TRBD001_20250101_120000"
     cam_serial: derived from the file name
     timestamp: timestamp extracted from file name
     duration: length in seconds
     resolution: video resolution (e.g. "1920x1080")
     frame_rate: frames per second (e.g. 30.0)
     frame_count: total number of frames
-    companion_json: the CamJson associated with this video, if any
+    companion_json: the CamJson associated with this video, could be missing
     """
 
     path: Path
-    cam_serial: Optional[str]
-    timestamp: Optional[datetime]
+    segment_id: str
+    cam_serial: str
+    timestamp: datetime
     duration: float
     resolution: str
     frame_rate: float
     frame_count: int
-    companion_json: Optional[CamJson]
+    companion_json: CamJson
 
 
 @dataclass(frozen=True)

@@ -301,6 +301,7 @@ class VideoDiscoverer(_DirMixin):
 
         return Video(
             path=mp4_path,
+            segment_id=segment_id,
             cam_serial=str(cam_serial),
             timestamp=ts,
             duration=dur,
@@ -355,7 +356,7 @@ class VideoDiscoverer(_DirMixin):
         return videogroups
 
 
-def discover_video(
+def build_video_obj(
     video_dir: Path,
     segment_id: str,
     cam_serial: str,
