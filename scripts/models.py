@@ -124,6 +124,7 @@ class Video:
     resolution: video resolution (e.g. "1920x1080")
     frame_rate: frames per second (e.g. 30.0)
     frame_count: total number of frames
+    companion_json: the CamJson associated with this video, if any
     """
 
     path: Path
@@ -133,6 +134,7 @@ class Video:
     resolution: str
     frame_rate: float
     frame_count: int
+    companion_json: Optional[CamJson]
 
 
 @dataclass(frozen=True)
