@@ -22,7 +22,8 @@ Outputs
       "video_meta": {"fps": <float>, "duration": <float>, "resolution": "<WxH>", "frame_count": <int>},
       "counts": {"ok": ..., "forward_jump": ..., "drop": ..., "duplicate": ...},
       "missing_frames": <int>,
-      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...]
+      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...],
+      "events_unreidx": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...]  # from original fixed_frame_ids
     }
 
 Logging
@@ -102,6 +103,12 @@ def analyze_video(
             )
 
         fixed_ids = list(cj.fixed_reidx_frame_ids)
+        # Original (un-reindexed) series, if present
+        fixed_ids_unreidx = (
+            list(getattr(cj, "fixed_frame_ids"))
+            if getattr(cj, "fixed_frame_ids", None) is not None
+            else None
+        )
 
         # Core analysis
         result = analyze(fixed_ids, expect_step=int(expect_step))
@@ -157,6 +164,50 @@ def analyze_video(
                     )
                 prev = curr
 
+        # Parallel events computed on the un-reindexed series (if available)
+        events_unreidx = None
+        if fixed_ids_unreidx is not None and len(fixed_ids_unreidx) >= 2:
+            evu = []
+            exp = int(expect_step)
+            prev_u = int(fixed_ids_unreidx[0])
+            for i in range(1, len(fixed_ids_unreidx)):
+                curr_u = int(fixed_ids_unreidx[i])
+                diff_u = curr_u - prev_u
+                if diff_u == exp:
+                    pass
+                elif diff_u == 0:
+                    evu.append(
+                        {
+                            "i": i,
+                            "prev": prev_u,
+                            "curr": curr_u,
+                            "diff": diff_u,
+                            "type": "duplicate",
+                        }
+                    )
+                elif diff_u > exp:
+                    evu.append(
+                        {
+                            "i": i,
+                            "prev": prev_u,
+                            "curr": curr_u,
+                            "diff": diff_u,
+                            "type": "forward_jump",
+                        }
+                    )
+                else:
+                    evu.append(
+                        {
+                            "i": i,
+                            "prev": prev_u,
+                            "curr": curr_u,
+                            "diff": diff_u,
+                            "type": "drop",
+                        }
+                    )
+                prev_u = curr_u
+            events_unreidx = evu
+
         # Include basic video metadata
         video_meta = {
             "fps": float(getattr(video, "frame_rate", 0.0) or 0.0),
@@ -173,6 +224,7 @@ def analyze_video(
             "counts": counts,
             "missing_frames": n_missing,
             "events": events,
+            "events_unreidx": events_unreidx,
         }
 
         outdir_path = (
