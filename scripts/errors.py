@@ -40,6 +40,12 @@ class FilteredError(Exception):
     pass
 
 
+class VideoDiscoverError(Exception):
+    """Raised when video discovery fails."""
+
+    pass
+
+
 class VideoAnalysisError(Exception):
     """Raised when video analysis fails."""
 
@@ -72,6 +78,12 @@ class AudioPaddingError(Exception):
 
 class AudioPlanError(Exception):
     """Raised when audio plan application fails."""
+
+    pass
+
+
+class VideoPaddingError(Exception):
+    """Raised when video padding fails."""
 
     pass
 
