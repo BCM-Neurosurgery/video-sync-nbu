@@ -32,7 +32,6 @@ import argparse
 import json
 import logging
 import math
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -41,6 +40,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from scripts.log.logutils import configure_standalone_logging, log_context
 from scripts.parsers.videofileparser import VideoFileParser
+from scripts.models import Video
 
 # Module-level logger (handlers/formatting controlled by logutils)
 log = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ def _close_process(proc: subprocess.Popen, *, name: str) -> None:
 # -----------------------------
 def apply_video_padding_plan(
     plan_json: Path,
-    video_path: Path,
+    video: Video,
     out_dir: Path,
     *,
     crf: int = 18,
@@ -266,27 +266,9 @@ def apply_video_padding_plan(
     progress_every: int = 2000,
 ) -> Path:
     """
-    Apply a videopad plan to `video_path` and write the padded MP4 to `out_dir`
-    under the same filename as the source.
-
-    Parameters
-    ----------
-    plan_json : Path
-        Path to the `*-videopad.json` produced by videoplancreater.py.
-    video_path : Path
-        Path to the source video MP4 (video-only).
-    out_dir : Path
-        Output directory for the padded MP4.
-    crf : int, default 18
-        H.264 quality (lower = higher quality). Typical 18-23.
-    preset : str, default "veryfast"
-        x264 encoding preset.
-    override_target_fps : float | None
-        If provided, override the `target_fps` in the plan.
-    override_policy : {"dup-prev","black"} | None
-        If provided, override the `policy` in the plan.
-    progress_every : int
-        Log progress every N input frames.
+    Apply a videopad plan to `video` and write the padded MP4 to `out_dir`
+    under the same filename as the source. Also pads the in-memory companion
+    CamJson arrays (fixed_serials, fixed_frame_ids, fixed_reidx_frame_ids).
 
     Returns
     -------
@@ -296,11 +278,21 @@ def apply_video_padding_plan(
     _require_ffmpeg()
     plan = _load_plan(Path(plan_json))
 
-    # Introspect input
-    vinfo = VideoFileParser(str(video_path))
-    src_w, src_h = vinfo.resolution
-    src_fps = float(vinfo.fps)
-    src_frames = int(vinfo.frame_count)
+    # Introspect from Video object
+    video_path = Path(video.path)
+    res_str = str(getattr(video, "resolution", "") or "")
+    try:
+        src_w, src_h = [int(x) for x in res_str.lower().split("x", 1)]
+    except Exception as e:
+        raise RuntimeError(
+            f"Invalid video.resolution='{res_str}' for {video_path.name}"
+        ) from e
+    src_fps = float(getattr(video, "frame_rate", 0.0) or 0.0)
+    src_frames = int(getattr(video, "frame_count", 0) or 0)
+    if src_fps <= 0 or src_frames <= 0:
+        raise RuntimeError(
+            f"Video meta incomplete (fps={src_fps}, frames={src_frames}) for {video_path.name}"
+        )
 
     # Sanity checks and setup
     target_fps = (
@@ -310,7 +302,7 @@ def apply_video_padding_plan(
     _validate_policy(policy)
     _validate_operations(plan.operations, frame_count=src_frames)
 
-    dup_after = _dup_map(plan.operations)
+    dup_after = _dup_map(plan.operations)  # {src_index: insert_count}
     expected_out_frames = src_frames + plan.total_insertions
 
     # Log context
@@ -321,19 +313,19 @@ def apply_video_padding_plan(
         # Warn on FPS mismatch (plan vs actual)
         if not math.isclose(src_fps, float(plan.source_fps), rel_tol=0, abs_tol=1e-3):
             adapter.warning(
-                "Source FPS (probe=%.6f) differs from plan.source_fps (%.6f).",
+                "Source FPS (video=%.6f) differs from plan.source_fps (%.6f).",
                 src_fps,
                 float(plan.source_fps),
             )
 
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / Path(video_path).name
+        out_path = out_dir / video_path.name
 
         adapter.info(
             "Applying padding (policy=%s): src=%s (%dx%d @ %.6f, frames=%d) → tgt_fps=%.6f, total_insertions=%d, expected_out_frames=%d",
             policy,
-            Path(video_path).name,
+            video_path.name,
             src_w,
             src_h,
             src_fps,
@@ -344,7 +336,7 @@ def apply_video_padding_plan(
         )
 
         # Spawn processes
-        dec = _spawn_decoder(Path(video_path))
+        dec = _spawn_decoder(video_path)
         enc = _spawn_encoder(out_path, src_w, src_h, target_fps, crf=crf, preset=preset)
         if not dec.stdout or not enc.stdin:
             dec.kill()
@@ -418,6 +410,57 @@ def apply_video_padding_plan(
                 adapter.info("Output frame count verified: %d", out_frames)
         except Exception as e:
             adapter.warning("Could not parse output for verification: %s", e)
+
+        # ------------------------------------------------------------------
+        # Pad the companion CamJson arrays in-memory to match inserted frames
+        # ------------------------------------------------------------------
+        cj = getattr(video, "companion_json", None)
+        if cj is None:
+            adapter.warning("No companion_json on Video; skipping JSON padding.")
+        else:
+            serials = list(getattr(cj, "fixed_serials", None) or [])
+            fids_u = list(getattr(cj, "fixed_frame_ids", None) or [])
+            fids_r = list(getattr(cj, "fixed_reidx_frame_ids", None) or [])
+            if not (len(serials) == len(fids_u) == len(fids_r) == src_frames):
+                adapter.warning(
+                    "CamJson array lengths (%s/%s/%s) != src_frames (%d); skipping JSON padding.",
+                    len(serials),
+                    len(fids_u),
+                    len(fids_r),
+                    src_frames,
+                )
+            else:
+                padded_serials: list[int] = []
+                padded_fids_u: list[int] = []
+                padded_fids_r: list[int] = []
+                for idx in range(src_frames):
+                    # original frame
+                    padded_serials.append(int(serials[idx]))
+                    padded_fids_u.append(int(fids_u[idx]))
+                    padded_fids_r.append(int(fids_r[idx]))
+                    # insertions after this index
+                    ins = dup_after.get(idx, 0)
+                    if ins > 0:
+                        last_u = int(fids_u[idx])
+                        last_r = int(fids_r[idx])
+                        for k in range(1, ins + 1):
+                            # mark serial=0 for synthetic frames (so anchor collection ignores them)
+                            padded_serials.append(0)
+                            padded_fids_u.append(last_u + k)
+                            padded_fids_r.append(last_r + k)
+                try:
+                    setattr(cj, "fixed_serials", padded_serials)
+                    setattr(cj, "fixed_frame_ids", padded_fids_u)
+                    setattr(cj, "fixed_reidx_frame_ids", padded_fids_r)
+                    adapter.info(
+                        "Padded CamJson arrays in memory: +%d frames (now %d).",
+                        plan.total_insertions,
+                        len(padded_fids_r),
+                    )
+                except Exception as e:
+                    adapter.warning(
+                        "CamJson appears immutable; could not update in place: %s", e
+                    )
 
         adapter.info("Output written: %s", out_path)
         return out_path
