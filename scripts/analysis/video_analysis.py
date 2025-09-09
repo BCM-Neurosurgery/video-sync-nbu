@@ -23,7 +23,14 @@ Outputs
       "counts": {"ok": ..., "forward_jump": ..., "drop": ..., "duplicate": ...},
       "missing_frames": <int>,
       "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...],
-      "events_unreidx": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...]  # from original fixed_frame_ids
+      "events_unreidx": [
+        {
+          "i": <int>,
+          "prev": <int>, "curr": <int>, "diff": <int>,
+          "type": "duplicate|forward_jump|drop",
+          "serial_prev": <int|null>, "serial_curr": <int|null>
+        },
+        ...]
     }
 
 Logging
@@ -103,10 +110,14 @@ def analyze_video(
             )
 
         fixed_ids = list(cj.fixed_reidx_frame_ids)
-        # Original (un-reindexed) series, if present
         fixed_ids_unreidx = (
             list(getattr(cj, "fixed_frame_ids"))
             if getattr(cj, "fixed_frame_ids", None) is not None
+            else None
+        )
+        fixed_serials = (
+            list(getattr(cj, "fixed_serials"))
+            if getattr(cj, "fixed_serials", None) is not None
             else None
         )
 
@@ -173,6 +184,17 @@ def analyze_video(
             for i in range(1, len(fixed_ids_unreidx)):
                 curr_u = int(fixed_ids_unreidx[i])
                 diff_u = curr_u - prev_u
+                # serials at the transition (i-1 -> i), if available
+                serial_prev = (
+                    int(fixed_serials[i - 1])
+                    if fixed_serials and len(fixed_serials) > i - 1
+                    else None
+                )
+                serial_curr = (
+                    int(fixed_serials[i])
+                    if fixed_serials and len(fixed_serials) > i
+                    else None
+                )
                 if diff_u == exp:
                     pass
                 elif diff_u == 0:
@@ -183,6 +205,8 @@ def analyze_video(
                             "curr": curr_u,
                             "diff": diff_u,
                             "type": "duplicate",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 elif diff_u > exp:
@@ -193,6 +217,8 @@ def analyze_video(
                             "curr": curr_u,
                             "diff": diff_u,
                             "type": "forward_jump",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 else:
@@ -203,6 +229,8 @@ def analyze_video(
                             "curr": curr_u,
                             "diff": diff_u,
                             "type": "drop",
+                            "serial_prev": serial_prev,
+                            "serial_curr": serial_curr,
                         }
                     )
                 prev_u = curr_u
