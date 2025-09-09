@@ -1,116 +1,261 @@
 #!/usr/bin/env python3
 """
-video_analysis.py — Generate a simple text report for a video.
+video_analysis.py
+=================
 
-Given an MP4 path and an output directory, this script parses the file with
-`VideoFileParser` (ffprobe-backed) and writes a human-readable .txt report
-containing: duration (s), FPS, resolution, and total frame count.
+Given a video .mp4 path, this script:
+1) Infers the companion JSON as <SEGMENT_ID>.json in the same folder.
+2) Loads it via JsonParser.
+3) Extracts the fixed frame-id stream for that camera (FrameIDFixer).
+4) Analyzes monotonicity (expect +1) and missing frames.
+5) Writes a machine-readable JSON analysis (default: alongside the video) as:
+      <video_stem>-analysis.json
 
-Usage
------
-python video_analysis.py /path/to/video.mp4 --outdir /path/to/output [--log-level INFO]
+Outputs
+-------
+- JSON analysis:  <SEGMENT_ID>.<CAM_SERIAL>-analysis.json
+  Schema (key fields):
+    {
+      "segment_id": "<SEGMENT_ID>",
+      "cam_serial": "<CAM_SERIAL>",
+      "video": "/full/path/to/<SEGMENT_ID>.<CAM_SERIAL>.mp4",
+      "video_meta": {"fps": <float>, "duration": <float>, "resolution": "<WxH>", "frame_count": <int>},
+      "counts": {"ok": ..., "forward_jump": ..., "drop": ..., "duplicate": ...},
+      "missing_frames": <int>,
+      "events": [{"i": <int>, "prev": <int>, "curr": <int>, "diff": <int>, "type": "duplicate|forward_jump|drop"}, ...]
+    }
 
-Output
-------
-<outdir>/<video-stem>.txt
-    File        : video.mp4
-    Duration(s) : 123.456
-    FPS         : 29.970030
-    Resolution  : 1920x1080
-    Frames      : 37000
+Logging
+-------
+Uses scripts.log.logutils. When run standalone, console logs are stamped as [seg/cam].
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Optional, Sequence
 
+from scripts.log.logutils import (
+    configure_standalone_logging,
+    log_context,
+)
+
+from scripts.analysis.serial_analysis import analyze
 from scripts.models import Video
-from scripts.log.logutils import configure_standalone_logging, log_context
-
-logger = logging.getLogger(__name__)
 
 
-def _format_report(
-    video_path: Path,
-    duration: float,
-    fps: float,
-    resolution: Tuple[int, int],
-    frames: int,
-) -> str:
-    """Return a human-readable, line-based report string."""
-    w, h = resolution
-    return (
-        f"File        : {video_path.name}\n"
-        f"Duration(s) : {duration:.3f}\n"
-        f"FPS         : {fps:.6f}\n"
-        f"Resolution  : {w}x{h}\n"
-        f"Frames      : {frames}\n"
+# -----------------------------
+# Public result container
+# -----------------------------
+@dataclass(frozen=True)
+class FrameIDAnalysisResult:
+    video_path: Path
+    json_path: Optional[Path]  # companion JSON path (source), if available
+    out_json_path: Path  # where we saved the analysis JSON
+    segment_id: str
+    cam_serial: str
+    strictly_monotonic: bool
+    missing_frames: int
+    counts: Dict[str, int]
+
+
+# -----------------------------
+# Public API
+# -----------------------------
+def analyze_video(
+    video: Video,
+    *,
+    outdir: Optional[Path | str] = None,
+    expect_step: int = 1,
+    log_level: str = "INFO",
+) -> FrameIDAnalysisResult:
+    """
+    Analyze a video's fixed, reindexed frame-id stream using a `scripts.models.Video`.
+
+    Requirements
+    ------------
+    - `video.segment_id` is used for logging/report headers.
+    - `video.companion_json.fixed_reidx_frame_ids` MUST exist and have length >= 2.
+    """
+    video_path = Path(video.path).expanduser().resolve()
+    if not video_path.is_file():
+        raise FileNotFoundError(f"No such video: {video_path}")
+
+    segment_id = str(video.segment_id)
+    cam_serial = str(video.cam_serial)
+
+    # Configure concise standalone logging; no-op if handlers already exist
+    configure_standalone_logging(log_level, seg=segment_id, cam=cam_serial)
+    log = logging.getLogger("sync")
+
+    with log_context(seg=segment_id, cam=cam_serial):
+        cj = video.companion_json
+        if cj is None:
+            raise RuntimeError(f"{video_path.name}: Video has no companion_json.")
+        if cj.fixed_reidx_frame_ids is None or len(cj.fixed_reidx_frame_ids) < 2:
+            raise RuntimeError(
+                f"{video_path.name}: companion_json.fixed_reidx_frame_ids missing/too short."
+            )
+
+        fixed_ids = list(cj.fixed_reidx_frame_ids)
+
+        # Core analysis
+        result = analyze(fixed_ids, expect_step=int(expect_step))
+
+        counts = result.counts or {}
+        n_missing = int(result.total_missing_ids or 0)
+        strictly_monotonic = (
+            counts.get("duplicate", 0) == 0
+            and counts.get("drop", 0) == 0
+            and counts.get("forward_jump", 0) == 0
+        )
+
+        # Events JSON (derive if the analyzer didn't include them)
+        events = getattr(result, "events", None)
+        if events is None:
+            events = []
+            exp = int(expect_step)
+            prev = int(fixed_ids[0])
+            for i in range(1, len(fixed_ids)):
+                curr = int(fixed_ids[i])
+                diff = curr - prev
+                if diff == exp:
+                    pass  # OK
+                elif diff == 0:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "duplicate",
+                        }
+                    )
+                elif diff > exp:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "forward_jump",
+                        }
+                    )
+                else:
+                    events.append(
+                        {
+                            "i": i,
+                            "prev": prev,
+                            "curr": curr,
+                            "diff": diff,
+                            "type": "drop",
+                        }
+                    )
+                prev = curr
+
+        # Include basic video metadata
+        video_meta = {
+            "fps": float(getattr(video, "frame_rate", 0.0) or 0.0),
+            "duration": float(getattr(video, "duration", 0.0) or 0.0),
+            "resolution": str(getattr(video, "resolution", "") or ""),
+            "frame_count": int(getattr(video, "frame_count", 0) or 0),
+        }
+
+        analysis = {
+            "segment_id": segment_id,
+            "cam_serial": cam_serial,
+            "video": str(video_path),
+            "video_meta": video_meta,
+            "counts": counts,
+            "missing_frames": n_missing,
+            "events": events,
+        }
+
+        outdir_path = (
+            Path(outdir).expanduser().resolve() if outdir else video_path.parent
+        )
+        outdir_path.mkdir(parents=True, exist_ok=True)
+        json_out_path = outdir_path / f"{video_path.stem}-analysis.json"
+        json_out_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
+
+        # Concise status
+        if strictly_monotonic:
+            log.info(
+                f"{video_path.name}: frame_id strictly monotonic (+{expect_step}); json → {json_out_path.name}"
+            )
+        else:
+            log.warning(
+                f"{video_path.name}: NOT monotonic — missing_frames={n_missing}, "
+                f"dups={counts.get('duplicate', 0)}, drops={counts.get('drop', 0)}, "
+                f"forward_jumps={counts.get('forward_jump', 0)}; "
+                f"json → {json_out_path.name}"
+            )
+
+        return FrameIDAnalysisResult(
+            video_path=video_path,
+            json_path=Path(cj.path) if getattr(cj, "path", None) else None,
+            out_json_path=json_out_path,
+            segment_id=segment_id,
+            cam_serial=cam_serial,
+            strictly_monotonic=strictly_monotonic,
+            missing_frames=n_missing,
+            counts=counts,
+        )
+
+
+# -----------------------------
+# CLI
+# -----------------------------
+def build_arg_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="Analyze a video's fixed frame_id sequence using its companion JSON and write <video_stem>-analysis.json."
     )
-
-
-def write_video_report(video: Video, outdir: Path) -> Path:
-    """Write a text report for `video` into `outdir`. Returns the report path."""
-    if not video.path.is_file():
-        raise FileNotFoundError(f"No such file: {video.path}")
-    if video.path.suffix.lower() != ".mp4":
-        raise ValueError(f"Expected an .mp4 file, got: {video.path.suffix}")
-
-    logger.info("Using metadata for: %s", video.path.name)
-
-    report = _format_report(
-        video_path=video.path,
-        duration=video.duration,
-        fps=video.frame_rate,
-        resolution=video.resolution,
-        frames=video.frame_count,
+    ap.add_argument(
+        "video", help="Path to the video .mp4 (named <SEGMENT_ID>.<CAM>.mp4)"
     )
-
-    outdir.mkdir(parents=True, exist_ok=True)
-    report_path = outdir / f"{video.path.stem}.txt"
-    report_path.write_text(report, encoding="utf-8")
-
-    logger.info("Wrote report → %s", report_path.name)
-    return report_path
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Analyze a video (MP4) and save a text report with FPS, duration, resolution, and frame count."
+    ap.add_argument(
+        "--outdir",
+        default=None,
+        help="Directory for JSON output (default: same folder as the video)",
     )
-    p.add_argument("video", type=Path, help="Path to input .mp4 video")
-    p.add_argument(
-        "--outdir", required=True, type=Path, help="Directory to write the .txt report"
+    ap.add_argument(
+        "--expect-step",
+        type=int,
+        default=1,
+        help="Expected increment between consecutive frame IDs (default: 1)",
     )
-    p.add_argument(
+    ap.add_argument(
         "--log-level",
         default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging verbosity (standalone only; ignored when called from driver)",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR). Default: INFO",
     )
-    return p
+    return ap
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-
-    # Standalone logging: only attaches a console handler if root has none.
-    root = logging.getLogger()
-    was_handlerless = not root.handlers
-    configure_standalone_logging(args.log_level, seg="-", cam="-")
-
+# -----------------------------
+# Main
+# -----------------------------
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_arg_parser().parse_args(argv)
     try:
-        # Stamp a helpful seg/cam only in standalone so we don't override driver context.
-        if was_handlerless:
-            with log_context(seg=args.video.stem, cam="-"):
-                write_video_report(args.video, args.outdir)
-        else:
-            write_video_report(args.video, args.outdir)
+        # NOTE: the public API expects a `scripts.models.Video` object.
+        # If you're invoking the CLI, construct the Video upstream and call the API directly.
+        analyze_video(  # type: ignore[arg-type]
+            args.video,
+            outdir=args.outdir,
+            expect_step=args.expect_step,
+            log_level=args.log_level,
+        )
         return 0
     except Exception as e:
-        logger.error("%s", e)
+        # Minimal fallback formatting if not already configured
+        if not logging.getLogger().handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+        logging.error(str(e))
         return 2
 
 
