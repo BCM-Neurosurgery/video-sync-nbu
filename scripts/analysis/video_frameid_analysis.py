@@ -39,15 +39,15 @@ import logging
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple, Union
+from typing import Dict, Optional, Sequence, Tuple
 
 from scripts.log.logutils import (
     configure_standalone_logging,
     log_context,
 )
 
-from scripts.parsers.jsonfileparser import JsonParser
 from scripts.analysis.serial_analysis import analyze, summarize_text
+from scripts.models import Video
 
 
 # -----------------------------
@@ -107,65 +107,45 @@ def choose_cam_key(requested: str, available: list) -> object:
 # Public API
 # -----------------------------
 def analyze_video_frameids(
-    video: Union[str, Path],
+    video: Video,
     *,
-    outdir: Optional[Union[str, Path]] = None,
+    outdir: Optional[Path | str] = None,
     expect_step: int = 1,
     hist_cols: int = 2,
     top: int = 5,
     log_level: str = "INFO",
 ) -> FrameIDAnalysisResult:
     """
-    Programmatic API to analyze a video's fixed frame-id stream.
+    Analyze a video's fixed, reindexed frame-id stream using a `scripts.models.Video`.
 
-    Parameters
-    ----------
-    video : str | Path
-        Path to the .mp4 named <SEGMENT_ID>.<CAM_SERIAL>.mp4
-    outdir : str | Path | None
-        Where to write the text report. Defaults to the video's directory.
-    expect_step : int
-        Expected increment between consecutive frame IDs (default: 1).
-    hist_cols : int
-        Histogram columns in the text report (default: 2).
-    top : int
-        How many top forward/drops to list (default: 5).
-    log_level : str
-        Console log level when used standalone (default: "INFO").
-
-    Returns
-    -------
-    FrameIDAnalysisResult
-        Summary including output path, monotonicity, missing frame count, and counts.
-
-    Raises
-    ------
-    FileNotFoundError, ValueError, KeyError, RuntimeError
-        If inputs are missing/invalid or analysis fails.
+    Requirements
+    ------------
+    - `video.segment_id` is used for logging/report headers.
+    - `video.companion_json.fixed_reidx_frame_ids` MUST exist and have length >= 2.
     """
-    video_path = Path(video).expanduser().resolve()
+    video_path = Path(video.path).expanduser().resolve()
     if not video_path.is_file():
         raise FileNotFoundError(f"No such video: {video_path}")
 
-    segment_id, cam_serial = parse_video_name(video_path)
+    segment_id = str(video.segment_id)
+    cam_serial = str(video.cam_serial)
 
     # Configure concise standalone logging; no-op if handlers already exist
     configure_standalone_logging(log_level, seg=segment_id, cam=cam_serial)
     log = logging.getLogger("sync")
 
     with log_context(seg=segment_id, cam=cam_serial):
-        json_path = find_companion_json(video_path)
-        if not json_path.is_file():
-            raise FileNotFoundError(
-                f"Companion JSON not found next to video: {json_path.name}"
+        cj = video.companion_json
+        if cj is None:
+            raise RuntimeError(f"{video_path.name}: Video has no companion_json.")
+        if cj.fixed_reidx_frame_ids is None or len(cj.fixed_reidx_frame_ids) < 2:
+            raise RuntimeError(
+                f"{video_path.name}: companion_json.fixed_reidx_frame_ids missing/too short."
             )
 
-        parser = JsonParser(str(json_path))
-        cam_key = choose_cam_key(cam_serial, parser.get_camera_serials())
-        fixed_ids = parser.get_fixed_frame_ids_list(cam_key)
-        if fixed_ids is None or len(fixed_ids) < 2:
-            raise RuntimeError("Insufficient frame_id data (need at least 2 values).")
+        fixed_ids = list(cj.fixed_reidx_frame_ids)
 
+        # Core analysis
         result = analyze(fixed_ids, expect_step=int(expect_step), top_k=int(top))
 
         counts = result.counts or {}
@@ -176,10 +156,13 @@ def analyze_video_frameids(
             and counts.get("forward_jump", 0) == 0
         )
 
+        # Report (text)
+        json_name = cj.path.name if getattr(cj, "path", None) else "(unknown)"
         header = [
             f"VIDEO: {video_path.name}",
-            f"JSON : {json_path.name}",
+            f"JSON : {json_name}",
             f"CAM  : {cam_serial}",
+            f"SEG  : {segment_id}",
             f"Expect step: {expect_step}",
             "",
         ]
@@ -195,8 +178,7 @@ def analyze_video_frameids(
         out_path = outdir_path / f"{video_path.stem}-frameid.txt"
         out_path.write_text(report_text, encoding="utf-8")
 
-        # --- JSON analysis next to the text report (same basename, .json) ---
-        # Prefer events from `result` if present; otherwise derive them here.
+        # Events JSON (derive if the analyzer didn't include them)
         events = getattr(result, "events", None)
         if events is None:
             events = []
@@ -249,7 +231,6 @@ def analyze_video_frameids(
         }
         json_out_path = out_path.with_suffix(".json")
         json_out_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
-        # --------------------------------------------------------------------
 
         # Concise status
         if strictly_monotonic:
@@ -267,7 +248,7 @@ def analyze_video_frameids(
 
         return FrameIDAnalysisResult(
             video_path=video_path,
-            json_path=json_path,
+            json_path=Path(cj.path) if getattr(cj, "path", None) else None,
             out_path=out_path,
             segment_id=segment_id,
             cam_serial=cam_serial,
