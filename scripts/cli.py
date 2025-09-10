@@ -573,7 +573,7 @@ def process_segment(
                                 # pad and save the video
                                 # pad Video object's fixed serial with 0s
                                 # pad fixed_frames_ids, and fixed_frame_idx_reidx
-                                out_path, padded_vid = apply_video_padding_plan(
+                                out_path, vid = apply_video_padding_plan(
                                     plan_json=vid_padjson,
                                     video=vid,
                                     out_dir=padded_dir,
@@ -597,7 +597,7 @@ def process_segment(
 
                             try:
                                 analyze_video(
-                                    video=padded_vid,
+                                    video=vid,
                                     outdir=padded_dir,
                                 )
                                 clog.info("Video analysis completed")
@@ -616,7 +616,7 @@ def process_segment(
                 try:
                     save_anchors_for_camera(
                         serial_csv=filtered_csv,
-                        video=padded_vid,
+                        video=vid,
                         out_json=filtered_anchors,
                     )
                     clog.info("Saved %s", _name(filtered_anchors))
@@ -728,7 +728,7 @@ def process_segment(
                 try:
                     save_anchors_for_camera(
                         serial_csv=padded_csv,
-                        video=padded_vid,
+                        video=vid,
                         out_json=padded_anchors,
                     )
                     clog.info("Saved %s", _name(padded_anchors))
@@ -747,7 +747,7 @@ def process_segment(
                 try:
                     sync_one_video(
                         audio_dir=cam_out / "audio_padded",
-                        video=padded_vid,
+                        video=vid,
                         anchors_json=padded_anchors,
                         out_audio_dir=cam_out / "synced_audio",
                         out_video_dir=cam_out / "synced_video",
