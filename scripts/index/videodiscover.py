@@ -249,6 +249,68 @@ class VideoDiscoverer(_DirMixin):
             cam_serials=(sorted({v.cam_serial for v in videos}) if videos else None),
         )
 
+    def discover_video(self, segment_id: str, cam_serial: str) -> Optional[Video]:
+        """
+        Return a single :class:`Video` for the given segment and camera.
+
+        Parameters
+        ----------
+        segment_id : str
+            Segment ID like 'TRBD002_20250806_104707'.
+        cam_serial : str
+            Camera serial (e.g., '23512909').
+
+        Returns
+        -------
+        Optional[Video]
+            Populated Video with ffprobe metadata and, when available, the matching
+            `companion_json` (CamJson) from the segment's JSON.
+        """
+        self._ensure_exists(self.video_dir)
+        ts = FilePatterns.parse_tail_datetime(segment_id, DEFAULT_TZ)
+
+        # Resolve MP4 for (segment_id, cam_serial)
+        matches = sorted(self.video_dir.glob(f"{segment_id}.{cam_serial}.mp4"))
+        if not matches:
+            self.log.warning(
+                "No MP4 found for segment %s cam %s", segment_id, cam_serial
+            )
+            return None
+        mp4_path = matches[0]
+
+        # Extract basic video meta
+        dur, res, fps, frame_count = self._extract_video_meta(mp4_path)
+
+        # Attach companion CamJson if present
+        companion: Optional[CamJson] = None
+        json_matches = list(self.video_dir.glob(f"{segment_id}.json"))
+        if json_matches:
+            json_path = json_matches[0]
+            _, _, cam_jsons = self._build_json_wrapper(json_path, ts)
+            companion = cam_jsons.get(str(cam_serial))
+            if companion is None:
+                self.log.warning(
+                    "Camera %s not present in JSON %s; CamJson will be None.",
+                    cam_serial,
+                    json_path.name,
+                )
+        else:
+            self.log.info(
+                "No JSON found for %s; companion_json will be None.", segment_id
+            )
+
+        return Video(
+            path=mp4_path,
+            segment_id=segment_id,
+            cam_serial=str(cam_serial),
+            timestamp=ts,
+            duration=dur,
+            resolution=res,
+            frame_rate=fps,
+            frame_count=frame_count,
+            companion_json=companion,
+        )
+
     # ---- public: full directory path --------------------------------------
 
     def discover(self) -> List[VideoGroup]:
@@ -292,3 +354,32 @@ class VideoDiscoverer(_DirMixin):
         videogroups.sort(key=lambda s: FilePatterns.videogroup_sort_key(s.group_id))
         self.log.info("Discovered %d segment(s).", len(videogroups))
         return videogroups
+
+
+def build_video_obj(
+    video_dir: Path,
+    segment_id: str,
+    cam_serial: str,
+    log: Optional[logging.Logger] = None,
+) -> Optional[Video]:
+    """
+    Convenience wrapper around VideoDiscoverer.discover_video.
+
+    Parameters
+    ----------
+    video_dir : Path
+        Directory containing the segment JSON/MP4 files.
+    segment_id : str
+        Segment ID like 'TRBD002_20250806_104707'.
+    cam_serial : str
+        Camera serial (e.g., '23512909').
+    log : Optional[logging.Logger]
+        Logger to use. If None, uses module logger.
+
+    Returns
+    -------
+    Optional[Video]
+        A single Video instance (or None if not found).
+    """
+    logger = log or logging.getLogger(__name__)
+    return VideoDiscoverer(video_dir, log=logger).discover_video(segment_id, cam_serial)

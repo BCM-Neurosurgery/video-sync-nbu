@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-scripts/align/collect_anchors.py — Per-segment, per-camera anchor extractor
+scripts/align/collect_anchors.py — Per-segment, per-camera anchor extractor (API-only)
 
 Inputs
 ------
 1) Serial index CSV from serial-audio decode (columns: serial,start_sample,end_sample)
-2) Video directory containing <segment_id>.json and <segment_id>.<CAM>.mp4
-3) Segment ID and camera serial
+2) A `scripts.models.Video` object whose `companion_json` provides:
+   - fixed_serials
+   - fixed_frame_ids           (un-reindexed)
+   - fixed_reidx_frame_ids     (reindexed/contiguous)
 
 Output
 ------
@@ -21,20 +23,10 @@ JSON list of anchors:
     "frame_id_reidx": <int>
   }, ...
 ]
-
-CLI
----
-python -m scripts.align.collect_anchors collect \
-  --serial-index /path/to/serial_index.csv \
-  --video-dir    /path/to/videos \
-  --segment-id   20240806_153012 \
-  --cam-serial   21401234 \
-  --out          /tmp/anchors.json
 """
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import logging
@@ -42,12 +34,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-# -----------------------------------------------------------------------------
-# Logging (library module: no handlers/levels; driver or standalone config handles it)
-# -----------------------------------------------------------------------------
-from scripts.log.logutils import configure_standalone_logging, log_context
-
 logger = logging.getLogger(__name__)
+
+from scripts.models import Video  # expects .companion_json with fixed_* arrays
 
 
 # -----------------------------------------------------------------------------
@@ -116,58 +105,44 @@ def load_serial_index_csv(path: Path) -> Dict[int, int]:
     return mapping
 
 
-def label_frames(serials: Sequence[int], frame_ids: Sequence[int]) -> List[str]:
+def label_frames(frame_ids: Sequence[int]) -> List[str]:
     """
-    Label each frame for anchor selection.
+    Label each frame for anchor selection using ONLY frame_ids.
 
-    NORMAL:    Δfid == 1 and Δserial == 1
-    DUPLICATE: Δfid == 1 and Δserial == 0
-    DROP:      Δfid  > 1
-    MISSING:   serial <= 0 or None
+    NORMAL      : Δfid == 1
+    DROP        : Δfid > 1
+    UNCLASSIFIED: all other cases (including first frame, Δfid <= 0)
     """
     labels: List[str] = []
     prev_fid: Optional[int] = None
-    prev_s: Optional[int] = None
-    for s, f in zip(serials, frame_ids):
-        if s is None or s <= 0:
-            labels.append("MISSING")
-        elif prev_fid is None:
-            labels.append("NORMAL")
+    for f in frame_ids:
+        if prev_fid is None:
+            labels.append("UNCLASSIFIED")
         else:
             df = f - prev_fid
-            ds = s - (prev_s if prev_s is not None else s)
-            if df == 1 and ds == 1:
+            if df == 1:
                 labels.append("NORMAL")
-            elif df == 1 and ds == 0:
-                labels.append("DUPLICATE")
             elif df > 1:
                 labels.append("DROP")
             else:
-                labels.append("MISSING")
-        prev_fid, prev_s = f, s
+                labels.append("UNCLASSIFIED")
+        prev_fid = f
     return labels
 
 
-def _extract_cam_arrays(
-    videogroup, cam_serial: str
+def _extract_cam_arrays_from_video(
+    video: Video,
 ) -> Tuple[List[int], List[int], List[int]]:
     """
-    From a VideoGroup, fetch CamJson for `cam_serial` and return:
+    From a Video, fetch its companion CamJson arrays and return:
         (fixed_serials, fixed_frame_ids, fixed_reidx_frame_ids).
 
     Strict requirement: all three must exist, be integer-like, non-empty,
     and have identical lengths. Raises RuntimeError otherwise.
     """
-    # locate CamJson
-    cj = None
-    if getattr(videogroup, "json", None) and getattr(
-        videogroup.json, "cam_jsons", None
-    ):
-        cj = videogroup.json.cam_jsons.get(str(cam_serial))
+    cj = getattr(video, "companion_json", None)
     if cj is None:
-        raise RuntimeError(
-            f"Group '{videogroup.group_id}': no cam_json for camera {cam_serial}"
-        )
+        raise RuntimeError(f"Video {video.path}: missing companion_json")
 
     serials = getattr(cj, "fixed_serials", None)
     frame_ids = getattr(cj, "fixed_frame_ids", None)
@@ -212,8 +187,11 @@ def _collect_anchors_for_cam(
 ) -> List[Anchor]:
     """
     Build anchors for one (segment_id, cam_serial) pair from per-frame arrays.
+
+    Selection: frames labeled NORMAL by frame_id deltas (Δfid==1) and whose
+    serial exists in the index_map.
     """
-    labels = label_frames(serials, frame_ids)
+    labels = label_frames(frame_ids)
 
     cand: List[Tuple[int, int]] = [
         (i, int(s))
@@ -258,23 +236,19 @@ def _collect_anchors_for_cam(
 # -----------------------------------------------------------------------------
 def save_anchors_for_camera(
     serial_csv: Path | str,
-    video_dir: Path | str,
-    segment_id: str,
-    cam_serial: str,
+    video: Video,
     out_json: Path | str,
     *,
     min_k: int = 3,
     min_span_ratio: float = 0.05,
 ) -> Path:
     """
-    Collect anchors for (segment_id, cam_serial) and save them as JSON.
+    Collect anchors for a single `Video` and save them as JSON.
 
     Parameters
     ----------
     serial_csv      : CSV with (serial,start_sample,end_sample) from serial-audio decode.
-    video_dir       : Root directory with <segment_id>.json and MP4s.
-    segment_id      : VideoGroup id to process.
-    cam_serial      : Camera hardware serial.
+    video           : scripts.models.Video with companion_json providing fixed_* arrays.
     out_json        : Destination JSON file.
     min_k           : Warn if fewer anchors than this.
     min_span_ratio  : Span heuristic for serial coverage.
@@ -283,25 +257,16 @@ def save_anchors_for_camera(
     -------
     Path to the written JSON.
     """
-    from scripts.index.discover import (
-        discover_segment,
-    )  # local import to avoid heavy import at module load
-
     serial_csv = Path(serial_csv)
-    video_dir = Path(video_dir)
     out_json = Path(out_json)
 
     index_map = load_serial_index_csv(serial_csv)
 
-    vg = discover_segment(video_dir, segment_id, logger)
-    if vg is None:
-        raise RuntimeError(f"Segment '{segment_id}' not found under {video_dir}")
-
-    serials, frame_ids, frame_ids_reidx = _extract_cam_arrays(vg, cam_serial)
+    serials, frame_ids, frame_ids_reidx = _extract_cam_arrays_from_video(video)
     anchors = _collect_anchors_for_cam(
         index_map,
-        segment_id,
-        cam_serial,
+        str(getattr(video, "segment_id", "")),
+        str(getattr(video, "cam_serial", "")),
         serials,
         frame_ids,
         frame_ids_reidx,
@@ -314,89 +279,8 @@ def save_anchors_for_camera(
     logger.info(
         "Saved %d anchors for seg=%s cam=%s → %s",
         len(anchors),
-        segment_id,
-        cam_serial,
+        getattr(video, "segment_id", ""),
+        getattr(video, "cam_serial", ""),
         _short_name(out_json),
     )
     return out_json
-
-
-# -----------------------------------------------------------------------------
-# CLI
-# -----------------------------------------------------------------------------
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="anchor-collect",
-        description="Collect anchors for one camera in one segment and save as JSON.",
-    )
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    c = sub.add_parser("collect", help="Collect anchors and write JSON")
-    c.add_argument(
-        "--serial-index",
-        required=True,
-        help="CSV with columns: serial,start_sample,end_sample",
-    )
-    c.add_argument(
-        "--video-dir",
-        required=True,
-        help="Directory containing <segment_id>.json and MP4s",
-    )
-    c.add_argument("--segment-id", required=True, help="VideoGroup (segment) id")
-    c.add_argument("--cam-serial", required=True, help="Camera hardware serial")
-    c.add_argument("--out", required=True, help="Output JSON path")
-    c.add_argument(
-        "--min-k", type=int, default=3, help="Warn if fewer anchors than this"
-    )
-    c.add_argument(
-        "--min-span",
-        type=float,
-        default=0.05,
-        help="Span heuristic ratio for serial coverage",
-    )
-    c.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging verbosity (standalone only; ignored when called from driver)",
-    )
-    return p
-
-
-def _cmd_collect(ns: argparse.Namespace) -> int:
-    # Standalone: minimal console logging; no-op if driver already configured root.
-    configure_standalone_logging(ns.log_level, seg=ns.segment_id, cam=ns.cam_serial)
-
-    with log_context(seg=ns.segment_id, cam=ns.cam_serial):
-        save_anchors_for_camera(
-            ns.serial_index,
-            ns.video_dir,
-            ns.segment_id,
-            ns.cam_serial,
-            ns.out,
-            min_k=ns.min_k,
-            min_span_ratio=ns.min_span,
-        )
-        logger.info(
-            "Anchors written → %s (seg=%s cam=%s)",
-            _short_name(ns.out),
-            ns.segment_id,
-            ns.cam_serial,
-        )
-    return 0
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    try:
-        if args.cmd == "collect":
-            return _cmd_collect(args)
-        parser.error("unknown command")
-    except Exception as e:
-        logger.exception(e)
-        return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

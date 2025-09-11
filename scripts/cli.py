@@ -22,9 +22,9 @@ python sync_driver.py \
 
 Speed-ups / resume
 ------------------
-- Use **--skip-decode** to reuse an existing decoded CSV at:
-  <out_dir>/audio_decoded/raw.csv
-  This skips the slow serial decoding and goes straight to gapfill→filter→… stages.
+- Use **--skip-decode** to reuse existing decoded + processed CSVs in:
+  <out_dir>/audio_decoded/raw.csv and raw-gapfilled-filtered.csv
+  This skips decoding, gapfill, and filter, and starts at per-camera steps.
 
 Input folder layout (discover expects this)
 -------------------------------------------
@@ -78,6 +78,12 @@ output_dir structure
 
                 - gapfilled-filtered-padded-anchors.json      (anchors after padding)
                 - gapfilled-filtered-padded-anchors.txt
+
+                - TRBD002_20250806_103745.24253448.txt
+                - TRBD002_20250806_103745.24253448-frameid.txt
+                - TRBD002_20250806_103745.24253448-frameid.json
+                - TRBD002_20250806_103745.24253448-frameid-padplan.json
+
             - audio_clipped
                 - TRBD002_08062025-clipped-01.mp3
                 - TRBD002_08062025-clipped-03.mp3
@@ -85,6 +91,8 @@ output_dir structure
                 - TRBD002_08062025-clipped-padded-01.mp3
                 - TRBD002_08062025-clipped-padded-03.mp3
             - video_padded (TODO)
+                - TRBD002_20250806_103745.24253448.mp4
+                - TRBD002_20250806_103745.json
             - synced_audio
             - synced_video  (final synced videos)
             - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
@@ -120,8 +128,7 @@ from typing import Iterable
 from scripts.decode.wavfileparser import decode_to_raw, decode_split_dir_to_csvs
 from scripts.analysis.csv_serial_analysis import analyze_csv_serials
 from scripts.analysis.anchor_analysis import analyze_anchors_file
-from scripts.analysis.video_analysis import analyze_and_write
-from scripts.analysis.video_frameid_analysis import analyze_video_frameids
+from scripts.analysis.video_analysis import analyze_video
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
 from scripts.align.collect_anchors import save_anchors_for_camera
@@ -129,11 +136,14 @@ from scripts.clip.audiocsvclipper import clip_with_anchors
 from scripts.clip.audioclip import clip_from_csv
 from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
-from scripts.align.sync import sync_one_segment
+from scripts.pad.videoplancreater import create_video_padding_plan
+from scripts.pad.videoplanapplier import apply_video_padding_plan
+from scripts.align.sync import sync_one_video
 from scripts.index.discover import AudioDiscoverer
+from scripts.index.videodiscover import build_video_obj
 from scripts.merge.mergecsv import merge_split_csvs
 from scripts.split.mp3split import split_mp3_to_wav
-from scripts.models import AudioGroup
+from scripts.models import AudioGroup, Video
 from scripts.errors import (
     AudioGroupDiscoverError,
     TargetBuildError,
@@ -148,6 +158,8 @@ from scripts.errors import (
     ClipError,
     AudioPaddingError,
     AudioPlanError,
+    VideoPaddingError,
+    VideoDiscoverError,
 )
 
 from scripts.log.logutils import (
@@ -332,24 +344,38 @@ def process_segment(
     segment_out = parent_out / seg_id
     summary = {"segment": seg_id, "ok": [], "fail": []}
 
-    # ---- Stage: decode + analyze raw (segment-scoped context) ----
+    # We'll ensure filtered_csv is set in both paths
+    filtered_csv = None
+
+    # ---- Stage: decode/gapfill/filter (segment-scoped context) ----
     with log_context(seg=seg_id, cam="-"):
         try:
             if skip_decode:
                 if do_split:
                     logger.info("--skip-decode is set; ignoring --split.")
                 decoded_raw_csv = audio_decoded_dir / "raw.csv"
+                prefiltered_csv = audio_decoded_dir / "raw-gapfilled-filtered.csv"
+
+                missing_any = False
                 if not decoded_raw_csv.exists():
                     logger.error("--skip-decode set but missing %s", decoded_raw_csv)
                     summary["fail"].append("decode-missing")
+                    missing_any = True
+                if not prefiltered_csv.exists():
+                    logger.error("--skip-decode set but missing %s", prefiltered_csv)
+                    summary["fail"].append("filtered-missing")
+                    missing_any = True
+                if missing_any:
                     return summary
-                logger.info("Skip decode: using %s", _name(decoded_raw_csv))
-                try:
-                    _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info("Analyzed raw.csv → %s", _name(raw_txt))
-                except SerialAnalysisError as e:
-                    logger.error("Raw analysis failed: %s", e)
-                    summary["fail"].append("raw-analysis")
+
+                logger.info(
+                    "Skip decode: using %s and %s",
+                    _name(decoded_raw_csv),
+                    _name(prefiltered_csv),
+                )
+
+                filtered_csv = prefiltered_csv
+
             else:
                 if do_split:
                     # Split audio to <out>/serial_audio_splitted (or custom)
@@ -421,45 +447,52 @@ def process_segment(
                 except SerialAnalysisError as e:
                     logger.error("Raw analysis failed: %s", e)
                     summary["fail"].append("raw-analysis")
+
+                # Gapfill
+                try:
+                    gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
+                    logger.info(
+                        "Gap-filled %s → %s",
+                        _name(decoded_raw_csv),
+                        _name(gapfilled_csv),
+                    )
+                    try:
+                        _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
+                        logger.info(
+                            "Analyzed %s → %s",
+                            _name(gapfilled_csv),
+                            _name(gapfilled_txt),
+                        )
+                    except SerialAnalysisError as e:
+                        logger.error("Gap-filled analysis failed: %s", e)
+                        summary["fail"].append("gapfilled-analysis")
+                except GapFillError as e:
+                    logger.error("Gap-fill failed: %s", e)
+                    summary["fail"].append("gapfill")
+                    return summary
+
+                # ---- Stage: filter + analyze ----
+                try:
+                    filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
+                    logger.info(
+                        "Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv)
+                    )
+                    try:
+                        _, filtered_txt = analyze_csv_serials(path=filtered_csv)
+                        logger.info(
+                            "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
+                        )
+                    except SerialAnalysisError as e:
+                        logger.error("Filtered analysis failed: %s", e)
+                        summary["fail"].append("filtered-analysis")
+                except FilteredError as e:
+                    logger.error("Filter failed: %s", e)
+                    summary["fail"].append("filter")
+                    return summary
+
         except AudioDecodingError as e:
             logger.error("Decode failed: %s", e)
             summary["fail"].append("decode")
-            return summary
-
-        # Gapfill
-        try:
-            gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-            logger.info(
-                "Gap-filled %s → %s", _name(decoded_raw_csv), _name(gapfilled_csv)
-            )
-            try:
-                _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-                logger.info(
-                    "Analyzed %s → %s", _name(gapfilled_csv), _name(gapfilled_txt)
-                )
-            except SerialAnalysisError as e:
-                logger.error("Gap-filled analysis failed: %s", e)
-                summary["fail"].append("gapfilled-analysis")
-        except GapFillError as e:
-            logger.error("Gap-fill failed: %s", e)
-            summary["fail"].append("gapfill")
-            return summary
-
-        # ---- Stage: filter + analyze ----
-        try:
-            filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-            logger.info("Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv))
-            try:
-                _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-                logger.info(
-                    "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
-                )
-            except SerialAnalysisError as e:
-                logger.error("Filtered analysis failed: %s", e)
-                summary["fail"].append("filtered-analysis")
-        except FilteredError as e:
-            logger.error("Filter failed: %s", e)
-            summary["fail"].append("filter")
             return summary
 
     # ---- Per camera workflow (camera-scoped context) ----
@@ -467,8 +500,6 @@ def process_segment(
         cam_out = segment_out / cam
         (cam_out / "work").mkdir(parents=True, exist_ok=True)
         (cam_out / "audio_padded").mkdir(parents=True, exist_ok=True)
-        (cam_out / "audio_clips").mkdir(parents=True, exist_ok=True)
-        (cam_out / "synced").mkdir(parents=True, exist_ok=True)
 
         # Per-camera file logger (tag all lines with [seg/cam])
         clog, cam_handler = attach_cam_logger(
@@ -484,35 +515,108 @@ def process_segment(
             padded_anchors = cam_out / "work" / "gapfilled-filtered-padded-anchors.json"
 
             try:
-                # Video analysis
+                # Discover a Video object
                 try:
-                    analyze_and_write(
-                        video_path=video_in / f"{seg_id}.{cam}.mp4",
+                    vid = build_video_obj(
+                        video_dir=video_in,
+                        segment_id=seg_id,
+                        cam_serial=cam,
+                        log=logger,
+                    )
+                    clog.info("Built Video object: %s", _name(vid.path))
+                except VideoDiscoverError as e:
+                    clog.error("Video discovery failed: %s", e)
+                    summary["fail"].append(f"{cam}:video-discover")
+                    continue
+
+                # Video analysis
+                # Whether there's dropped frames during acquisition
+                try:
+                    vid_res = analyze_video(
+                        video=vid,
                         outdir=cam_out / "work",
                     )
                     clog.info("Video analysis completed")
                 except VideoAnalysisError as e:
                     clog.error("Video analysis failed: %s", e)
                     summary["fail"].append(f"{cam}:video-analysis")
+                    vid_res = None
 
-                # Video frame id analysis
-                try:
-                    analyze_video_frameids(
-                        video=video_in / f"{seg_id}.{cam}.mp4",
-                        outdir=cam_out / "work",
-                    )
-                    clog.info("Video frame id analysis completed")
-                except VideoFrameIDAnalysisError as e:
-                    clog.error("Video frame id analysis failed: %s", e)
-                    summary["fail"].append(f"{cam}:video-frame-id-analysis")
+                # ---------- Video padding (always-on: only if missing frames) ----------
+                if vid_res is not None and vid_res.missing_frames > 0:
+                    clog.warning("Video has %d missing frames", vid_res.missing_frames)
+                    try:
+                        # 1) From video analysis json, build a padding plan json
+                        # with the name <video>_videopad.json
+                        try:
+                            vid_padjson = create_video_padding_plan(
+                                analysis_json=vid_res.out_json_path,
+                                target_fps=30.0,
+                                expect_step=1,
+                                policy="dup-prev",
+                                outdir=cam_out / "work",
+                            )
+                            clog.info(
+                                "Video padding plan created → %s", _name(vid_padjson)
+                            )
+                        except VideoPaddingError as e:
+                            clog.error("Video padding plan creation failed: %s", e)
+                            summary["fail"].append(f"{cam}:video-pad-plan")
+                            vid_padjson = None
+
+                        # 2) Apply plan (if available)
+                        if vid_padjson is not None:
+                            padded_dir = cam_out / "video_padded"
+                            padded_dir.mkdir(parents=True, exist_ok=True)
+
+                            try:
+                                # pad and save the video
+                                # pad Video object's fixed serial with 0s
+                                # pad fixed_frames_ids, and fixed_frame_idx_reidx
+                                out_path, vid = apply_video_padding_plan(
+                                    plan_json=vid_padjson,
+                                    video=vid,
+                                    out_dir=padded_dir,
+                                    crf=20,
+                                    preset="veryfast",
+                                    override_target_fps=30.0,
+                                )
+                                if out_path.exists():
+                                    clog.info(
+                                        "Video padding plan applied → %s",
+                                        _name(out_path),
+                                    )
+                                else:
+                                    clog.error("Padded video not found after apply")
+                                    summary["fail"].append(
+                                        f"{cam}:video-pad-apply-missing"
+                                    )
+                            except VideoPaddingError as e:
+                                clog.error("Video padding apply failed: %s", e)
+                                summary["fail"].append(f"{cam}:video-pad-apply")
+
+                            try:
+                                analyze_video(
+                                    video=vid,
+                                    outdir=padded_dir,
+                                )
+                                clog.info("Video analysis completed")
+                            except VideoAnalysisError as e:
+                                clog.error("Video analysis failed: %s", e)
+                                summary["fail"].append(f"{cam}:video-analysis-postpad")
+
+                    except Exception as e:
+                        # Catch-all for any unexpected failure inside the padding block
+                        clog.error("Video padding step failed: %s", e)
+                        summary["fail"].append(f"{cam}:video-pad")
+                else:
+                    clog.info("No missing frames detected; padding not needed.")
 
                 # Anchors from filtered CSV
                 try:
                     save_anchors_for_camera(
                         serial_csv=filtered_csv,
-                        video_dir=video_in,
-                        segment_id=seg_id,
-                        cam_serial=cam,
+                        video=vid,
                         out_json=filtered_anchors,
                     )
                     clog.info("Saved %s", _name(filtered_anchors))
@@ -620,12 +724,11 @@ def process_segment(
                         summary["fail"].append(f"{cam}:plan-{wav_path.stem}")
 
                 # Anchors from padded CSV
+                # This anchor SHOULD BE perfect
                 try:
                     save_anchors_for_camera(
                         serial_csv=padded_csv,
-                        video_dir=video_in,
-                        segment_id=seg_id,
-                        cam_serial=cam,
+                        video=vid,
                         out_json=padded_anchors,
                     )
                     clog.info("Saved %s", _name(padded_anchors))
@@ -642,15 +745,12 @@ def process_segment(
 
                 # Final sync
                 try:
-                    sync_one_segment(
+                    sync_one_video(
                         audio_dir=cam_out / "audio_padded",
-                        video_dir=video_in,
-                        segment_id=seg_id,
-                        cam_serial=cam,
+                        video=vid,
                         anchors_json=padded_anchors,
                         out_audio_dir=cam_out / "synced_audio",
                         out_video_dir=cam_out / "synced_video",
-                        serial_channel=3,
                     )
                     clog.info("synced ✔")
                     summary["ok"].append(cam)
@@ -721,7 +821,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-decode",
         action="store_true",
-        help="Reuse existing <out>/audio_decoded/raw.csv and skip audio serial decoding.",
+        help="Reuse existing <out>/audio_decoded/raw.csv and raw-gapfilled-filtered.csv; skip decoding+gapfill+filter and start per-camera workflow.",
     )
     parser.add_argument(
         "--split",
