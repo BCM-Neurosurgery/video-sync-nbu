@@ -143,6 +143,7 @@ from scripts.index.discover import AudioDiscoverer
 from scripts.index.videodiscover import build_video_obj
 from scripts.merge.mergecsv import merge_split_csvs
 from scripts.split.mp3split import split_mp3_to_wav
+from scripts.utility.utils import _name
 from scripts.models import AudioGroup, Video
 from scripts.errors import (
     AudioGroupDiscoverError,
@@ -171,14 +172,6 @@ from scripts.log.logutils import (
 logger = logging.getLogger("cli")
 
 SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
-
-
-def _name(p) -> str:
-    """Return just the basename for any path-like object."""
-    try:
-        return Path(p).name
-    except Exception:
-        return str(p)
 
 
 def list_segments(video_dir: Path) -> list[str]:

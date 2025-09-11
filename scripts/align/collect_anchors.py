@@ -37,17 +37,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 logger = logging.getLogger(__name__)
 
 from scripts.models import Video  # expects .companion_json with fixed_* arrays
-
-
-# -----------------------------------------------------------------------------
-# Small utils (concise names in logs)
-# -----------------------------------------------------------------------------
-def _short_name(p: str | Path) -> str:
-    """basename with extension (e.g., 'file.csv')."""
-    try:
-        return Path(p).name
-    except Exception:
-        return str(p)
+from scripts.utility.utils import _name
 
 
 # -----------------------------------------------------------------------------
@@ -99,9 +89,7 @@ def load_serial_index_csv(path: Path) -> Dict[int, int]:
 
     if not mapping:
         raise ValueError(f"No valid rows found in serial index CSV: {path}")
-    logger.info(
-        "Loaded %d serial→sample entries from %s", len(mapping), _short_name(path)
-    )
+    logger.info("Loaded %d serial→sample entries from %s", len(mapping), _name(path))
     return mapping
 
 
@@ -281,6 +269,6 @@ def save_anchors_for_camera(
         len(anchors),
         getattr(video, "segment_id", ""),
         getattr(video, "cam_serial", ""),
-        _short_name(out_json),
+        _name(out_json),
     )
     return out_json

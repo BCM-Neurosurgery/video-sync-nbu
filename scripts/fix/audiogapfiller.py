@@ -28,17 +28,11 @@ import logging
 import pandas as pd
 from scripts.fix.serialfixer import SerialFixer
 from scripts.log.logutils import configure_standalone_logging
+from scripts.utility.utils import _name
 
 logger = logging.getLogger(__name__)
 
 REQUIRED_COLS = {"serial", "start_sample", "end_sample"}
-
-
-def _short_name(p: Path | str) -> str:
-    try:
-        return Path(p).name
-    except Exception:
-        return str(p)
 
 
 class AudioGapFiller:
@@ -214,7 +208,7 @@ def gapfill_csv_file(
         raise FileNotFoundError(f"Input CSV not found: {in_path}")
 
     filler = AudioGapFiller(gaps=gaps)
-    logger.info("Reading %s", _short_name(in_path))
+    logger.info("Reading %s", _name(in_path))
     df_out = filler.fill_csv(in_path)
 
     out = (
@@ -229,7 +223,7 @@ def gapfill_csv_file(
     except Exception as exc:
         raise RuntimeError(f"Failed to write output CSV: {out}") from exc
 
-    logger.info("Wrote %s (%d rows)", _short_name(out), len(df_out))
+    logger.info("Wrote %s (%d rows)", _name(out), len(df_out))
     return out
 
 
