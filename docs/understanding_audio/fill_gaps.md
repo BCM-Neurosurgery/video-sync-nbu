@@ -119,7 +119,27 @@ Adjacent duplicate events: 24671
 
 It’s a significant improvement!!
 
-However, some duplicates and forward jumps remain after this pass:
+---
+
+## Limitations
+
+Gap filling does not remove all drops, forward-jumps, and duplicates. An example of a remaining drop can be
+
+```csv
+...
+32953058,76591478,76591709
+32953059,76592987,76593218
+32953060,76594496,76594727
+32953348,76596471,76596702
+32953120,76597982,76598213
+32953122,76599491,76599722
+32953123,76601001,76601232
+...
+```
+
+Serial gets bumped from 32953060 to 32953348 before it drops back to 32953120. 
+
+Another example of a duplicate and a large forward-jump after gap-filling can be
 
 ```csv
 ...
