@@ -1,7 +1,7 @@
 function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
 % DECODE_SERIAL_FROM_WAV_TO_CSV
-% Standalone wrapper of your serial-decoding code.
-% - Keeps your constants, flips, taps, and byte assembly intact.
+% Standalone wrapper of the serial-decoding code.
+% - Keeps constants, flips, taps, and byte assembly intact.
 % - Works with mono/stereo/≥3 channels (auto-picks channel 3 if present).
 % - Prints progress (% done, elapsed, ETA) and a final summary.
 % - Writes a CSV with a SINGLE column: serial
@@ -28,7 +28,7 @@ function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
     ch = min(3, nCh);             % if mono->1, stereo->2, else->3
     ych = y(:, ch).';             % row vector
 
-    % -------- Normalize -> threshold to binary (match your code) ---------
+    % -------- Normalize -> threshold to binary ---------
     mn = min(ych); mx = max(ych);
     if mx > mn
         ych = (ych - mn) ./ (mx - mn);
@@ -38,16 +38,16 @@ function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
     end
     binary_signal = ych > 0.5;
 
-    % -------- Your global flip ------------------------------------------
+    % -------- global flip ------------------------------------------
     binary_signal = flip(binary_signal);
 
-    % -------- Constants from your script --------------------------------
+    % -------- Constants --------------------------------
     W  = 231;                 % window length (samples)
     H  = 1100;                % stride / hop (samples)
     transition_points = 6:47:230;                % 5 bytes start positions
     offset_from_transition = [4,9,14,19,23,28,33,37]; % 8 taps per byte
 
-    % -------- Prealloc like your code -----------------------------------
+    % -------- Preallocation -----------------------------------
     clipped_signal      = zeros(128, W);         % each row: one flipped window
     clipped_signal_byte = [];                    % populated in loop
 
@@ -56,7 +56,7 @@ function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
     est_blocks = max(1, floor((N - W) / H) + 1);
     t0 = tic; last_pct = -1; print_every_pct = 1;  % print every 1%
 
-    % -------- Scan & decode (your logic) --------------------------------
+    % -------- Scan & decode --------------------------------
     current_ind = 1;
     count = 1;
 
@@ -70,7 +70,7 @@ function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
                 break;
             end
 
-            % flip each window (your code)
+            % flip each window
             clipped_signal(count,:) = flip(binary_signal(current_ind : current_ind + W - 1));
 
             % move to next block
@@ -106,7 +106,7 @@ function out_csv = decode_serial_from_wav_to_csv(wav_path, out_csv)
         warning('No blocks decoded. CSV will be empty.');
     end
 
-    % -------- Rebuild byte strings (your exact transforms) --------------
+    % -------- Rebuild byte strings --------------
     if ~isempty(clipped_signal_byte)
         byte_string1 = join(string(flip(squeeze(clipped_signal_byte(1,1:nblocks,1:end-1)),2)),'',2);
         byte_string2 = join(string(flip(squeeze(clipped_signal_byte(2,1:nblocks,1:end-1)),2)),'',2);
