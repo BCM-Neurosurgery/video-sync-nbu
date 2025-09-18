@@ -240,5 +240,3 @@ Together, those many unmatched gaps accumulate to a 12% audio loss
     "loss_share_pct": 12.045561048341426
   },
 ```
-
-## Quantifying Audio Loss for All Existing Data
