@@ -1,0 +1,769 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../serial_quality/">
+      
+      
+        <link rel="next" href="../data_loss/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
+    
+    
+      
+        <title>First Fix - Gap Filling - Video Sync Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#first-fix-gap-filling" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Video Sync Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              First Fix - Gap Filling
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Video Sync Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Understanding Audio
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Understanding Audio
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decoding_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to decode serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../serial_quality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-in-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Files in this page
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#intuition-midpoint-passes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intuition: midpoint passes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
+    <span class="md-ellipsis">
+      High‑level algorithm (pseudocode)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Limitations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how_much_data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How much data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-in-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Files in this page
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#intuition-midpoint-passes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intuition: midpoint passes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
+    <span class="md-ellipsis">
+      High‑level algorithm (pseudocode)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Limitations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="first-fix-gap-filling">First Fix — Gap Filling</h1>
+<p>From the <a href="../serial_quality/">previous page</a>, we observed that although there are many discontinuities: drops (negative deltas), forward jumps (delta &gt; 1), and adjacent duplicates (delta = 0), intuitively, we can "repair" the sequence using a "gap-filling" algorithm.</p>
+<hr />
+<h2 id="files-in-this-page">Files in this page</h2>
+<ul>
+<li>Raw 1-Hour Serial: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001.csv"><code>TRBD002_08062025-03-001.csv</code></a></li>
+<li>Raw 1-Hour Serial Analysis: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001.txt"><code>TRBD002_08062025-03-001.txt</code></a></li>
+<li>Gap-filled Serial: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.csv"><code>TRBD002_08062025-03-001-gapfilled.csv</code></a></li>
+<li>Gap-filled Serial Analysis: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.txt"><code>TRBD002_08062025-03-001-gapfilled.txt</code></a></li>
+</ul>
+<hr />
+<h2 id="motivation">Motivation</h2>
+<ul>
+<li>The serial counter should increment by 1 for each frame (~30 fps), so consecutive values should form a near‑monotonic sequence.</li>
+<li>Many defects can be corrected without deleting or reordering rows by inferring the missing values between anchors that are likely correct.</li>
+</ul>
+<p>Goal: produce a cleaned serial column with fewer discontinuities, preserving row count and original sample ranges.</p>
+<hr />
+<h2 id="intuition-midpoint-passes">Intuition: midpoint passes</h2>
+<p>Rather than guessing each point independently, we run a small number of midpoint passes at different window sizes. Each pass “looks across” a fixed gap size g and nudges the center point(s) toward what the sequence should be if it were monotonic. For example, with <code>[1,2,3,3,5,6,7]</code>, slide a window of length 3; if the middle value <code>s[i]</code> is not between <code>s[i-1]</code> and <code>s[i+1]</code>, set it accordingly, yielding <code>[1,2,3,4,5,6,7]</code>.</p>
+<p>Key ideas:</p>
+<ul>
+<li>Work only on the serial values; never drop or reorder rows.</li>
+<li>Use multiple gap sizes (e.g., 10, 100, 1000) so local inconsistencies get corrected at the appropriate scale.</li>
+<li>Keep it stable and fast: each pass is O(n) and purely functional w.r.t. row layout.</li>
+</ul>
+<p>By stacking a few such passes, we can straighten out small step defects while leaving large‑scale structure intact.</p>
+<hr />
+<h2 id="highlevel-algorithm-pseudocode">High‑level algorithm (pseudocode)</h2>
+<p>Input/Output contract:
+- Input: CSV or DataFrame with exactly 3 columns: <code>serial,start_sample,end_sample</code>.
+- Output: same schema; only <code>serial</code> values may change; length/order preserved.</p>
+<p>Parameters:
+- gaps: list of window sizes. If not provided, choose powers of 10 strictly less than the number of rows: [10, 100, 1000, …]. For n ≤ 10, no passes are applied.</p>
+<pre><code class="language-text">function gap_fill(series, gaps=None):
+    s = to_int_list(series)
+    if len(s) &lt; 3:
+        return s
+
+    G = sanitize_or_autoselect_gaps(gaps, n=len(s))   # e.g., [10, 100, 1000]
+    for g in G:
+        # A single midpoint pass at window size g
+        # (implementation detail lives in SerialFixer.apply_gap_passes_fast)
+        s = midpoint_pass(s, g)
+
+    return s
+
+function midpoint_pass(s, g):
+    # Conceptually: encourage monotone +1 progression across spans of size g.
+    # One simple mental model:
+    #   - compare s[i] and s[i+g]
+    #   - estimate what the midpoint(s) should be if the run from i..i+g were smooth
+    #   - adjust interior values slightly toward that estimate
+    # Actual implementation is optimized for speed and integer stability.
+    return adjusted_copy_of(s)
+</code></pre>
+<hr />
+<h2 id="results">Results</h2>
+<p>Analyzing with <code>scripts.fix.audiogapfiller</code> on the gap‑filled CSV, the first few rows look like:</p>
+<pre><code class="language-csv">serial,start_sample,end_sample
+32896102,226,457
+32896103,1735,1966
+32896104,3245,3476
+32896105,4755,4986
+32896106,6264,6495
+32896107,7773,8004
+32896108,9283,9514
+32896109,10792,11023
+32896110,12302,12533
+</code></pre>
+<p>Compared to before:</p>
+<pre><code class="language-csv">serial,start_sample,end_sample
+32896102,226,457
+32896096,1735,1966
+32896104,3245,3476
+32896104,4755,4986
+32896106,6264,6495
+32896104,7773,8004
+32896108,9283,9514
+32896108,10792,11023
+32896110,12302,12533
+</code></pre>
+<p>The analysis shows a significantly improved sequence:</p>
+<pre><code class="language-text">Values=105223  Steps=105222  ok=104404 (99.22%)
+Counts: drop=320, duplicate=79, forward_jump=419, ok=104404
+Adjacent duplicate events: 79
+</code></pre>
+<p>Compared to before:</p>
+<pre><code class="language-text">Values=105223  Steps=105222  ok=0 (0.00%)
+Counts: drop=31613, duplicate=24671, forward_jump=48938
+Adjacent duplicate events: 24671
+</code></pre>
+<p>It’s a significant improvement!!</p>
+<hr />
+<h2 id="limitations">Limitations</h2>
+<p>Gap filling does not remove all drops, forward-jumps, and duplicates. An example of a remaining drop can be</p>
+<pre><code class="language-csv">...
+32953058,76591478,76591709
+32953059,76592987,76593218
+32953060,76594496,76594727
+32953348,76596471,76596702
+32953120,76597982,76598213
+32953122,76599491,76599722
+32953123,76601001,76601232
+...
+</code></pre>
+<p>Serial gets bumped from 32953060 to 32953348 before it drops back to 32953120. </p>
+<p>Another example of a duplicate and a large forward-jump after gap-filling can be</p>
+<pre><code class="language-csv">...
+32897351,1708541,1708772
+32897352,1710051,1710282
+32897352,1711561,1711792
+17179869184,1712867,1713098
+34359738367,1713967,1714198
+32897414,1715223,1715454
+32897415,1716733,1716964
+32897416,1718242,1718473
+...
+</code></pre>
+<p>These are cases that can’t be corrected by gap filling alone because they exceed the local window constraints.</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li>This pass does not remove rows or reorder time; it only adjusts <code>serial</code> values.</li>
+<li>It’s designed to fix local inconsistencies efficiently; pathological corruption may require additional passes (e.g., duplicate removal, drop correction) or more advanced reconstruction.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>

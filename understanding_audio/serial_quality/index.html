@@ -1,0 +1,935 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../decoding_serial/">
+      
+      
+        <link rel="next" href="../fill_gaps/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
+    
+    
+      
+        <title>What's the quality of serial? - Video Sync Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#serial-quality" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Video Sync Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              What's the quality of serial?
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Video Sync Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Understanding Audio
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Understanding Audio
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decoding_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to decode serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#csv-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      CSV schema
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#definition-of-discontinuities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Definition of discontinuities
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-look-at-the-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick look at the data
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quality-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quality Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-duplicates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: duplicates
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-forward-jumps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: forward jumps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Example: forward jumps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-drops" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: drops
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#takeaways" class="md-nav__link">
+    <span class="md-ellipsis">
+      Takeaways
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fill_gaps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how_much_data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How much data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#csv-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      CSV schema
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#definition-of-discontinuities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Definition of discontinuities
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-look-at-the-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick look at the data
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quality-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quality Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-duplicates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: duplicates
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-forward-jumps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: forward jumps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Example: forward jumps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-drops" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example: drops
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#takeaways" class="md-nav__link">
+    <span class="md-ellipsis">
+      Takeaways
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="serial-quality">Serial Quality</h1>
+<p>After decoding serials from the serial audio, a natural question is: what’s the data quality? In a perfect scenario, we expect a monotonic sequence—but is that the case? To show an example representative of the general data quality, we use the <strong>first 1‑hour slice of <code>TRBD002_08062025-03.mp3</code></strong> and include the decoded CSV and its text analysis report so readers can reproduce the findings.</p>
+<blockquote>
+<p>Files for this example are checked into the repo under: <code>docs/assets/serial_quality/</code></p>
+</blockquote>
+<ul>
+<li>
+<p>CSV: <a href="../../assets/serial_quality/TRBD002_08062025-03-001.csv"><code>assets/serial_quality/TRBD002_08062025-03-001.csv</code></a></p>
+</li>
+<li>
+<p>Text report: <a href="../../assets/serial_quality/TRBD002_08062025-03-001.txt"><code>assets/serial_quality/TRBD002_08062025-03-001.txt</code></a></p>
+</li>
+</ul>
+<h2 id="csv-schema">CSV schema</h2>
+<table>
+<thead>
+<tr>
+<th>column</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serial</code></td>
+<td>The decoded integer for this block/window of the serial track.</td>
+</tr>
+<tr>
+<td><code>start_sample</code></td>
+<td>Start index (audio sample) of the detected window.</td>
+</tr>
+<tr>
+<td><code>end_sample</code></td>
+<td>End index (audio sample) of the detected window.</td>
+</tr>
+<tr>
+<td><code>delta_serial</code></td>
+<td>Derived here: <code>serial[i] - serial[i-1]</code> (first row is NA).</td>
+</tr>
+<tr>
+<td><code>step</code></td>
+<td>Classification of <code>delta_serial</code>: <code>ok</code> (+1), <code>duplicate</code> (0), <code>forward_jump</code> (&gt;+1), <code>drop</code> (&lt;0).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="definition-of-discontinuities">Definition of discontinuities</h2>
+<p>To quickly analyze the monotonicity of the stream, we standardize the quality analysis with <code>scripts/analysis/serial_analysis.py</code> and <code>scripts/analysis/csv_serial_analysis.py</code>. Based on every pair of adjacent values, we categorize four outcomes:</p>
+<pre><code class="language-text">- ok        : diff == +1
+- duplicate : diff == 0                 (adjacent equal values)
+- forward   : diff &gt; +1  (we also sum total_missing_ids = sum(diff-1))
+- drop      : diff &lt; 0
+</code></pre>
+<h2 id="quick-look-at-the-data">Quick look at the data</h2>
+<p>A preview of the first few rows (derived <code>delta_serial</code> and <code>step</code> added for illustration):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">row</th>
+<th style="text-align: right;">serial</th>
+<th style="text-align: right;">start_sample</th>
+<th style="text-align: right;">end_sample</th>
+<th style="text-align: right;">delta_serial</th>
+<th style="text-align: left;">step</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">32896102</td>
+<td style="text-align: right;">226</td>
+<td style="text-align: right;">457</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: left;">first</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">32896096</td>
+<td style="text-align: right;">1735</td>
+<td style="text-align: right;">1966</td>
+<td style="text-align: right;">-6</td>
+<td style="text-align: left;">drop</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">32896104</td>
+<td style="text-align: right;">3245</td>
+<td style="text-align: right;">3476</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: left;">forward_jump</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">32896104</td>
+<td style="text-align: right;">4755</td>
+<td style="text-align: right;">4986</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">duplicate</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">32896106</td>
+<td style="text-align: right;">6264</td>
+<td style="text-align: right;">6495</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: left;">forward_jump</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">32896104</td>
+<td style="text-align: right;">7773</td>
+<td style="text-align: right;">8004</td>
+<td style="text-align: right;">-2</td>
+<td style="text-align: left;">drop</td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">32896108</td>
+<td style="text-align: right;">9283</td>
+<td style="text-align: right;">9514</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: left;">forward_jump</td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">32896108</td>
+<td style="text-align: right;">10792</td>
+<td style="text-align: right;">11023</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: left;">duplicate</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">32896110</td>
+<td style="text-align: right;">12302</td>
+<td style="text-align: right;">12533</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: left;">forward_jump</td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">32896032</td>
+<td style="text-align: right;">13811</td>
+<td style="text-align: right;">14042</td>
+<td style="text-align: right;">-78</td>
+<td style="text-align: left;">drop</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Observations</strong>:</p>
+<ul>
+<li>
+<p>A glance at the difference of the sample indices shows they’re roughly 1500 samples apart, consistent with 44,100 Hz audio where each serial is sent at ~30 fps from Arduino: 44,100 / 30 ≈ 1,470 samples.</p>
+</li>
+<li>
+<p>In the first 10 rows, we notice <strong>drops</strong> (negative deltas), <strong>forward jumps</strong> (delta &gt; 1), and <strong>adjacent duplicates</strong> (delta = 0). A healthy stream would be nearly all <code>ok</code> (+1) steps. So what about the quality for this entire 1-hour clip? How many of those discontinuities do we have? Can we quantify them?</p>
+</li>
+<li>
+<p>We also notice that although this stream looks unusable, we might actually be able to <strong>repair</strong> it. For example, 32896096 should really be 32896103 based on the previous value and its next value, and the third 32896104 should really be 32896107. We know this with high confidence because the serials should be monotonic and the sample indices look correctly spaced. This suggests we can write scripts to fix the stream. More on this later.</p>
+</li>
+</ul>
+<h2 id="quality-summary">Quality Summary</h2>
+<p>By running <code>python -m scripts.analysis.csv_serial_analysis</code> on the CSV, we can assess the data quality for the entire 1-hour clip:</p>
+<ul>
+<li>
+<p>Total values (rows): <strong>105,223</strong>  → Steps (N−1): <strong>105,222</strong></p>
+</li>
+<li>
+<p><code>ok</code> (+1): <strong>0</strong>  (0.00%)</p>
+</li>
+<li>
+<p><code>forward_jump</code> (&gt;+1): <strong>48,938</strong>  (46.51%)</p>
+</li>
+<li>
+<p><code>drop</code> (&lt;0): <strong>31,613</strong>  (30.04%)</p>
+</li>
+<li>
+<p><code>duplicate</code> (=0): <strong>24,671</strong>  (23.45%)</p>
+</li>
+</ul>
+<p><strong>Interpretation</strong>: The raw serial stream is <strong>not monotonic</strong>: nearly half of all steps are forward jumps, ~30% are drops, and ~23% are adjacent duplicates. The <code>ok</code> rate is <strong>0%</strong>, meaning there is no contiguous +1 run in this hour.</p>
+<h2 id="example-duplicates">Example: duplicates</h2>
+<p>The first few lines of adjacent discontinuities in the report are:</p>
+<pre><code class="language-text">Adjacent duplicate events: 24671
+Adjacent-duplicate values (value:count):
+  32896104:1  32896108:1
+  32896112:1  32896116:1
+  32896120:1  32896128:2
+  32896132:1  32896136:1
+  32896140:1  32896144:1
+  ...
+</code></pre>
+<p>That means <code>32896104</code> is repeated once, <code>32896128</code> is repeated twice, etc. Zooming into the CSV, we see</p>
+<pre><code class="language-csv">...
+32896096,1735,1966
+32896104,3245,3476
+32896104,4755,4986
+32896106,6264,6495
+...
+</code></pre>
+<pre><code class="language-csv">...
+32896000,37964,38195
+32896128,39473,39704
+32896128,40983,41214
+32896130,42492,42723
+...
+</code></pre>
+<pre><code class="language-csv">...
+32896140,228160,228391
+32896128,229671,229902
+32896128,231180,231411
+32896256,232689,232920
+...
+</code></pre>
+<h2 id="example-forward-jumps">Example: forward jumps</h2>
+<p>Another example is a histogram of forward jumps in the decoded serial:</p>
+<pre><code class="language-text">Total missing IDs (from forward jumps): 2174372008059
+Forward diff histogram (diff &gt; +1):
+  2:22109        3:1          
+  4:9693         6:146        
+  8:5277         10:101       
+  12:1106        14:56        
+  16:2449        18:28        
+  20:727         24:64
+  ...  
+</code></pre>
+<p>That means a difference of 2 appears 22,109 times, a difference of 10 appears 101 times, etc. Top forward jumps are:</p>
+<pre><code class="language-text">Top forward jumps: (index, prev, curr, diff)
+  @i= 10864  0 -&gt; 34359738367  Δ=+34359738367
+  @i= 18145  0 -&gt; 34359738367  Δ=+34359738367
+  @i= 22382  0 -&gt; 34359738367  Δ=+34359738367
+  @i= 35740  0 -&gt; 34359738367  Δ=+34359738367
+  @i= 94195  0 -&gt; 34359738367  Δ=+34359738367
+</code></pre>
+<p>This means that at index 10,864, the serial jumps from 0 to 34,359,738,367. In the CSV, we see:</p>
+<pre><code class="language-csv">...
+32907776,16396958,16397189
+0,16398225,16398456
+34359738367,16399325,16399556
+32907964,16400434,16400665
+...
+</code></pre>
+<h3 id="example-drops">Example: drops</h3>
+<p>Top drops are also provided in the report:</p>
+<pre><code class="language-text">Top drops: (index, prev, curr, diff)
+  @i=  1136  34359738367 -&gt; 32897414  Δ=-34326840953
+  @i= 10865  34359738367 -&gt; 32907964  Δ=-34326830403
+  @i= 18146  34359738367 -&gt; 32916294  Δ=-34326822073
+  @i= 22383  34359738367 -&gt; 32921058  Δ=-34326817309
+  @i= 35741  34359738367 -&gt; 32936110  Δ=-34326802257
+</code></pre>
+<p>Zooming into the CSV, we see:</p>
+<pre><code class="language-csv">...
+17179869184,1712867,1713098
+34359738367,1713967,1714198
+32897414,1715223,1715454
+32897408,1716733,1716964
+...
+</code></pre>
+<h2 id="takeaways">Takeaways</h2>
+<ul>
+<li>The raw CSV often has poor data quality. Without a post-fixing script, it’s barely usable.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>

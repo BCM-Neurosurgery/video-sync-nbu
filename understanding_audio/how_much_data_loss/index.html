@@ -1,0 +1,828 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../data_loss/">
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
+    
+    
+      
+        <title>How much data loss? - Video Sync Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#quantifying-data-loss" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Video Sync Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              How much data loss?
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Video Sync Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Understanding Audio
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Understanding Audio
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decoding_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to decode serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../serial_quality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fill_gaps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    How much data loss?
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    How much data loss?
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive snapshot
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-artifacts-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Artifacts &amp; reports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Configuration (for reproducibility)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-perrecording-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Per‑recording breakdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive snapshot
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-artifacts-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Artifacts &amp; reports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Configuration (for reproducibility)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-perrecording-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Per‑recording breakdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="quantifying-data-loss">Quantifying Data Loss</h1>
+<p>So how much data loss exactly do we have? This note summarizes how much serial‑aligned audio timing is effectively "missing" across analyzed NBU lounge recordings. The helper script <code>scripts.doc_helper.quantify_audio_loss</code> batch‑processes each serial audio file found through <code>/mnt/datalake/data/TRBD-53761</code> and emits JSON + CSV summaries.</p>
+<h2 id="1-executive-snapshot">1. Executive snapshot</h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Recordings analyzed</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Total analyzed duration</td>
+<td>376,532.8 s (≈104.0 h)</td>
+</tr>
+<tr>
+<td>Estimated missing time</td>
+<td>7,146.35 s (≈1.98 h)</td>
+</tr>
+<tr>
+<td>Weighted loss (%)</td>
+<td>1.90%</td>
+</tr>
+<tr>
+<td>Files with material loss (&gt;0.5%)</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>Most recordings show near‑zero structural loss; the overall 1.9% is driven almost entirely by three outliers.</p>
+<h2 id="2-artifacts-reports">2. Artifacts &amp; reports</h2>
+<ul>
+<li>Overall config + rollup: <a href="../../assets/how_much_data_loss/audio_loss_overall.json">overall report</a></li>
+<li>Per‑recording CSV summary: <a href="../../assets/how_much_data_loss/audio_loss_summary.csv">summary report</a></li>
+</ul>
+<h2 id="3-configuration-for-reproducibility">3. Configuration (for reproducibility)</h2>
+<p>Key parameters embedded in the JSON (trimmed for readability):</p>
+<pre><code class="language-json">{
+  &quot;fs_hz&quot;: 44100,
+  &quot;prefilter&quot;: true,
+  &quot;max_fwd_delta&quot;: 200,
+  &quot;local_window&quot;: 3,
+  &quot;patients&quot;: [&quot;TRBD001&quot;, &quot;TRBD002&quot;],
+  &quot;discovered&quot;: 14,
+  &quot;analyzed&quot;: 14,
+  &quot;totals&quot;: {
+    &quot;n_audios&quot;: 14,
+    &quot;sum_analyzed_seconds&quot;: 376532.845,
+    &quot;sum_missing_seconds&quot;: 7146.35,
+    &quot;weighted_loss_pct&quot;: 1.898
+  }
+}
+</code></pre>
+<p>Weighted loss (%) is computed as:</p>
+<pre><code class="language-python">weighted_loss = 100.0 * sum_missing / sum_analyzed
+</code></pre>
+<h2 id="4-perrecording-breakdown">4. Per‑recording breakdown</h2>
+<table>
+<thead>
+<tr>
+<th>Patient</th>
+<th>Date</th>
+<th style="text-align: right;">Duration (s)</th>
+<th style="text-align: right;">Duration (h)</th>
+<th style="text-align: right;">Missing (s)</th>
+<th style="text-align: right;">Loss %</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TRBD001</td>
+<td>2025-04-16</td>
+<td style="text-align: right;">36985.01</td>
+<td style="text-align: right;">10.27</td>
+<td style="text-align: right;">4055.40</td>
+<td style="text-align: right;"><strong>10.96</strong></td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-03</td>
+<td style="text-align: right;">39263.53</td>
+<td style="text-align: right;">10.91</td>
+<td style="text-align: right;">0.14</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-04</td>
+<td style="text-align: right;">48083.01</td>
+<td style="text-align: right;">13.36</td>
+<td style="text-align: right;">2.84</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-10</td>
+<td style="text-align: right;">22586.69</td>
+<td style="text-align: right;">6.27</td>
+<td style="text-align: right;">0.94</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-10</td>
+<td style="text-align: right;">16117.47</td>
+<td style="text-align: right;">4.48</td>
+<td style="text-align: right;">0.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-11</td>
+<td style="text-align: right;">11384.07</td>
+<td style="text-align: right;">3.16</td>
+<td style="text-align: right;">0.24</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-17</td>
+<td style="text-align: right;">41946.43</td>
+<td style="text-align: right;">11.65</td>
+<td style="text-align: right;">0.64</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-18</td>
+<td style="text-align: right;">5230.64</td>
+<td style="text-align: right;">1.45</td>
+<td style="text-align: right;">0.10</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-05-21</td>
+<td style="text-align: right;">43088.39</td>
+<td style="text-align: right;">11.97</td>
+<td style="text-align: right;">0.87</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-10</td>
+<td style="text-align: right;">36716.97</td>
+<td style="text-align: right;">10.20</td>
+<td style="text-align: right;">0.72</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-10</td>
+<td style="text-align: right;">6807.50</td>
+<td style="text-align: right;">1.89</td>
+<td style="text-align: right;">0.16</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-23</td>
+<td style="text-align: right;">43543.35</td>
+<td style="text-align: right;">12.10</td>
+<td style="text-align: right;">3.05</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-08-07</td>
+<td style="text-align: right;">22267.96</td>
+<td style="text-align: right;">6.19</td>
+<td style="text-align: right;">2685.73</td>
+<td style="text-align: right;"><strong>12.06</strong></td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-08-07</td>
+<td style="text-align: right;">2511.82</td>
+<td style="text-align: right;">0.70</td>
+<td style="text-align: right;">395.50</td>
+<td style="text-align: right;"><strong>15.75</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Observations:</p>
+<ul>
+<li>Only two calendar dates (Apr 16 and Aug 07) contribute virtually all loss.</li>
+<li>The smaller Aug 07 file (≈0.70 h) shows very high relative loss (15.7%).</li>
+<li>Other sessions are effectively clean (&lt;0.02%).</li>
+</ul>
+<h2 id="5-interpretation">5. Interpretation</h2>
+<p>The overall 1.9% masks a bimodal pattern: nearly all sessions are clean; a small minority show sustained discontinuities (serial forward jumps).</p>
+<h2 id="6-reproduce-locally">6. Reproduce locally</h2>
+<pre><code class="language-bash">python -m scripts.doc_helper.quantify_audio_loss \
+  --root /mnt/datalake/data/TRBD-53761 \
+  --out-dir /mnt/labworlds/Provenza/auto/TRBD_audio_loss \
+  --site nbu_lounge
+</code></pre>
+<p>Outputs will mirror the JSON + CSV linked above.</p>
+<hr />
+<p>Concise takeaway: overall data integrity is strong; loss is localized to a small number of outlier recordings that warrant targeted investigation.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>

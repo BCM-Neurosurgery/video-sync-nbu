@@ -1,0 +1,107 @@
+Source   : TRBD002_20250806_104707.23512909.23512909.anchors.json
+Camera   : 23512909
+
+=== GLOBAL SERIAL ANALYSIS (unique sorted serials) ===
+N unique serials: 16003
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff >  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff <  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=16003  Steps=16002  ok=15946 (99.65%)
+Counts: forward_jump=56, ok=15946
+Total missing IDs (from forward jumps): 1996
+Forward diff histogram (diff > +1):
+  2:10   4:3 
+  8:4    12:1
+  14:1   16:1
+  18:1   20:1
+  24:1   32:1
+  40:1   44:1
+  46:1   52:1
+  54:4   58:3
+  60:13  62:6
+  64:2 
+Longest OK segment: start=7508  length=1194 steps
+
+Top forward jumps: (index, prev, curr, diff)
+  @i=  2501  32951744 -> 32951808  Δ=+64
+  @i= 10591  32960860 -> 32960924  Δ=+64
+  @i=  1306  32950428 -> 32950490  Δ=+62
+  @i=  4477  32954082 -> 32954144  Δ=+62
+  @i= 10216  32960424 -> 32960486  Δ=+62
+
+=== FRAME-ID ANALYSIS (RAW frame_id) ===
+N unique frame_id: 16003
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff >  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff <  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=16003  Steps=16002  ok=15946 (99.65%)
+Counts: forward_jump=56, ok=15946
+Total missing IDs (from forward jumps): 49471
+Forward diff histogram (diff > +1):
+  2:10   4:3    
+  8:4    12:1   
+  14:1   16:1   
+  18:1   20:1   
+  24:1   32:1   
+  40:1   44:1   
+  46:1   52:1   
+  54:4   58:3   
+  60:13  62:5   
+  64:2   47537:1
+Longest OK segment: start=13294  length=1194 steps
+
+Top forward jumps: (index, prev, curr, diff)
+  @i=  5785  6465 -> 54002  Δ=+47537
+  @i=   374  387 -> 451  Δ=+64
+  @i=  8287  56806 -> 56870  Δ=+64
+  @i=  1510  1645 -> 1707  Δ=+62
+  @i=  2642  2961 -> 3023  Δ=+62
+
+=== FRAME-ID ANALYSIS (FIXED frame_id_fixed) ===
+N unique frame_id_fixed: 16003
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff >  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff <  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=16003  Steps=16002  ok=15946 (99.65%)
+Counts: forward_jump=56, ok=15946
+Total missing IDs (from forward jumps): 1996
+Forward diff histogram (diff > +1):
+  2:10   4:3 
+  8:4    12:1
+  14:1   16:1
+  18:1   20:1
+  24:1   32:1
+  40:1   44:1
+  46:1   52:1
+  54:4   58:3
+  60:13  62:6
+  64:2 
+Longest OK segment: start=7508  length=1194 steps
+
+Top forward jumps: (index, prev, curr, diff)
+  @i=  2501  56806 -> 56870  Δ=+64
+  @i= 10591  65922 -> 65986  Δ=+64
+  @i=  1306  55490 -> 55552  Δ=+62
+  @i=  4477  59144 -> 59206  Δ=+62
+  @i= 10216  65486 -> 65548  Δ=+62

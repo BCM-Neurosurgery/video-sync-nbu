@@ -1,0 +1,14 @@
+Source → JSON[fixed_chunk_serials]
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff >  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff <  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=18000  Steps=17999  ok=17999 (100.00%)
+Counts: ok=17999
+Longest OK segment: start=0  length=17999 steps

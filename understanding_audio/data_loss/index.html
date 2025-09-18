@@ -1,0 +1,818 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../fill_gaps/">
+      
+      
+        <link rel="next" href="../how_much_data_loss/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
+    
+    
+      
+        <title>Is there data loss? - Video Sync Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#data-loss" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Video Sync Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Is there data loss?
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Video Sync Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Understanding Audio
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Understanding Audio
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decoding_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to decode serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../serial_quality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fill_gaps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#example-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example inputs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#video-frame-id-and-serial-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video frame ID and serial checks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anchor-analysis-audio-video" class="md-nav__link">
+    <span class="md-ellipsis">
+      Anchor analysis (audio ↔ video)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#another-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Another example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quantifying-audio-loss" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quantifying audio loss
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how_much_data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How much data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#example-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example inputs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#video-frame-id-and-serial-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video frame ID and serial checks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anchor-analysis-audio-video" class="md-nav__link">
+    <span class="md-ellipsis">
+      Anchor analysis (audio ↔ video)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#another-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Another example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quantifying-audio-loss" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quantifying audio loss
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="data-loss">Data loss</h1>
+<p>After applying heuristic gap filling to the decoded serials (without changing the timeline), a natural question is: is there data loss, and if so, how much? This document walks through a concrete analysis.</p>
+<h2 id="example-inputs">Example inputs</h2>
+<p>All examples derive from <code>TRBD002_08062025-03.mp3</code>. We use segment <code>TRBD002_20250806_104707</code> for camera <code>23512909</code> to mimic a real sync workflow. Files (stored on Elias):</p>
+<ul>
+<li>
+<p>Camera JSON (chunk serials + frame IDs):</p>
+<ul>
+<li><a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.json">camera JSON</a></li>
+</ul>
+</li>
+<li>
+<p>Sequence analyses of that JSON:</p>
+<ul>
+<li><a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_chunk_serials.txt">fixed chunk serials report</a></li>
+<li><a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_frame_ids.txt">fixed frame IDs report</a></li>
+</ul>
+</li>
+<li>Decoded audio-side serials (gap-filled) clipped to the same 10‑min window:<ul>
+<li><a href="../../assets/data_loss/raw-gapfilled.32948939-32966938.csv">gap-filled CSV</a></li>
+<li><a href="../../assets/data_loss/raw-gapfilled.32948939-32966938.txt">CSV monotonicity report</a></li>
+</ul>
+</li>
+<li>Matched anchors (audio serial ↔ video serial/frame):<ul>
+<li><a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json">anchors JSON</a></li>
+<li><a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt">anchors analysis</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="video-frame-id-and-serial-checks">Video frame ID and serial checks</h2>
+<p>First, do the video-side frame IDs and serials show any loss?</p>
+<p>Frame ID analysis:</p>
+<pre><code class="language-txt">Source → JSON[fixed_frame_ids]
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff &gt;  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff &lt;  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=18000  Steps=17999  ok=17999 (100.00%)
+Counts: ok=17999
+Longest OK segment: start=0  length=17999 steps
+</code></pre>
+<p>This shows a complete 18,000 frames, with 17,999 steps all strictly increasing (no duplicates or drops).</p>
+<p>Video-side serial analysis:</p>
+<pre><code class="language-txt">Source → JSON[fixed_chunk_serials]
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff &gt;  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff &lt;  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=18000  Steps=17999  ok=17999 (100.00%)
+Counts: ok=17999
+Longest OK segment: start=0  length=17999 steps
+</code></pre>
+<p>Same result: video-side serials are perfectly monotonic.</p>
+<h2 id="anchor-analysis-audio-video">Anchor analysis (audio ↔ video)</h2>
+<p>Now we match audio serials to video serials/frame IDs using <code>scripts.doc_helper.collect_anchors</code>, producing the <a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json">anchors JSON</a>, then run sequence analysis to get the <a href="../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt">anchors report</a>.</p>
+<pre><code class="language-txt">=== FRAME-ID ANALYSIS (FIXED frame_id_fixed) ===
+N unique frame_id_fixed: 16003
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff &gt;  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff &lt;  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=16003  Steps=16002  ok=15946 (99.65%)
+Counts: forward_jump=56, ok=15946
+Total missing IDs (from forward jumps): 1996
+Forward diff histogram (diff &gt; +1):
+  2:10   4:3 
+  8:4    12:1
+  14:1   16:1
+  18:1   20:1
+  24:1   32:1
+  40:1   44:1
+  46:1   52:1
+  54:4   58:3
+  60:13  62:6
+  64:2 
+Longest OK segment: start=7508  length=1194 steps
+
+Top forward jumps: (index, prev, curr, diff)
+  @i=  2501  56806 -&gt; 56870  Δ=+64
+  @i= 10591  65922 -&gt; 65986  Δ=+64
+  @i=  1306  55490 -&gt; 55552  Δ=+62
+  @i=  4477  59144 -&gt; 59206  Δ=+62
+  @i= 10216  65486 -&gt; 65548  Δ=+62
+</code></pre>
+<p>This reveals that only 16,003 of the 18,000 expected matches are found; the rest are “forward jumps” (missing values). Zooming in:</p>
+<pre><code>  {
+    &quot;serial&quot;: 32951744,
+    &quot;audio_sample&quot;: 74873631,
+    &quot;cam_serial&quot;: &quot;23512909&quot;,
+    &quot;frame_id&quot;: 56806,
+    &quot;frame_id_fixed&quot;: 56806
+  },
+  {
+    &quot;serial&quot;: 32951808,
+    &quot;audio_sample&quot;: 74881738,
+    &quot;cam_serial&quot;: &quot;23512909&quot;,
+    &quot;frame_id&quot;: 56870,
+    &quot;frame_id_fixed&quot;: 56870
+  },
+</code></pre>
+<p>Here, serial <code>32951744</code> maps to frame <code>56806</code>. The next matched serial is <code>32951808</code> (not <code>32951745</code>), mapping to frame <code>56870</code> — a jump of 64. Looking at the decoded audio CSV around <code>32951744</code>:</p>
+<pre><code class="language-csv">...
+32951743,74872121,74872352
+32951744,74873631,74873862
+18958254080,74875009,74875240
+8589934591,74876109,74876340
+32951692,74877209,74877440
+32951694,74878719,74878950
+32951680,74880228,74880459
+32951808,74881738,74881969
+32951809,74883247,74883478
+...
+</code></pre>
+<p>Serial <code>32951744</code> (frame <code>56806</code>) matches, but the next match is <code>32951808</code> (frame <code>56870</code>).</p>
+<ul>
+<li>Audio time delta: <code>(74881738 - 74873631) / 44100 ≈ 0.184 s</code> (audio FS = 44.1 kHz)</li>
+<li>Video time delta (≈30 fps): <code>(56870 - 56806) / 30 ≈ 2.13 s</code></li>
+</ul>
+<p>The ≈1.95 s discrepancy indicates missing audio between these anchors.</p>
+<h2 id="another-example">Another example</h2>
+<p>Another example from the anchors json</p>
+<pre><code>  {
+    &quot;serial&quot;: 32960860,
+    &quot;audio_sample&quot;: 87129024,
+    &quot;cam_serial&quot;: &quot;23512909&quot;,
+    &quot;frame_id&quot;: 387,
+    &quot;frame_id_fixed&quot;: 65922
+  },
+  {
+    &quot;serial&quot;: 32960924,
+    &quot;audio_sample&quot;: 87137256,
+    &quot;cam_serial&quot;: &quot;23512909&quot;,
+    &quot;frame_id&quot;: 451,
+    &quot;frame_id_fixed&quot;: 65986
+  },
+</code></pre>
+<p>Serial <code>32960860</code> matches, but the next match is <code>32960924</code>. Inspecting the CSV:</p>
+<pre><code class="language-csv">...
+32960859,87127515,87127746
+32960860,87129024,87129255
+32960844,87130534,87130765
+32960838,87132043,87132274
+32960832,87133553,87133784
+32960924,87137256,87137487
+32960925,87138766,87138997
+...
+</code></pre>
+<p>After <code>32960860</code>, the sequence regresses (<code>32960844</code>, <code>32960838</code>, <code>32960832</code>) before resuming at <code>32960924</code>, <code>32960925</code>, …. The audio delta is <code>(87137256 - 87129024) / 44100 ≈ 0.187 s</code>, while the video delta is <code>(65986 - 65922) / 30 ≈ 2.13 s</code>, again suggesting ≈1.94 s of missing audio.</p>
+<h2 id="quantifying-audio-loss">Quantifying audio loss</h2>
+<p>To quantify audio loss, the idea is to find all those "unmatched" locations within the decode CSV, calculate the actual time difference within the audio, the time difference it should be if there were not serial gaps, differencing those 2 to get the estimated time loss, and accumulate them. To provide a more accurate estimate that resembles the frequency of the realistic serial stream, instead of using 1470 (44100hz / 30fps) in calculation, we will actually use the local median, which is around 1510 samples (which means in reality the audio gets serials in roughly 44100 / 1510 = 29.21 fps). The algorithm and implementation details are all within <code>scripts.analysis.audio_loss_analysis</code>, the report for this particular 10-min example is at <a href="../../assets/data_loss/raw-gapfilled.32948939-32966938.audio_loss.json"><code>audio loss report</code></a>. </p>
+<p>An example:</p>
+<pre><code class="language-json">  &quot;gaps&quot;: [
+    {
+      &quot;index&quot;: 173,
+      &quot;prev_serial&quot;: 32949112,
+      &quot;curr_serial&quot;: 32949136,
+      &quot;prev_start_sample&quot;: 71343198,
+      &quot;prev_end_sample&quot;: 71343429,
+      &quot;curr_start_sample&quot;: 71349876,
+      &quot;curr_end_sample&quot;: 71350107,
+      &quot;diff&quot;: 24,
+      &quot;observed_ms&quot;: 151.42857142857142,
+      &quot;ideal_ms&quot;: 821.7687074829932,
+      &quot;missing_ms&quot;: 670.3401360544218,
+      &quot;local_period_samples&quot;: 1510
+    },
+</code></pre>
+<p>That means serial jumps from 32949112 to 32949136, looking in the csv</p>
+<pre><code class="language-csv">...
+32949110,71340180,71340411
+32949111,71341689,71341920
+32949112,71343198,71343429
+32949112,71344708,71344939
+32949136,71349876,71350107
+32949176,71351386,71351617
+32949177,71352894,71353125
+32949178,71354404,71354635
+...
+</code></pre>
+<p>The first 32949112 is matched to a video's serial, then 32949136 is matched, providing a gap of 24. The actual time in audio is <code>(71349876 - 71343198) / 1510 = 0.1514</code> seconds, but it should be <code>24 / (44100 / 1510) = 0.8218</code> seconds, leaving a <code>0.8218 - 0.1514 = 0.6704</code> seconds of audio loss.</p>
+<p>Together, those many unmatched gaps accumulate to a 12% audio loss</p>
+<pre><code class="language-json">  &quot;summary&quot;: {
+    &quot;values_kept&quot;: 16003,
+    &quot;steps&quot;: 16002,
+    &quot;ok_steps&quot;: 15947,
+    &quot;forward_jumps&quot;: 55,
+    &quot;ok_ratio&quot;: 0.9965629296337958,
+    &quot;total_missing_seconds&quot;: 66.23192743764173,
+    &quot;analyzed_seconds&quot;: 549.8451020408163,
+    &quot;loss_share_pct&quot;: 12.045561048341426
+  },
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>
