@@ -1,4 +1,4 @@
-# Decoding Frame IDs from Audio — NBU Lounge Example
+# Decoding Serial from Audio — NBU Lounge Example
 
 This decoder extracts serials sent from Arduino embedded in a dedicated serial audio track.
 
