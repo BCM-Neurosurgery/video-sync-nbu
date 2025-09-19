@@ -1,8 +1,9 @@
 import json
 from datetime import datetime
-from typing import List
 from scripts.fix.jsonserialfixer import JsonSerialFixer
 from scripts.fix.frameidfixer import FrameIDFixer
+import argparse
+from pathlib import Path
 
 
 class JsonParser:
@@ -85,3 +86,72 @@ class JsonParser:
         fixer = FrameIDFixer()
         fixed = fixer.fix(frameids)
         return fixed
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="json-extract-cam",
+        description="Extract per-camera lists (raw/fixed frame_ids & chunk_serials) from a recording JSON.",
+    )
+    p.add_argument("--json", required=True, help="Path to the segment JSON.")
+    p.add_argument("--camera-serial", required=True, help="Camera serial to extract.")
+    p.add_argument(
+        "--out-dir", required=True, help="Directory to write the output JSON."
+    )
+    return p
+
+
+def _derive_out_path(in_json: Path, cam_serial: str, out_dir: Path) -> Path:
+    # same name as original but with suffix .<camera_serial>.json
+    return out_dir / f"{in_json.stem}.{cam_serial}.json"
+
+
+def _main(argv=None) -> int:
+    ap = _build_arg_parser()
+    args = ap.parse_args(argv)
+
+    in_path = Path(args.json)
+    out_dir = Path(args.out_dir)
+    cam_serial = str(args.camera_serial)
+
+    if not in_path.is_file():
+        print(f"[ERROR] JSON not found: {in_path}")
+        return 2
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = _derive_out_path(in_path, cam_serial, out_dir)
+
+    try:
+        jp = JsonParser(str(in_path))
+        # fetch lists
+        frame_ids = jp.get_frame_ids_list(cam_serial)
+        chunk_serials = jp.get_chunk_serial_list(cam_serial)
+        fixed_frame_ids = jp.get_fixed_frame_ids_list(cam_serial)
+        fixed_chunk_serials = jp.get_fixed_chunk_serial_list(cam_serial)
+    except AssertionError as e:
+        print(f"[ERROR] {e}")
+        return 2
+    except Exception as e:
+        print(f"[ERROR] Failed to parse/extract: {e}")
+        return 2
+
+    payload = {
+        "camera_serial": cam_serial,
+        "frame_ids": frame_ids,
+        "chunk_serials": chunk_serials,
+        "fixed_frame_ids": fixed_frame_ids,
+        "fixed_chunk_serials": fixed_chunk_serials,
+    }
+
+    try:
+        out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[ERROR] Could not write output: {e}")
+        return 2
+
+    print(f"[OK] Wrote {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
