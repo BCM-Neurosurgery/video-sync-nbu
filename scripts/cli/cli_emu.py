@@ -69,11 +69,12 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
-from scripts.index.videodiscover import VideoDiscoverer
+from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, DIGIEVTS, NEV, NS5, RoomAudio, StitchedTask, Video
 from scripts.pad.videoplanapplier import apply_video_padding_plan
 from scripts.parsers.nevfileparser import Nev
 from scripts.parsers.ns5fileparser import Nsx
+from scripts.parsers.jsonfileparser import JsonParser
 from scripts.parsers.videofileparser import VideoFileParser
 from scripts.utility.utils import ts2unix
 
@@ -360,6 +361,100 @@ def _iter_date_dirs(video_dir: Path) -> List[Path]:
     return valid_dirs
 
 
+def _iter_segment_entries(video_dir: Path):
+    for date_dir in _iter_date_dirs(video_dir):
+        for json_path in sorted(date_dir.glob("*.json")):
+            seg_id = json_path.stem
+            mp4s: Dict[str, Path] = {}
+            for mp4_path in date_dir.glob(f"{seg_id}.*.mp4"):
+                parsed = FilePatterns.parse_video_filename(mp4_path)
+                if parsed:
+                    _, cam = parsed
+                    mp4s[str(cam)] = mp4_path
+            yield seg_id, date_dir, json_path, mp4s
+
+
+def _as_int_list(seq) -> Optional[List[int]]:
+    if seq is None:
+        return None
+    result: List[int] = []
+    for item in seq:
+        try:
+            result.append(int(item))
+        except Exception:
+            return None
+    return result
+
+
+def _build_cam_json_from_parser(
+    jp: JsonParser,
+    json_path: Path,
+    ts: Optional[datetime],
+    cam_value,
+    cam_serial_str: str,
+) -> CamJson:
+    start_real = None
+    try:
+        start_real = jp.get_start_realtime()
+    except Exception:
+        start_real = None
+
+    raw_serials = _as_int_list(jp.get_chunk_serial_list(cam_value))
+    raw_frame_ids = _as_int_list(jp.get_frame_ids_list(cam_value))
+    fixed_serials = _as_int_list(jp.get_fixed_chunk_serial_list(cam_value))
+    fixed_frame_ids = _as_int_list(jp.get_fixed_frame_ids_list(cam_value))
+    if fixed_frame_ids:
+        fixed_reidx = [fid - fixed_frame_ids[0] for fid in fixed_frame_ids]
+    else:
+        fixed_reidx = None
+
+    return CamJson(
+        cam_serial=cam_serial_str,
+        timestamp=ts,
+        path=json_path,
+        start_realtime=start_real,
+        raw_serials=raw_serials,
+        raw_frame_ids=raw_frame_ids,
+        fixed_serials=fixed_serials,
+        fixed_frame_ids=fixed_frame_ids,
+        fixed_reidx_frame_ids=_as_int_list(fixed_reidx) if fixed_reidx else None,
+    )
+
+
+def _build_video_from_json(
+    seg_id: str,
+    cam_serial_str: str,
+    cam_value,
+    jp: JsonParser,
+    json_path: Path,
+    ts: Optional[datetime],
+    mp4_path: Path,
+) -> Video:
+    cam_json = _build_cam_json_from_parser(jp, json_path, ts, cam_value, cam_serial_str)
+    try:
+        probe = VideoFileParser(str(mp4_path))
+        duration = probe.duration
+        res = f"{probe.resolution[0]}x{probe.resolution[1]}"
+        fps = probe.fps
+        frame_count = probe.frame_count
+    except Exception as exc:
+        raise RuntimeError(f"ffprobe failed for {mp4_path}: {exc}")
+
+    start_rt = cam_json.start_realtime or ts
+    return Video(
+        path=mp4_path,
+        segment_id=seg_id,
+        cam_serial=cam_serial_str,
+        timestamp=ts,
+        start_realtime=start_rt,
+        duration=duration,
+        resolution=res,
+        frame_rate=fps,
+        frame_count=frame_count,
+        companion_json=cam_json,
+    )
+
+
 def collect_videos_by_time(
     video_dir: Path,
     audio_start: datetime,
@@ -371,50 +466,68 @@ def collect_videos_by_time(
     )
     matches: Dict[str, List[Video]] = defaultdict(list)
 
-    for root in _iter_date_dirs(video_dir):
+    for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
         LOGGER.debug(
-            "Scanning %s for videos overlapping %s-%s",
-            root,
+            "Scanning segment %s (%s) for rough overlap %s-%s",
+            seg_id,
+            date_dir.name,
             audio_start,
             audio_end,
         )
-        discoverer = VideoDiscoverer(root, log=LOGGER)
+        ts = FilePatterns.parse_tail_datetime(seg_id)
         try:
-            video_groups = discoverer.discover()
-        except Exception as exc:  # pragma: no cover - discovery failure
-            LOGGER.error("Video discovery failed under %s: %s", root, exc)
+            jp = JsonParser(str(json_path))
+        except Exception as exc:
+            LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
             continue
 
-        for group in video_groups:
-            cam_jsons = (
-                group.json.cam_jsons if group.json and group.json.cam_jsons else {}
-            )
-            for cam_serial, cam_json in sorted(cam_jsons.items()):
-                if allowed and cam_serial not in allowed:
-                    continue
-                video = discoverer.discover_video(group.group_id, cam_serial)
-                if not video:
-                    continue
-                start_rt = video.start_realtime or (
-                    video.companion_json.start_realtime
-                    if video.companion_json
-                    else None
-                )
+        serials_from_json = jp.get_camera_serials()
+        serial_map = {str(s): s for s in serials_from_json}
+        target_serials = (
+            sorted(set(serial_map.keys()) & allowed)
+            if allowed
+            else sorted(serial_map.keys())
+        )
+
+        for cam_serial in target_serials:
+            if cam_serial not in mp4s:
                 LOGGER.debug(
-                    "Video candidate segment=%s cam=%s start=%s duration=%.2fs path=%s",
-                    group.group_id,
-                    cam_serial,
-                    start_rt,
-                    video.duration,
-                    video.path.name,
+                    "Skipping segment %s cam %s (MP4 missing)", seg_id, cam_serial
                 )
-                if start_rt is None:
-                    continue
-                duration = float(video.duration) if video.duration else 0.0
-                video_end = start_rt + timedelta(seconds=max(duration, 0.0))
-                if video_end < audio_start or start_rt > audio_end:
-                    continue
-                matches[cam_serial].append(video)
+                continue
+            try:
+                video = _build_video_from_json(
+                    seg_id,
+                    cam_serial,
+                    serial_map[cam_serial],
+                    jp,
+                    json_path,
+                    ts,
+                    mp4s[cam_serial],
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    "Failed building video object for %s cam %s: %s",
+                    seg_id,
+                    cam_serial,
+                    exc,
+                )
+                continue
+
+            start_rt = video.start_realtime or ts
+            LOGGER.debug(
+                "Video candidate segment=%s cam=%s start=%s duration=%.2fs path=%s",
+                seg_id,
+                cam_serial,
+                start_rt,
+                video.duration,
+                video.path.name,
+            )
+            duration = float(video.duration) if video.duration else 0.0
+            video_end = start_rt + timedelta(seconds=max(duration, 0.0))
+            if video_end < audio_start or start_rt > audio_end:
+                continue
+            matches[cam_serial].append(video)
 
     for cam_serial, videos in matches.items():
         videos.sort(
@@ -564,86 +677,89 @@ def discover_clip_plans(
 
     stop_scan = False
 
-    for root in _iter_date_dirs(video_dir):
+    for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
         LOGGER.debug(
-            "Serial sync: scanning %s for overlapping serials %s-%s",
-            root,
+            "Serial sync: scanning segment %s (%s) for serial range %s-%s",
+            seg_id,
+            date_dir.name,
             serial_range.start_serial,
             serial_range.end_serial,
         )
-        discoverer = VideoDiscoverer(root, log=LOGGER)
+        ts = FilePatterns.parse_tail_datetime(seg_id)
         try:
-            video_groups = discoverer.discover()
-        except Exception as exc:  # pragma: no cover - discovery failure
-            LOGGER.error("Video discovery failed under %s: %s", root, exc)
+            jp = JsonParser(str(json_path))
+        except Exception as exc:
+            LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
             continue
 
-        for group in video_groups:
-            cam_jsons = (
-                group.json.cam_jsons if group.json and group.json.cam_jsons else {}
-            )
-            if not cam_jsons:
+        serials_from_json = jp.get_camera_serials()
+        serial_map = {str(s): s for s in serials_from_json}
+        target_serials = (
+            sorted(set(serial_map.keys()) & allowed)
+            if allowed
+            else sorted(serial_map.keys())
+        )
+
+        segment_min: Optional[int] = None
+        segment_max: Optional[int] = None
+        videos_for_segment: Dict[str, Video] = {}
+
+        for cam_serial in target_serials:
+            if cam_serial not in mp4s:
                 continue
-
-            group_min: Optional[int] = None
-            group_max: Optional[int] = None
-            for cam_serial, cam_json in cam_jsons.items():
-                if allowed and cam_serial not in allowed:
-                    continue
-                serials = _choose_serials(cam_json)
-                if not serials:
-                    continue
-                min_serial, max_serial = _serial_min_max(serials)
-                if min_serial is None or max_serial is None:
-                    continue
-                group_min = (
-                    min_serial if group_min is None else min(group_min, min_serial)
-                )
-                group_max = (
-                    max_serial if group_max is None else max(group_max, max_serial)
-                )
-
-            if group_min is None and group_max is None:
-                continue
-
-            if group_min is not None and group_min > serial_range.end_serial:
-                stop_scan = True
-                break
-            if group_max is not None and group_max < serial_range.start_serial:
-                continue
-
-            for cam_serial, cam_json in sorted(cam_jsons.items()):
-                if allowed and cam_serial not in allowed:
-                    continue
-                serials = _choose_serials(cam_json)
-                if not serials:
-                    continue
-                cam_min, cam_max = _serial_min_max(serials)
-                if cam_min is None or cam_max is None:
-                    continue
-                if (
-                    cam_max < serial_range.start_serial
-                    or cam_min > serial_range.end_serial
-                ):
-                    continue
-
-                video = discoverer.discover_video(group.group_id, cam_serial)
-                if not video:
-                    continue
-                LOGGER.debug(
-                    "Serial candidate segment=%s cam=%s serials=%s-%s start=%s path=%s",
-                    group.group_id,
+            try:
+                video = _build_video_from_json(
+                    seg_id,
                     cam_serial,
-                    cam_min,
-                    cam_max,
-                    video.start_realtime,
-                    video.path.name,
+                    serial_map[cam_serial],
+                    jp,
+                    json_path,
+                    ts,
+                    mp4s[cam_serial],
                 )
-                plan = build_clip_plan(video, serial_range)
-                if plan:
-                    plans.append(plan)
+            except Exception as exc:
+                LOGGER.error(
+                    "Failed building video object for %s cam %s: %s",
+                    seg_id,
+                    cam_serial,
+                    exc,
+                )
+                continue
+
+            serials = _choose_serials(video.companion_json)
+            if not serials:
+                continue
+            cam_min = min(int(s) for s in serials)
+            cam_max = max(int(s) for s in serials)
+            segment_min = cam_min if segment_min is None else min(segment_min, cam_min)
+            segment_max = cam_max if segment_max is None else max(segment_max, cam_max)
+            videos_for_segment[cam_serial] = video
+
+            LOGGER.debug(
+                "Serial candidate segment=%s cam=%s serials=%s-%s",
+                seg_id,
+                cam_serial,
+                cam_min,
+                cam_max,
+            )
+
+        if not videos_for_segment:
+            continue
+
+        if segment_min is not None and segment_min > serial_range.end_serial:
+            stop_scan = True
+            break
+        if segment_max is not None and segment_max < serial_range.start_serial:
+            continue
+
+        for cam_serial, video in videos_for_segment.items():
+            plan = build_clip_plan(video, serial_range)
+            if plan:
+                plans.append(plan)
+
         if stop_scan:
             break
+
     plans.sort(key=lambda p: (p.video.segment_id, p.video.cam_serial))
     LOGGER.info(
         "Discovered %d clip plan(s) across %d camera(s) for serial range %s-%s",
