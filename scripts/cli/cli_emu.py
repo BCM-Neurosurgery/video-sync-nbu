@@ -123,7 +123,7 @@ def _infer_sample_rate(sample_resolution_microseconds: float) -> int:
 
 
 def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
-    pattern = f"*-NSP-1.{ext}"
+    pattern = f"*NSP-1.{ext}"
     matches = sorted(task_dir.glob(pattern))
     if not matches:
         return None
