@@ -53,6 +53,12 @@ class JsonParser:
             return None
         return datetime.strptime(self.dic["real_times"][0], "%Y-%m-%d %H:%M:%S.%f")
 
+    def get_end_realtime(self) -> datetime:
+        """Return the end real time (UTC)."""
+        if not self.dic["real_times"]:
+            return None
+        return datetime.strptime(self.dic["real_times"][-1], "%Y-%m-%d %H:%M:%S.%f")
+
     def get_chunk_serial_list(self, cam_serial):
         """Return the list of chunk serial"""
         assert (
