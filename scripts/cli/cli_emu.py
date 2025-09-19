@@ -467,19 +467,26 @@ def collect_videos_by_time(
     matches: Dict[str, List[Video]] = defaultdict(list)
 
     for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
+        try:
+            jp = JsonParser(str(json_path))
+            segment_start_rt = jp.get_start_realtime()
+        except Exception:
+            jp = None
+            segment_start_rt = None
         LOGGER.debug(
-            "Scanning segment %s (%s) for rough overlap %s-%s",
+            "Scanning segment %s start_realtime=%s for rough overlap %s-%s",
             seg_id,
-            date_dir.name,
+            segment_start_rt,
             audio_start,
             audio_end,
         )
         ts = FilePatterns.parse_tail_datetime(seg_id)
-        try:
-            jp = JsonParser(str(json_path))
-        except Exception as exc:
-            LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
-            continue
+        if jp is None:
+            try:
+                jp = JsonParser(str(json_path))
+            except Exception as exc:
+                LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
+                continue
 
         serials_from_json = jp.get_camera_serials()
         serial_map = {str(s): s for s in serials_from_json}
@@ -515,11 +522,15 @@ def collect_videos_by_time(
                 continue
 
             start_rt = video.start_realtime or ts
+            json_start = (
+                video.companion_json.start_realtime if video.companion_json else None
+            )
             LOGGER.debug(
-                "Video candidate segment=%s cam=%s start=%s duration=%.2fs path=%s",
+                "Video candidate segment=%s cam=%s start_realtime=%s (json=%s) duration=%.2fs path=%s",
                 seg_id,
                 cam_serial,
                 start_rt,
+                json_start,
                 video.duration,
                 video.path.name,
             )
@@ -678,19 +689,20 @@ def discover_clip_plans(
     stop_scan = False
 
     for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
-        LOGGER.debug(
-            "Serial sync: scanning segment %s (%s) for serial range %s-%s",
-            seg_id,
-            date_dir.name,
-            serial_range.start_serial,
-            serial_range.end_serial,
-        )
         ts = FilePatterns.parse_tail_datetime(seg_id)
         try:
             jp = JsonParser(str(json_path))
+            segment_start_rt = jp.get_start_realtime()
         except Exception as exc:
             LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
             continue
+        LOGGER.debug(
+            "Serial sync: scanning segment %s start_realtime=%s for serial range %s-%s",
+            seg_id,
+            segment_start_rt,
+            serial_range.start_serial,
+            serial_range.end_serial,
+        )
 
         serials_from_json = jp.get_camera_serials()
         serial_map = {str(s): s for s in serials_from_json}
@@ -726,6 +738,11 @@ def discover_clip_plans(
                 )
                 continue
 
+            start_rt = video.start_realtime or ts
+            json_start = (
+                video.companion_json.start_realtime if video.companion_json else None
+            )
+
             serials = _choose_serials(video.companion_json)
             if not serials:
                 continue
@@ -736,11 +753,14 @@ def discover_clip_plans(
             videos_for_segment[cam_serial] = video
 
             LOGGER.debug(
-                "Serial candidate segment=%s cam=%s serials=%s-%s",
+                "Serial candidate segment=%s cam=%s start_realtime=%s (json=%s) serials=%s-%s path=%s",
                 seg_id,
                 cam_serial,
+                start_rt,
+                json_start,
                 cam_min,
                 cam_max,
+                video.path.name,
             )
 
         if not videos_for_segment:
