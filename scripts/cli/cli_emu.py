@@ -61,13 +61,13 @@ import math
 import re
 import shutil
 import subprocess
-import wave
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
+from scipy.io.wavfile import write as wav_write
 
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, DIGIEVTS, NEV, NS5, RoomAudio, StitchedTask, Video
@@ -117,10 +117,11 @@ def _ensure_tool(name: str) -> None:
         raise RuntimeError(f"Required tool '{name}' not found on PATH.")
 
 
-def _infer_sample_rate(sample_resolution_microseconds: float) -> int:
-    if sample_resolution_microseconds <= 0:
+def _infer_sample_rate(sample_resolution: float) -> int:
+    """Return integer sample rate from NS5/NEV metadata."""
+    if sample_resolution <= 0:
         return 0
-    return int(round(1_000_000 / float(sample_resolution_microseconds)))
+    return int(round(float(sample_resolution)))
 
 
 def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
@@ -999,11 +1000,7 @@ def extract_audio_slice(
     if out_path.exists() and not overwrite:
         LOGGER.info("Audio output exists, skipping overwrite: %s", out_path)
         return out_path
-    with wave.open(str(out_path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(slice_array.tobytes())
+    wav_write(str(out_path), int(sample_rate), slice_array)
     return out_path
 
 
@@ -1051,11 +1048,7 @@ def extract_full_ns5_audio(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not out_path.exists() or overwrite:
-        with wave.open(str(out_path), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(sample_rate)
-            wav.writeframes(arr.tobytes())
+        wav_write(str(out_path), int(sample_rate), arr)
 
     return out_path, start_dt, end_dt
 
