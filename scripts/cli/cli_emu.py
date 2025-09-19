@@ -467,26 +467,50 @@ def collect_videos_by_time(
     matches: Dict[str, List[Video]] = defaultdict(list)
 
     for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
+        ts = FilePatterns.parse_tail_datetime(seg_id)
         try:
             jp = JsonParser(str(json_path))
-            segment_start_rt = jp.get_start_realtime()
-        except Exception:
-            jp = None
-            segment_start_rt = None
+        except Exception as exc:
+            LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
+            continue
+
+        segment_start_rt = jp.get_start_realtime()
+        segment_end_rt = jp.get_end_realtime()
         LOGGER.debug(
-            "Scanning segment %s start_realtime=%s for rough overlap %s-%s",
+            "Scanning segment %s real_times=%s->%s against audio %s-%s",
             seg_id,
             segment_start_rt,
+            segment_end_rt,
             audio_start,
             audio_end,
         )
-        ts = FilePatterns.parse_tail_datetime(seg_id)
-        if jp is None:
-            try:
-                jp = JsonParser(str(json_path))
-            except Exception as exc:
-                LOGGER.error("Failed to parse JSON %s: %s", json_path, exc)
-                continue
+
+        has_realtime_bounds = (
+            segment_start_rt is not None and segment_end_rt is not None
+        )
+        if has_realtime_bounds:
+            overlaps_audio = (
+                segment_end_rt >= audio_start and segment_start_rt <= audio_end
+            )
+            if not overlaps_audio:
+                if segment_end_rt < audio_start:
+                    LOGGER.debug(
+                        "Segment %s ends before audio window; skipping.", seg_id
+                    )
+                    continue
+                LOGGER.debug(
+                    "Segment %s starts after audio window; stopping scan.", seg_id
+                )
+                break
+        else:
+            segment_anchor = segment_start_rt or ts
+            if segment_anchor and segment_anchor > audio_end:
+                LOGGER.debug(
+                    "Segment %s anchor %s after audio window; stopping scan.",
+                    seg_id,
+                    segment_anchor,
+                )
+                break
 
         serials_from_json = jp.get_camera_serials()
         serial_map = {str(s): s for s in serials_from_json}
@@ -539,6 +563,7 @@ def collect_videos_by_time(
             if video_end < audio_start or start_rt > audio_end:
                 continue
             matches[cam_serial].append(video)
+            LOGGER.debug("Matched!")
 
     for cam_serial, videos in matches.items():
         videos.sort(
