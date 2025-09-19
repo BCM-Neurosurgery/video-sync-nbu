@@ -252,6 +252,7 @@ def discover_task_contexts(
             LOGGER.debug("Skipping task %s (keyword filter)", name)
             continue
 
+        LOGGER.debug("Inspecting task directory %s", task_dir)
         nev_path = _find_nsp1_file(task_dir, "nev")
         ns5_path = _find_nsp1_file(task_dir, "ns5")
         if require_nev and (not nev_path or not ns5_path):
@@ -290,6 +291,7 @@ def discover_task_contexts(
         contexts.append(
             TaskContext(stitched=stitched, nev_parser=nev_parser, nsx_parser=nsx_parser)
         )
+    LOGGER.info("Built %d stitched task context(s) from %s", len(contexts), patient_dir)
     return contexts
 
 
@@ -370,6 +372,12 @@ def collect_videos_by_time(
     matches: Dict[str, List[Video]] = defaultdict(list)
 
     for root in _iter_date_dirs(video_dir):
+        LOGGER.debug(
+            "Scanning %s for videos overlapping %s-%s",
+            root,
+            audio_start,
+            audio_end,
+        )
         discoverer = VideoDiscoverer(root, log=LOGGER)
         try:
             video_groups = discoverer.discover()
@@ -392,6 +400,14 @@ def collect_videos_by_time(
                     if video.companion_json
                     else None
                 )
+                LOGGER.debug(
+                    "Video candidate segment=%s cam=%s start=%s duration=%.2fs path=%s",
+                    group.group_id,
+                    cam_serial,
+                    start_rt,
+                    video.duration,
+                    video.path.name,
+                )
                 if start_rt is None:
                     continue
                 duration = float(video.duration) if video.duration else 0.0
@@ -407,6 +423,13 @@ def collect_videos_by_time(
                 v.path.name,
             )
         )
+
+    LOGGER.info(
+        "Found videos for %d camera(s) overlapping %s-%s",
+        len(matches),
+        audio_start,
+        audio_end,
+    )
 
     return matches
 
@@ -542,6 +565,12 @@ def discover_clip_plans(
     stop_scan = False
 
     for root in _iter_date_dirs(video_dir):
+        LOGGER.debug(
+            "Serial sync: scanning %s for overlapping serials %s-%s",
+            root,
+            serial_range.start_serial,
+            serial_range.end_serial,
+        )
         discoverer = VideoDiscoverer(root, log=LOGGER)
         try:
             video_groups = discoverer.discover()
@@ -601,12 +630,28 @@ def discover_clip_plans(
                 video = discoverer.discover_video(group.group_id, cam_serial)
                 if not video:
                     continue
+                LOGGER.debug(
+                    "Serial candidate segment=%s cam=%s serials=%s-%s start=%s path=%s",
+                    group.group_id,
+                    cam_serial,
+                    cam_min,
+                    cam_max,
+                    video.start_realtime,
+                    video.path.name,
+                )
                 plan = build_clip_plan(video, serial_range)
                 if plan:
                     plans.append(plan)
         if stop_scan:
             break
     plans.sort(key=lambda p: (p.video.segment_id, p.video.cam_serial))
+    LOGGER.info(
+        "Discovered %d clip plan(s) across %d camera(s) for serial range %s-%s",
+        len(plans),
+        len({p.video.cam_serial for p in plans}),
+        serial_range.start_serial,
+        serial_range.end_serial,
+    )
     return plans
 
 
@@ -936,6 +981,7 @@ def process_task_rough(
     overwrite: bool,
     camera_serials: Optional[Set[str]] = None,
 ) -> bool:
+    LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
     audio_dir = out_dir / "audio"
     audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
     try:
@@ -947,6 +993,13 @@ def process_task_rough(
             "Audio extraction (rough) failed for %s: %s", task.stitched.task_id, exc
         )
         return False
+
+    LOGGER.info(
+        "Rough sync audio window for %s: %s -> %s",
+        task.stitched.task_id,
+        audio_start,
+        audio_end,
+    )
 
     videos_by_cam = collect_videos_by_time(
         video_dir, audio_start, audio_end, camera_serials
@@ -1008,6 +1061,12 @@ def process_task_rough(
                 clip_path = clip_video(plan, clips_dir, overwrite)
                 padded_path = pad_video_if_needed(plan, clip_path, clips_dir)
                 clip_paths.append(padded_path)
+                LOGGER.debug(
+                    "Prepared rough clip %s (camera %s, segment %s)",
+                    padded_path.name,
+                    cam_serial,
+                    plan.video.segment_id,
+                )
             except Exception as exc:
                 LOGGER.error(
                     "Clip/pad failed for %s cam %s (rough mode): %s",
@@ -1076,6 +1135,8 @@ def process_task(
             camera_serials=camera_serials,
         )
 
+    LOGGER.info("Starting serial sync for %s", task.stitched.task_id)
+
     chunk_range = compute_chunk_range(task.stitched.nsp1_nev)
     if not chunk_range:
         LOGGER.warning(
@@ -1083,6 +1144,15 @@ def process_task(
             task.stitched.task_id,
         )
         return False
+
+    LOGGER.info(
+        "Serial sync window for %s: serials %s-%s, timestamps %s-%s",
+        task.stitched.task_id,
+        chunk_range.start_serial,
+        chunk_range.end_serial,
+        chunk_range.start_timestamp,
+        chunk_range.end_timestamp,
+    )
 
     plans = discover_clip_plans(video_dir, chunk_range, camera_filter=camera_serials)
     if not plans:
@@ -1094,6 +1164,12 @@ def process_task(
     plans_by_cam: Dict[str, List[VideoSegmentClipPlan]] = defaultdict(list)
     for plan in plans:
         plans_by_cam[plan.video.cam_serial].append(plan)
+
+    LOGGER.info(
+        "Serial sync: %s -> %d camera(s)",
+        task.stitched.task_id,
+        len(plans_by_cam),
+    )
 
     if camera_serials:
         missing = sorted({c for c in camera_serials if c not in plans_by_cam})
@@ -1123,6 +1199,12 @@ def process_task(
                 clip_path = clip_video(plan, clips_dir, overwrite)
                 padded_path = pad_video_if_needed(plan, clip_path, clips_dir)
                 clip_paths.append(padded_path)
+                LOGGER.debug(
+                    "Prepared serial clip %s (camera %s, segment %s)",
+                    padded_path.name,
+                    cam_serial,
+                    plan.video.segment_id,
+                )
             except Exception as exc:
                 LOGGER.error(
                     "Clip/pad failed for %s cam %s: %s",
@@ -1144,6 +1226,9 @@ def process_task(
             audio_dir.mkdir(parents=True, exist_ok=True)
             audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
             try:
+                LOGGER.info(
+                    "Extracting serial-aligned audio for %s", task.stitched.task_id
+                )
                 extract_audio_slice(task, chunk_range, room_mic, audio_path, overwrite)
             except Exception as exc:
                 LOGGER.error(
@@ -1250,6 +1335,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception as exc:
         LOGGER.error("Invalid video directory structure: %s", exc)
         return 2
+    LOGGER.info("Validated video directory structure under %s", video_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     contexts = discover_task_contexts(
