@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import List
 from scripts.fix.jsonserialfixer import JsonSerialFixer
 from scripts.fix.frameidfixer import FrameIDFixer
 
@@ -44,6 +45,12 @@ class JsonParser:
 
     def get_camera_serials(self) -> list:
         return list(self.dic["serials"])
+
+    def get_start_realtime(self) -> datetime:
+        """Return the start real time (UTC)"""
+        if not self.dic["real_times"]:
+            return None
+        return datetime.strptime(self.dic["real_times"][0], "%Y-%m-%d %H:%M:%S.%f")
 
     def get_chunk_serial_list(self, cam_serial):
         """Return the list of chunk serial"""

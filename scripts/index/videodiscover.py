@@ -123,6 +123,14 @@ class VideoDiscoverer(_DirMixin):
             for s in parser_serials:
                 s_str = str(s)
                 try:
+                    start_realtime = jp.get_start_realtime()
+                except Exception as e:
+                    self.log.warning(
+                        "JSON %s: failed get_start_realtime(): %s", json_path.name, e
+                    )
+                    start_realtime = None
+
+                try:
                     raw_serials = jp.get_chunk_serial_list(s)
                 except Exception as e:
                     self.log.warning(
@@ -185,6 +193,7 @@ class VideoDiscoverer(_DirMixin):
                     cam_serial=s_str,
                     timestamp=ts,
                     path=json_path,
+                    start_realtime=start_realtime,
                     raw_serials=raw_serials,
                     raw_frame_ids=raw_frame_ids,
                     fixed_serials=fixed_serials,
@@ -304,6 +313,7 @@ class VideoDiscoverer(_DirMixin):
             segment_id=segment_id,
             cam_serial=str(cam_serial),
             timestamp=ts,
+            start_realtime=companion.start_realtime if companion else None,
             duration=dur,
             resolution=res,
             frame_rate=fps,

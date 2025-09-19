@@ -1,0 +1,63 @@
+Source → CSV:serial
+Quick guide
+-----------
+• Step = ids[i+1] - ids[i]; expected step E = 1.
+• ok           : diff == E    → values increase as expected.
+• duplicate    : diff == 0    → adjacent repeated value (no increase).
+• forward_jump : diff >  E    → skipped/missing values;
+                  Total missing IDs = sum(diff - E) over all forward jumps.
+• drop         : diff <  E    → value decreased (e.g., reset/rollover).
+• Counts       : number of steps in each category (there are N-1 steps for N values).
+
+Values=16026  Steps=16025  ok=15947 (99.51%)
+Counts: drop=14, duplicate=7, forward_jump=57, ok=15947
+Adjacent duplicate events: 7
+Adjacent-duplicate values (value:count):
+  32949112:1  32949552:1
+  32953936:1  32956596:1
+  32957472:2  32960424:1
+Values repeating in non-consecutive groups: 15 unique value(s)
+Non-consecutive group repeats (value:#groups):
+  32950412:2  32951680:2
+  32951692:2  32951694:2
+  32953348:2  32956036:2
+  32956168:2  32960832:2
+  32960838:2  32960844:2
+  32962112:2  32962436:2
+  32962438:2  32962864:2
+  32963432:2
+Total missing IDs (from forward jumps): 3495
+Forward diff histogram (diff > +1):
+  2:12   4:3  
+  8:4    16:1 
+  24:1   32:1 
+  40:1   44:1 
+  46:2   52:1 
+  54:4   58:3 
+  60:10  62:3 
+  64:1   68:1 
+  78:1   92:1 
+  128:1  132:1
+  138:1  192:1
+  288:1  828:1
+Drop diff histogram (diff < 0):
+  -768:1  -228:1
+  -132:1  -120:2
+  -52:1   -16:2 
+  -14:2   -6:3  
+  -2:1  
+Longest OK segment: start=7522  length=1194 steps
+
+Top forward jumps: (index, prev, curr, diff)
+  @i=  5624  32955340 -> 32956168  Δ=+828
+  @i=  3642  32953060 -> 32953348  Δ=+288
+  @i= 12503  32962864 -> 32963056  Δ=+192
+  @i= 12124  32962438 -> 32962576  Δ=+138
+  @i=  6382  32956036 -> 32956168  Δ=+132
+
+Top drops: (index, prev, curr, diff)
+  @i=  5625  32956168 -> 32955400  Δ=-768
+  @i=  3643  32953348 -> 32953120  Δ=-228
+  @i= 12502  32962996 -> 32962864  Δ=-132
+  @i=  6381  32956156 -> 32956036  Δ=-120
+  @i= 12122  32962556 -> 32962436  Δ=-120

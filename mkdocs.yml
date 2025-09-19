@@ -1,0 +1,43 @@
+site_name: Video Sync Docs
+docs_dir: docs
+site_url: ""
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+plugins:
+  - search
+  - mermaid2
+  - section-index
+nav:
+  - Home: index.md
+  # - Tutorials:
+  #     - Quick Start: tutorials/quickstart.md
+  # - How-to:
+  #     - Troubleshooting: how-to/troubleshooting.md
+  # - Reference:
+  #     - Schemas & Layouts: reference/schemas/layouts.md
+  #     - Errors: reference/errors.md
+  # - Explanations:
+  #     - Architecture: explanations/architecture.md
+  - Understanding Audio:
+      - How to decode serial?: understanding_audio/decoding_serial.md
+      - What's the quality of serial?: understanding_audio/serial_quality.md
+      - First Fix - Gap Filling: understanding_audio/fill_gaps.md
+      - Is there data loss?: understanding_audio/data_loss.md
+      - How much data loss?: understanding_audio/how_much_data_loss.md
+  # - Optimizations:
+      # - Decoding large MP3s: optimizations/decoding_large_mp3.md
+
+# plugins:
+#   - search
+#   - mkdocs-mermaid2
+#   - section-index
+#   - mkdocstrings:
+#       handlers:
+#         python:
+#           options:
+#             docstring_style: numpy
+# extra:
+#   api_package_import_hint: "If API build fails, run: pip install -e .  or set PYTHONPATH=."

@@ -33,6 +33,7 @@ class CamJson:
     cam_serial: The serial number of this camera e.g. 23512099
     timestamp: The timestamp extracted from the JSON file
     path: The file path to this camera's JSON file.
+    start_realtime: The start real time (UTC) from json.
     raw_serials: List of original chunk serial data
     raw_frame_ids: List of original frame ids
     fixed_serials: List of fixed chunk serial data
@@ -43,6 +44,7 @@ class CamJson:
     cam_serial: Optional[str]
     timestamp: Optional[datetime]
     path: Optional[Path]
+    start_realtime: Optional[datetime]
     raw_serials: Optional[List[int]]
     raw_frame_ids: Optional[List[int]]
     fixed_serials: Optional[List[int]]
@@ -121,6 +123,7 @@ class Video:
     segment_id: derived from the file name, e.g. "TRBD001_20250101_120000"
     cam_serial: derived from the file name
     timestamp: timestamp extracted from file name
+    start_realtime: the time of the first frame
     duration: length in seconds
     resolution: video resolution (e.g. "1920x1080")
     frame_rate: frames per second (e.g. 30.0)
@@ -132,6 +135,7 @@ class Video:
     segment_id: str
     cam_serial: str
     timestamp: datetime
+    start_realtime: datetime
     duration: float
     resolution: str
     frame_rate: float
