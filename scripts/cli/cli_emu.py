@@ -113,6 +113,19 @@ class TaskContext:
     nsx_parser: Nsx
 
 
+@dataclass
+class SyncPlan:
+    """Prepared pipeline inputs for either serial or rough sync."""
+
+    mode: str
+    audio_path: Path
+    clip_plans_by_cam: Dict[str, List[VideoSegmentClipPlan]]
+    audio_start: Optional[datetime] = None
+    audio_end: Optional[datetime] = None
+    chunk_range: Optional[ChunkSerialRange] = None
+    audio_ready: bool = False
+
+
 def _ensure_tool(name: str) -> None:
     if shutil.which(name) is None:
         raise RuntimeError(f"Required tool '{name}' not found on PATH.")
@@ -308,21 +321,6 @@ def compute_chunk_range(nev: NEV) -> Optional[ChunkSerialRange]:
         start_timestamp=int(df["TimeStamps"].iloc[0]),
         end_timestamp=int(df["TimeStamps"].iloc[-1]),
     )
-
-
-def _serial_min_max(serials: Sequence[int]) -> Tuple[Optional[int], Optional[int]]:
-    values: List[int] = []
-    for serial in serials:
-        try:
-            val = int(serial)
-        except Exception:
-            continue
-        if val < 0:
-            continue
-        values.append(val)
-    if not values:
-        return None, None
-    return min(values), max(values)
 
 
 DATE_DIR_RE = re.compile(r"\d{8}")
@@ -599,6 +597,66 @@ def collect_videos_by_time(
     return matches
 
 
+def _group_plans_by_camera(
+    plans: Sequence[VideoSegmentClipPlan],
+) -> Dict[str, List[VideoSegmentClipPlan]]:
+    grouped: Dict[str, List[VideoSegmentClipPlan]] = defaultdict(list)
+    for plan in plans:
+        grouped[plan.video.cam_serial].append(plan)
+    for cam_plans in grouped.values():
+        cam_plans.sort(key=lambda p: (p.video.segment_id, p.clip_start_index))
+    return grouped
+
+
+def _warn_missing_cameras(
+    task_id: str,
+    mode_label: str,
+    requested: Optional[Set[str]],
+    available: Set[str],
+) -> None:
+    if not requested:
+        return
+    for cam_serial in sorted({cam for cam in requested if cam not in available}):
+        LOGGER.warning(
+            "Requested camera %s not found for %s (%s mode)",
+            cam_serial,
+            task_id,
+            mode_label,
+        )
+
+
+def _build_time_clip_plans_for_camera(
+    task_id: str,
+    cam_serial: str,
+    videos: Sequence[Video],
+    audio_start: datetime,
+    audio_end: datetime,
+) -> List[VideoSegmentClipPlan]:
+    cam_plans: List[VideoSegmentClipPlan] = []
+    for video in videos:
+        try:
+            plan = build_time_clip_plan(video, audio_start, audio_end)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed building clip plan for %s cam %s (rough mode): %s",
+                video.path.name,
+                cam_serial,
+                exc,
+            )
+            continue
+        if plan:
+            cam_plans.append(plan)
+    if not cam_plans:
+        LOGGER.error(
+            "No usable video segments for %s camera %s (rough mode)",
+            task_id,
+            cam_serial,
+        )
+    else:
+        cam_plans.sort(key=lambda p: (p.video.segment_id, p.clip_start_index))
+    return cam_plans
+
+
 def _choose_serials(cam_json: CamJson) -> Optional[List[int]]:
     if cam_json.fixed_serials:
         return cam_json.fixed_serials
@@ -717,6 +775,197 @@ def build_time_clip_plan(
     )
 
 
+def _prepare_serial_sync_plan(
+    task: TaskContext,
+    video_dir: Path,
+    out_dir: Path,
+    room_mic: str,
+    camera_serials: Optional[Set[str]],
+) -> Optional[SyncPlan]:
+    LOGGER.info("Starting serial sync for %s", task.stitched.task_id)
+
+    chunk_range = compute_chunk_range(task.stitched.nsp1_nev)
+    if not chunk_range:
+        LOGGER.warning(
+            "No chunk serials for task %s; rerun with --rough-sync to use time-based matching",
+            task.stitched.task_id,
+        )
+        return None
+
+    LOGGER.info(
+        "Serial sync window for %s: serials %s-%s, timestamps %s-%s",
+        task.stitched.task_id,
+        chunk_range.start_serial,
+        chunk_range.end_serial,
+        chunk_range.start_timestamp,
+        chunk_range.end_timestamp,
+    )
+
+    plans = discover_clip_plans(video_dir, chunk_range, camera_filter=camera_serials)
+    if not plans:
+        LOGGER.warning(
+            "No video segments overlap serial range for %s", task.stitched.task_id
+        )
+        return None
+
+    clip_plans_by_cam = _group_plans_by_camera(plans)
+    LOGGER.info(
+        "Serial sync: %s -> %d camera(s)",
+        task.stitched.task_id,
+        len(clip_plans_by_cam),
+    )
+
+    _warn_missing_cameras(
+        task.stitched.task_id,
+        "serial",
+        camera_serials,
+        set(clip_plans_by_cam.keys()),
+    )
+
+    audio_dir = out_dir / "audio"
+    audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
+
+    return SyncPlan(
+        mode="serial",
+        audio_path=audio_path,
+        clip_plans_by_cam=clip_plans_by_cam,
+        chunk_range=chunk_range,
+        audio_ready=False,
+    )
+
+
+def _prepare_rough_sync_plan(
+    task: TaskContext,
+    video_dir: Path,
+    out_dir: Path,
+    room_mic: str,
+    camera_serials: Optional[Set[str]],
+    overwrite: bool,
+    rough_offset: Optional[timedelta],
+) -> Optional[SyncPlan]:
+    LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
+
+    audio_dir = out_dir / "audio"
+    audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
+    try:
+        audio_path, raw_audio_start, raw_audio_end = extract_full_ns5_audio(
+            task, room_mic, audio_path, overwrite
+        )
+    except Exception as exc:
+        LOGGER.error(
+            "Audio extraction (rough) failed for %s: %s", task.stitched.task_id, exc
+        )
+        return None
+
+    audio_start = raw_audio_start
+    audio_end = raw_audio_end
+
+    LOGGER.info(
+        "Rough sync audio window for %s: %s -> %s",
+        task.stitched.task_id,
+        audio_start,
+        audio_end,
+    )
+
+    offset_delta = rough_offset or timedelta(0)
+    if offset_delta:
+        adjusted_start = audio_start - offset_delta
+        adjusted_end = audio_end - offset_delta
+        if adjusted_end <= adjusted_start:
+            LOGGER.error(
+                "Rough sync offset %s collapses audio window for %s (adjusted %s -> %s)",
+                offset_delta,
+                task.stitched.task_id,
+                adjusted_start,
+                adjusted_end,
+            )
+            return None
+        LOGGER.info(
+            "Applying rough sync offset of %s (adjusted audio window: %s -> %s)",
+            offset_delta,
+            adjusted_start,
+            adjusted_end,
+        )
+        audio_start = adjusted_start
+        audio_end = adjusted_end
+
+    metadata_path = audio_path.with_suffix(".json")
+    offset_ms = int(round(offset_delta.total_seconds() * 1000))
+    if metadata_path.exists():
+        try:
+            metadata_doc = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # pragma: no cover - best effort logging update
+            LOGGER.debug(
+                "Failed to update audio metadata for %s: %s",
+                task.stitched.task_id,
+                exc,
+            )
+        else:
+            metadata_doc.setdefault(
+                "original_start_time_utc", raw_audio_start.isoformat()
+            )
+            metadata_doc.setdefault("original_end_time_utc", raw_audio_end.isoformat())
+            metadata_doc["start_time_utc"] = audio_start.isoformat()
+            metadata_doc["end_time_utc"] = audio_end.isoformat()
+            metadata_doc["adjusted_start_time_utc"] = audio_start.isoformat()
+            metadata_doc["adjusted_end_time_utc"] = audio_end.isoformat()
+            metadata_doc["offset_applied_ms"] = offset_ms
+            metadata_path.write_text(
+                json.dumps(metadata_doc, indent=2), encoding="utf-8"
+            )
+
+    videos_by_cam = collect_videos_by_time(
+        video_dir, audio_start, audio_end, camera_serials
+    )
+    if not videos_by_cam:
+        LOGGER.warning(
+            "No videos overlap NS5 audio window for %s (rough mode)",
+            task.stitched.task_id,
+        )
+        return None
+
+    _warn_missing_cameras(
+        task.stitched.task_id,
+        "rough",
+        camera_serials,
+        set(videos_by_cam.keys()),
+    )
+
+    clip_plans_by_cam: Dict[str, List[VideoSegmentClipPlan]] = {}
+    for cam_serial, videos in sorted(videos_by_cam.items()):
+        if camera_serials and cam_serial not in camera_serials:
+            continue
+        if not videos:
+            continue
+        cam_plans = _build_time_clip_plans_for_camera(
+            task.stitched.task_id,
+            cam_serial,
+            videos,
+            audio_start,
+            audio_end,
+        )
+        if cam_plans:
+            clip_plans_by_cam[cam_serial] = cam_plans
+
+    if not clip_plans_by_cam:
+        return None
+
+    LOGGER.info(
+        "Rough sync: %s -> %d camera(s)",
+        task.stitched.task_id,
+        len(clip_plans_by_cam),
+    )
+
+    return SyncPlan(
+        mode="rough",
+        audio_path=audio_path,
+        clip_plans_by_cam=clip_plans_by_cam,
+        audio_start=audio_start,
+        audio_end=audio_end,
+        audio_ready=True,
+    )
+
+
 def discover_clip_plans(
     video_dir: Path,
     serial_range: ChunkSerialRange,
@@ -726,8 +975,6 @@ def discover_clip_plans(
     allowed: Optional[Set[str]] = (
         {c.strip() for c in camera_filter} if camera_filter else None
     )
-
-    stop_scan = False
 
     for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
         ts = FilePatterns.parse_tail_datetime(seg_id)
@@ -808,7 +1055,6 @@ def discover_clip_plans(
             continue
 
         if segment_min is not None and segment_min > serial_range.end_serial:
-            stop_scan = True
             break
         if segment_max is not None and segment_max < serial_range.start_serial:
             continue
@@ -817,9 +1063,6 @@ def discover_clip_plans(
             plan = build_clip_plan(video, serial_range)
             if plan:
                 plans.append(plan)
-
-        if stop_scan:
-            break
 
     plans.sort(key=lambda p: (p.video.segment_id, p.video.cam_serial))
     LOGGER.info(
@@ -1078,6 +1321,9 @@ def extract_full_ns5_audio(
         "end_timestamp_ticks": int(end_ts),
         "start_time_utc": start_dt.isoformat(),
         "end_time_utc": end_dt.isoformat(),
+        "original_start_time_utc": start_dt.isoformat(),
+        "original_end_time_utc": end_dt.isoformat(),
+        "offset_applied_ms": 0,
         "audio_path": str(out_path),
         "ns5_path": str(task.stitched.nsp1_ns5.path),
     }
@@ -1086,6 +1332,167 @@ def extract_full_ns5_audio(
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     return out_path, start_dt, end_dt
+
+
+def _execute_sync_plan(
+    sync_plan: SyncPlan,
+    task: TaskContext,
+    out_dir: Path,
+    room_mic: str,
+    overwrite: bool,
+) -> bool:
+    success = False
+    audio_ready = sync_plan.audio_ready
+    audio_path = sync_plan.audio_path
+    chunk_range = sync_plan.chunk_range
+    mode_label = "rough" if sync_plan.mode == "rough" else "serial"
+    mode_title = "Rough" if sync_plan.mode == "rough" else "Serial"
+
+    for cam_serial, cam_plans in sorted(sync_plan.clip_plans_by_cam.items()):
+        cam_dir = out_dir / cam_serial
+        work_dir = cam_dir / "work"
+        clips_dir = work_dir / "clips"
+        clip_paths: List[Path] = []
+
+        for clip_plan in cam_plans:
+            try:
+                clip_path = clip_video(clip_plan, clips_dir, overwrite)
+                padded_path = pad_video_if_needed(clip_plan, clip_path, clips_dir)
+                clip_paths.append(padded_path)
+                LOGGER.debug(
+                    "Prepared %s clip %s (camera %s, segment %s)",
+                    mode_label,
+                    padded_path.name,
+                    cam_serial,
+                    clip_plan.video.segment_id,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    "Clip/pad failed for %s cam %s (%s mode): %s",
+                    clip_plan.video.segment_id,
+                    cam_serial,
+                    mode_label,
+                    exc,
+                )
+                continue
+
+        if not clip_paths:
+            if sync_plan.mode == "rough":
+                LOGGER.error(
+                    "No successfully prepared clips for %s camera %s (rough mode)",
+                    task.stitched.task_id,
+                    cam_serial,
+                )
+            else:
+                LOGGER.error(
+                    "All clips failed for task %s camera %s",
+                    task.stitched.task_id,
+                    cam_serial,
+                )
+            continue
+
+        if not audio_ready:
+            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            if chunk_range is None:
+                LOGGER.error(
+                    "Missing chunk range for serial sync while preparing audio for %s",
+                    task.stitched.task_id,
+                )
+                return False
+            try:
+                LOGGER.info(
+                    "Extracting serial-aligned audio for %s", task.stitched.task_id
+                )
+                extract_audio_slice(
+                    task,
+                    chunk_range,
+                    room_mic,
+                    audio_path,
+                    overwrite,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    "Audio extraction failed for %s: %s",
+                    task.stitched.task_id,
+                    exc,
+                )
+                return False
+            audio_ready = True
+
+        merged_dir = work_dir / "merged"
+        try:
+            merged_video = concat_videos(clip_paths, merged_dir, overwrite)
+        except Exception as exc:
+            LOGGER.error(
+                "Video concat failed for %s camera %s (%s mode): %s",
+                task.stitched.task_id,
+                cam_serial,
+                mode_label,
+                exc,
+            )
+            continue
+
+        synced_dir = cam_dir / "synced_video"
+        synced_dir.mkdir(parents=True, exist_ok=True)
+        final_path = synced_dir / f"{task.stitched.task_id}_{cam_serial}.mp4"
+        try:
+            mux_audio(merged_video, audio_path, final_path, overwrite)
+        except Exception as exc:
+            LOGGER.error(
+                "Mux failed for %s camera %s (%s mode): %s",
+                task.stitched.task_id,
+                cam_serial,
+                mode_label,
+                exc,
+            )
+            continue
+
+        LOGGER.info(
+            "%s-synced output written: %s (camera %s)",
+            mode_title,
+            final_path,
+            cam_serial,
+        )
+        success = True
+
+    return success
+
+
+def prepare_sync_plan(
+    task: TaskContext,
+    video_dir: Path,
+    out_dir: Path,
+    room_mic: str,
+    camera_serials: Optional[Set[str]],
+    overwrite: bool,
+    rough_sync: bool,
+    rough_sync_offset: Optional[timedelta],
+) -> Optional[SyncPlan]:
+    if rough_sync:
+        return _prepare_rough_sync_plan(
+            task,
+            video_dir,
+            out_dir,
+            room_mic,
+            camera_serials,
+            overwrite,
+            rough_sync_offset,
+        )
+
+    if rough_sync_offset:
+        LOGGER.warning(
+            "Ignoring rough sync offset %s for %s because --rough-sync is not enabled",
+            rough_sync_offset,
+            task.stitched.task_id,
+        )
+
+    return _prepare_serial_sync_plan(
+        task,
+        video_dir,
+        out_dir,
+        room_mic,
+        camera_serials,
+    )
 
 
 def concat_videos(
@@ -1269,172 +1676,6 @@ def mux_audio(
     return out_path
 
 
-def process_task_rough(
-    task: TaskContext,
-    video_dir: Path,
-    out_dir: Path,
-    room_mic: str,
-    overwrite: bool,
-    camera_serials: Optional[Set[str]] = None,
-    rough_offset: Optional[timedelta] = None,
-) -> bool:
-    LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
-    audio_dir = out_dir / "audio"
-    audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
-    try:
-        audio_path, audio_start, audio_end = extract_full_ns5_audio(
-            task, room_mic, audio_path, overwrite
-        )
-    except Exception as exc:
-        LOGGER.error(
-            "Audio extraction (rough) failed for %s: %s", task.stitched.task_id, exc
-        )
-        return False
-
-    LOGGER.info(
-        "Rough sync audio window for %s: %s -> %s",
-        task.stitched.task_id,
-        audio_start,
-        audio_end,
-    )
-
-    offset_delta = rough_offset or timedelta(0)
-    if offset_delta:
-        adjusted_start = audio_start - offset_delta
-        adjusted_end = audio_end - offset_delta
-        if adjusted_end <= adjusted_start:
-            LOGGER.error(
-                "Rough sync offset %s collapses audio window for %s (adjusted %s -> %s)",
-                offset_delta,
-                task.stitched.task_id,
-                adjusted_start,
-                adjusted_end,
-            )
-            return False
-        LOGGER.info(
-            "Applying rough sync offset of %s (adjusted audio window: %s -> %s)",
-            offset_delta,
-            adjusted_start,
-            adjusted_end,
-        )
-        audio_start = adjusted_start
-        audio_end = adjusted_end
-
-    videos_by_cam = collect_videos_by_time(
-        video_dir, audio_start, audio_end, camera_serials
-    )
-    if not videos_by_cam:
-        LOGGER.warning(
-            "No videos overlap NS5 audio window for %s (rough mode)",
-            task.stitched.task_id,
-        )
-        return False
-
-    if camera_serials:
-        missing = sorted({c for c in camera_serials if c not in videos_by_cam})
-        for cam in missing:
-            LOGGER.warning(
-                "Requested camera %s not found in time window for %s",
-                cam,
-                task.stitched.task_id,
-            )
-
-    success = False
-    for cam_serial, videos in sorted(videos_by_cam.items()):
-        if camera_serials and cam_serial not in camera_serials:
-            continue
-        if not videos:
-            continue
-
-        cam_plans: List[VideoSegmentClipPlan] = []
-        for video in videos:
-            try:
-                plan = build_time_clip_plan(video, audio_start, audio_end)
-            except Exception as exc:
-                LOGGER.error(
-                    "Failed building clip plan for %s cam %s (rough mode): %s",
-                    video.path.name,
-                    cam_serial,
-                    exc,
-                )
-                continue
-            if plan:
-                cam_plans.append(plan)
-
-        if not cam_plans:
-            LOGGER.error(
-                "No usable video segments for %s camera %s (rough mode)",
-                task.stitched.task_id,
-                cam_serial,
-            )
-            continue
-
-        cam_dir = out_dir / cam_serial
-        work_dir = cam_dir / "work"
-        clips_dir = work_dir / "clips"
-        clip_paths: List[Path] = []
-        for plan in sorted(
-            cam_plans, key=lambda p: (p.video.segment_id, p.clip_start_index)
-        ):
-            try:
-                clip_path = clip_video(plan, clips_dir, overwrite)
-                padded_path = pad_video_if_needed(plan, clip_path, clips_dir)
-                clip_paths.append(padded_path)
-                LOGGER.debug(
-                    "Prepared rough clip %s (camera %s, segment %s)",
-                    padded_path.name,
-                    cam_serial,
-                    plan.video.segment_id,
-                )
-            except Exception as exc:
-                LOGGER.error(
-                    "Clip/pad failed for %s cam %s (rough mode): %s",
-                    plan.video.segment_id,
-                    cam_serial,
-                    exc,
-                )
-                continue
-
-        if not clip_paths:
-            LOGGER.error(
-                "No successfully prepared clips for %s camera %s (rough mode)",
-                task.stitched.task_id,
-                cam_serial,
-            )
-            continue
-
-        merged_dir = work_dir / "merged"
-        try:
-            merged_video = concat_videos(clip_paths, merged_dir, overwrite)
-        except Exception as exc:
-            LOGGER.error(
-                "Video concat failed for %s camera %s (rough mode): %s",
-                task.stitched.task_id,
-                cam_serial,
-                exc,
-            )
-            continue
-
-        synced_dir = cam_dir / "synced_video"
-        final_path = synced_dir / f"{task.stitched.task_id}_{cam_serial}.mp4"
-        try:
-            mux_audio(merged_video, audio_path, final_path, overwrite)
-        except Exception as exc:
-            LOGGER.error(
-                "Mux failed for %s camera %s (rough mode): %s",
-                task.stitched.task_id,
-                cam_serial,
-                exc,
-            )
-            continue
-        LOGGER.info(
-            "Rough-synced output written: %s (camera %s)", final_path, cam_serial
-        )
-        success = True
-
-    return success
-
-
 def process_task(
     task: TaskContext,
     video_dir: Path,
@@ -1445,153 +1686,20 @@ def process_task(
     rough_sync: bool = False,
     rough_sync_offset: Optional[timedelta] = None,
 ) -> bool:
-    if rough_sync:
-        return process_task_rough(
-            task,
-            video_dir=video_dir,
-            out_dir=out_dir,
-            room_mic=room_mic,
-            overwrite=overwrite,
-            camera_serials=camera_serials,
-            rough_offset=rough_sync_offset,
-        )
-
-    if rough_sync_offset:
-        LOGGER.warning(
-            "Ignoring rough sync offset %s for %s because --rough-sync is not enabled",
-            rough_sync_offset,
-            task.stitched.task_id,
-        )
-
-    LOGGER.info("Starting serial sync for %s", task.stitched.task_id)
-
-    chunk_range = compute_chunk_range(task.stitched.nsp1_nev)
-    if not chunk_range:
-        LOGGER.warning(
-            "No chunk serials for task %s; rerun with --rough-sync to use time-based matching",
-            task.stitched.task_id,
-        )
+    sync_plan = prepare_sync_plan(
+        task,
+        video_dir,
+        out_dir,
+        room_mic,
+        camera_serials,
+        overwrite,
+        rough_sync,
+        rough_sync_offset,
+    )
+    if not sync_plan:
         return False
 
-    LOGGER.info(
-        "Serial sync window for %s: serials %s-%s, timestamps %s-%s",
-        task.stitched.task_id,
-        chunk_range.start_serial,
-        chunk_range.end_serial,
-        chunk_range.start_timestamp,
-        chunk_range.end_timestamp,
-    )
-
-    plans = discover_clip_plans(video_dir, chunk_range, camera_filter=camera_serials)
-    if not plans:
-        LOGGER.warning(
-            "No video segments overlap serial range for %s", task.stitched.task_id
-        )
-        return False
-
-    plans_by_cam: Dict[str, List[VideoSegmentClipPlan]] = defaultdict(list)
-    for plan in plans:
-        plans_by_cam[plan.video.cam_serial].append(plan)
-
-    LOGGER.info(
-        "Serial sync: %s -> %d camera(s)",
-        task.stitched.task_id,
-        len(plans_by_cam),
-    )
-
-    if camera_serials:
-        missing = sorted({c for c in camera_serials if c not in plans_by_cam})
-        for cam in missing:
-            LOGGER.warning(
-                "Requested camera %s not found or lacked serial overlap for %s",
-                cam,
-                task.stitched.task_id,
-            )
-
-    audio_path: Optional[Path] = None
-    audio_dir = out_dir / "audio"
-    success = False
-
-    for cam_serial, cam_plans in sorted(plans_by_cam.items()):
-        if camera_serials and cam_serial not in camera_serials:
-            continue
-
-        cam_dir = out_dir / cam_serial
-        work_dir = cam_dir / "work"
-        clips_dir = work_dir / "clips"
-        clip_paths: List[Path] = []
-        for plan in sorted(
-            cam_plans, key=lambda p: (p.video.segment_id, p.clip_start_index)
-        ):
-            try:
-                clip_path = clip_video(plan, clips_dir, overwrite)
-                padded_path = pad_video_if_needed(plan, clip_path, clips_dir)
-                clip_paths.append(padded_path)
-                LOGGER.debug(
-                    "Prepared serial clip %s (camera %s, segment %s)",
-                    padded_path.name,
-                    cam_serial,
-                    plan.video.segment_id,
-                )
-            except Exception as exc:
-                LOGGER.error(
-                    "Clip/pad failed for %s cam %s: %s",
-                    plan.video.segment_id,
-                    plan.video.cam_serial,
-                    exc,
-                )
-                continue
-
-        if not clip_paths:
-            LOGGER.error(
-                "All clips failed for task %s camera %s",
-                task.stitched.task_id,
-                cam_serial,
-            )
-            continue
-
-        if audio_path is None:
-            audio_dir.mkdir(parents=True, exist_ok=True)
-            audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
-            try:
-                LOGGER.info(
-                    "Extracting serial-aligned audio for %s", task.stitched.task_id
-                )
-                extract_audio_slice(task, chunk_range, room_mic, audio_path, overwrite)
-            except Exception as exc:
-                LOGGER.error(
-                    "Audio extraction failed for %s: %s", task.stitched.task_id, exc
-                )
-                return False
-
-        merged_dir = work_dir / "merged"
-        try:
-            merged_video = concat_videos(clip_paths, merged_dir, overwrite)
-        except Exception as exc:
-            LOGGER.error(
-                "Video concat failed for %s cam %s: %s",
-                task.stitched.task_id,
-                cam_serial,
-                exc,
-            )
-            continue
-
-        synced_dir = cam_dir / "synced_video"
-        final_path = synced_dir / f"{task.stitched.task_id}_{cam_serial}.mp4"
-        try:
-            mux_audio(merged_video, audio_path, final_path, overwrite)
-        except Exception as exc:
-            LOGGER.error(
-                "Mux failed for %s cam %s: %s",
-                task.stitched.task_id,
-                cam_serial,
-                exc,
-            )
-            continue
-        LOGGER.info("Synced output written: %s (camera %s)", final_path, cam_serial)
-        success = True
-
-    return success
+    return _execute_sync_plan(sync_plan, task, out_dir, room_mic, overwrite)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
