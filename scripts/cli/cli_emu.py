@@ -61,6 +61,7 @@ import math
 import re
 import shutil
 import subprocess
+import wave
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -462,10 +463,39 @@ def collect_videos_by_time(
     audio_end: datetime,
     camera_filter: Optional[Set[str]] = None,
 ) -> Dict[str, List[Video]]:
+    """Group videos by camera whose realtime span overlaps the audio window.
+
+    The function iterates segment JSON/MP4 pairs and keeps any camera video whose
+    realtime interval intersects ``audio_start`` to ``audio_end``. Results are
+    grouped by camera serial and sorted chronologically to simplify downstream
+    stitching.
+    """
+
     allowed: Optional[Set[str]] = (
         {c.strip() for c in camera_filter} if camera_filter else None
     )
     matches: Dict[str, List[Video]] = defaultdict(list)
+
+    def classify_segment(
+        seg_id: str,
+        start_rt: Optional[datetime],
+        end_rt: Optional[datetime],
+    ) -> str:
+        """Return scan decision: 'include', 'before', 'after', or 'skip'."""
+
+        if start_rt is None or end_rt is None:
+            LOGGER.debug(
+                "Segment %s lacks realtime bounds in JSON; skipping for rough lookup.",
+                seg_id,
+            )
+            return "skip"
+        if end_rt < audio_start:
+            LOGGER.debug("Segment %s ends before audio window; skipping.", seg_id)
+            return "before"
+        if start_rt > audio_end:
+            LOGGER.debug("Segment %s starts after audio window; stopping scan.", seg_id)
+            return "after"
+        return "include"
 
     for seg_id, date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
         ts = FilePatterns.parse_tail_datetime(seg_id)
@@ -486,32 +516,11 @@ def collect_videos_by_time(
             audio_end,
         )
 
-        has_realtime_bounds = (
-            segment_start_rt is not None and segment_end_rt is not None
-        )
-        if has_realtime_bounds:
-            overlaps_audio = (
-                segment_end_rt >= audio_start and segment_start_rt <= audio_end
-            )
-            if not overlaps_audio:
-                if segment_end_rt < audio_start:
-                    LOGGER.debug(
-                        "Segment %s ends before audio window; skipping.", seg_id
-                    )
-                    continue
-                LOGGER.debug(
-                    "Segment %s starts after audio window; stopping scan.", seg_id
-                )
-                break
-        else:
-            segment_anchor = segment_start_rt or ts
-            if segment_anchor and segment_anchor > audio_end:
-                LOGGER.debug(
-                    "Segment %s anchor %s after audio window; stopping scan.",
-                    seg_id,
-                    segment_anchor,
-                )
-                break
+        decision = classify_segment(seg_id, segment_start_rt, segment_end_rt)
+        if decision == "skip" or decision == "before":
+            continue
+        if decision == "after":
+            break
 
         serials_from_json = jp.get_camera_serials()
         serial_map = {str(s): s for s in serials_from_json}
@@ -520,6 +529,8 @@ def collect_videos_by_time(
             if allowed
             else sorted(serial_map.keys())
         )
+        if not target_serials:
+            continue
 
         for cam_serial in target_serials:
             if cam_serial not in mp4s:
@@ -546,22 +557,26 @@ def collect_videos_by_time(
                 )
                 continue
 
-            start_rt = video.start_realtime or ts
-            json_start = (
-                video.companion_json.start_realtime if video.companion_json else None
-            )
+            cam_json = video.companion_json
+            start_rt = cam_json.start_realtime if cam_json else None
+            start_rt = start_rt or segment_start_rt
+            end_rt = segment_end_rt
+            if start_rt is None or end_rt is None:
+                LOGGER.debug(
+                    "Skipping segment %s cam %s due to missing realtime bounds.",
+                    seg_id,
+                    cam_serial,
+                )
+                continue
             LOGGER.debug(
-                "Video candidate segment=%s cam=%s start_realtime=%s (json=%s) duration=%.2fs path=%s",
+                "Video candidate segment=%s cam=%s start_realtime=%s end_realtime=%s path=%s",
                 seg_id,
                 cam_serial,
                 start_rt,
-                json_start,
-                video.duration,
+                end_rt,
                 video.path.name,
             )
-            duration = float(video.duration) if video.duration else 0.0
-            video_end = start_rt + timedelta(seconds=max(duration, 0.0))
-            if video_end < audio_start or start_rt > audio_end:
+            if end_rt < audio_start or start_rt > audio_end:
                 continue
             matches[cam_serial].append(video)
             LOGGER.debug("Matched!")
@@ -1050,10 +1065,36 @@ def extract_full_ns5_audio(
     if not out_path.exists() or overwrite:
         wav_write(str(out_path), int(sample_rate), arr)
 
+    duration_seconds = float(arr.size) / float(sample_rate)
+    metadata = {
+        "patient_id": task.stitched.patient_id,
+        "task_id": task.stitched.task_id,
+        "room_mic": room_mic,
+        "channel_name": channel_name,
+        "sample_rate_hz": int(sample_rate),
+        "sample_count": int(arr.size),
+        "duration_seconds": duration_seconds,
+        "start_timestamp_ticks": int(start_ts),
+        "end_timestamp_ticks": int(end_ts),
+        "start_time_utc": start_dt.isoformat(),
+        "end_time_utc": end_dt.isoformat(),
+        "audio_path": str(out_path),
+        "ns5_path": str(task.stitched.nsp1_ns5.path),
+    }
+    metadata_path = out_path.with_suffix(".json")
+    if not metadata_path.exists() or overwrite:
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
     return out_path, start_dt, end_dt
 
 
-def concat_videos(clip_paths: List[Path], work_dir: Path, overwrite: bool) -> Path:
+def concat_videos(
+    clip_paths: List[Path],
+    work_dir: Path,
+    overwrite: bool,
+    *,
+    target_fps: Optional[float] = None,
+) -> Path:
     if not clip_paths:
         raise RuntimeError("No clips to merge")
     if len(clip_paths) == 1:
@@ -1083,10 +1124,29 @@ def concat_videos(clip_paths: List[Path], work_dir: Path, overwrite: bool) -> Pa
         "0",
         "-i",
         str(concat_file),
-        "-c",
-        "copy",
-        str(out_path),
     ]
+
+    if target_fps:
+        cmd.extend(
+            [
+                "-vf",
+                f"fps={target_fps}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ]
+        )
+    else:
+        cmd.extend(["-c", "copy"])
+
+    cmd.append(str(out_path))
     result = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
@@ -1100,30 +1160,112 @@ def mux_audio(
 ) -> Path:
     _ensure_tool("ffmpeg")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with wave.open(str(audio_path), "rb") as wav_in:
+        audio_frames = wav_in.getnframes()
+        audio_rate = wav_in.getframerate()
+    if audio_rate <= 0:
+        raise RuntimeError("Invalid audio sample rate when muxing")
+    audio_duration = audio_frames / float(audio_rate)
+    if audio_duration <= 0:
+        raise RuntimeError("Invalid audio duration when muxing")
+
+    video_probe = VideoFileParser(str(video_path))
+    frame_count = int(video_probe.frame_count)
+    video_duration = float(video_probe.duration)
+    if frame_count <= 0 or video_duration <= 0:
+        raise RuntimeError("Invalid video probe data when muxing")
+
+    target_fps = frame_count / audio_duration
+    if not math.isfinite(target_fps) or target_fps <= 0:
+        target_fps = float(video_probe.fps)
+    target_fps = max(target_fps, 1.0)
+
+    LOGGER.debug(
+        "Muxing %s with audio %s (target_fps=%.6f, orig_fps=%.6f)",
+        video_path.name,
+        audio_path.name,
+        target_fps,
+        float(video_probe.fps),
+    )
+
     cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         "-y" if overwrite else "-n",
         "-i",
         str(video_path),
         "-i",
         str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-r",
+        f"{target_fps:.6f}",
+        "-vsync",
+        "cfr",
         "-c:v",
-        "copy",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
         "aac",
         "-b:a",
         "192k",
         "-shortest",
+        "-movflags",
+        "+faststart",
         str(out_path),
     ]
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg mux failed: {result.stderr.strip()}")
+
+    progress_step = 0
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                break
+            continue
+        line = line.strip()
+        if line.startswith("frame="):
+            try:
+                current_frame = int(line.split("=", 1)[1])
+            except ValueError:
+                continue
+            if frame_count > 0:
+                percent = int(min(100, (current_frame * 100) // frame_count))
+                if percent >= progress_step:
+                    LOGGER.info(
+                        "Muxing %s: %d%% (%d/%d frames)",
+                        video_path.name,
+                        percent,
+                        current_frame,
+                        frame_count,
+                    )
+                    progress_step = percent + 10
+        elif line == "progress=end":
+            LOGGER.info("Muxing %s: 100%% (%d frames)", video_path.name, frame_count)
+            break
+
+    _, stderr_output = proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg mux failed: {stderr_output.strip()}")
     return out_path
 
 
@@ -1134,6 +1276,7 @@ def process_task_rough(
     room_mic: str,
     overwrite: bool,
     camera_serials: Optional[Set[str]] = None,
+    rough_offset: Optional[timedelta] = None,
 ) -> bool:
     LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
     audio_dir = out_dir / "audio"
@@ -1154,6 +1297,28 @@ def process_task_rough(
         audio_start,
         audio_end,
     )
+
+    offset_delta = rough_offset or timedelta(0)
+    if offset_delta:
+        adjusted_start = audio_start - offset_delta
+        adjusted_end = audio_end - offset_delta
+        if adjusted_end <= adjusted_start:
+            LOGGER.error(
+                "Rough sync offset %s collapses audio window for %s (adjusted %s -> %s)",
+                offset_delta,
+                task.stitched.task_id,
+                adjusted_start,
+                adjusted_end,
+            )
+            return False
+        LOGGER.info(
+            "Applying rough sync offset of %s (adjusted audio window: %s -> %s)",
+            offset_delta,
+            adjusted_start,
+            adjusted_end,
+        )
+        audio_start = adjusted_start
+        audio_end = adjusted_end
 
     videos_by_cam = collect_videos_by_time(
         video_dir, audio_start, audio_end, camera_serials
@@ -1278,6 +1443,7 @@ def process_task(
     overwrite: bool,
     camera_serials: Optional[Set[str]] = None,
     rough_sync: bool = False,
+    rough_sync_offset: Optional[timedelta] = None,
 ) -> bool:
     if rough_sync:
         return process_task_rough(
@@ -1287,6 +1453,14 @@ def process_task(
             room_mic=room_mic,
             overwrite=overwrite,
             camera_serials=camera_serials,
+            rough_offset=rough_sync_offset,
+        )
+
+    if rough_sync_offset:
+        LOGGER.warning(
+            "Ignoring rough sync offset %s for %s because --rough-sync is not enabled",
+            rough_sync_offset,
+            task.stitched.task_id,
         )
 
     LOGGER.info("Starting serial sync for %s", task.stitched.task_id)
@@ -1446,6 +1620,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Use NS5 audio start/end timestamps to time-match videos when chunk serials are missing.",
     )
     parser.add_argument(
+        "--rough-sync-offset-ms",
+        type=float,
+        default=0.0,
+        help=(
+            "Shift the NS5 rough-sync audio window by the given milliseconds. "
+            "Positive values move the window earlier (NS5 clock ahead); negative values move it later."
+        ),
+    )
+    parser.add_argument(
         "--room-mic",
         choices=("roommic1", "roommic2"),
         default="roommic1",
@@ -1477,6 +1660,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     patient_dir = args.patient_dir.resolve()
     video_dir = args.video_dir.resolve()
     out_dir = args.out_dir.resolve()
+
+    rough_sync_offset: Optional[timedelta] = None
+    if args.rough_sync_offset_ms:
+        rough_sync_offset = timedelta(milliseconds=args.rough_sync_offset_ms)
+        if not args.rough_sync:
+            LOGGER.warning(
+                "--rough-sync-offset-ms ignored unless --rough-sync is enabled"
+            )
 
     if not patient_dir.is_dir():
         LOGGER.error("Patient dir not found: %s", patient_dir)
@@ -1520,6 +1711,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             overwrite=args.overwrite,
             camera_serials=camera_serials,
             rough_sync=args.rough_sync,
+            rough_sync_offset=rough_sync_offset,
         )
         if not result:
             exit_code = 4
