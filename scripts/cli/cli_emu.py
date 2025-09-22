@@ -1353,12 +1353,34 @@ def _execute_sync_plan(
         work_dir = cam_dir / "work"
         clips_dir = work_dir / "clips"
         clip_paths: List[Path] = []
+        clip_metadata_entries: List[dict] = []
 
         for clip_plan in cam_plans:
             try:
                 clip_path = clip_video(clip_plan, clips_dir, overwrite)
                 padded_path = pad_video_if_needed(clip_plan, clip_path, clips_dir)
                 clip_paths.append(padded_path)
+                clip_entry = {
+                    "segment_id": clip_plan.video.segment_id,
+                    "cam_serial": cam_serial,
+                    "source_video": str(clip_plan.video.path),
+                    "clip_path": str(padded_path),
+                    "clip_start_index": int(clip_plan.clip_start_index),
+                    "clip_end_index": int(clip_plan.clip_end_index),
+                    "frame_start": int(clip_plan.frame_ids[0]),
+                    "frame_end": int(clip_plan.frame_ids[-1]),
+                    "local_frame_start": int(clip_plan.frame_ids_local[0]),
+                    "local_frame_end": int(clip_plan.frame_ids_local[-1]),
+                    "frame_count": int(len(clip_plan.frame_ids)),
+                    "serial_start": int(clip_plan.serials[0]),
+                    "serial_end": int(clip_plan.serials[-1]),
+                    "frame_rate": float(clip_plan.video.frame_rate or 0.0),
+                }
+                if clip_plan.video.start_realtime:
+                    clip_entry["segment_start_realtime"] = (
+                        clip_plan.video.start_realtime.isoformat()
+                    )
+                clip_metadata_entries.append(clip_entry)
                 LOGGER.debug(
                     "Prepared %s clip %s (camera %s, segment %s)",
                     mode_label,
@@ -1418,6 +1440,34 @@ def _execute_sync_plan(
                 )
                 return False
             audio_ready = True
+
+        clip_metadata_doc = None
+        if clip_metadata_entries:
+            clip_metadata_doc = {
+                "task_id": task.stitched.task_id,
+                "mode": sync_plan.mode,
+                "cam_serial": cam_serial,
+                "audio_path": str(audio_path),
+                "audio_window_start": (
+                    sync_plan.audio_start.isoformat() if sync_plan.audio_start else None
+                ),
+                "audio_window_end": (
+                    sync_plan.audio_end.isoformat() if sync_plan.audio_end else None
+                ),
+                "clip_entries": clip_metadata_entries,
+            }
+            if sync_plan.chunk_range:
+                clip_metadata_doc["chunk_serial_range"] = {
+                    "start_serial": sync_plan.chunk_range.start_serial,
+                    "end_serial": sync_plan.chunk_range.end_serial,
+                    "start_timestamp": sync_plan.chunk_range.start_timestamp,
+                    "end_timestamp": sync_plan.chunk_range.end_timestamp,
+                }
+            metadata_path = work_dir / "clip_metadata.json"
+            if not metadata_path.exists() or overwrite:
+                metadata_path.write_text(
+                    json.dumps(clip_metadata_doc, indent=2), encoding="utf-8"
+                )
 
         merged_dir = work_dir / "merged"
         try:
