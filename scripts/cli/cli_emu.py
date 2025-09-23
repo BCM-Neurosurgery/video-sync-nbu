@@ -81,6 +81,9 @@ from scripts.utility.utils import ts2unix
 
 LOGGER = logging.getLogger("cli_emu")
 
+# Empirical camera trigger rate used when mapping realtime windows to frames.
+TRIGGER_FPS = 29.97
+
 
 @dataclass(frozen=True)
 class ChunkSerialRange:
@@ -730,18 +733,15 @@ def build_time_clip_plan(
     if start_rt is None:
         return None
 
-    fps = float(video.frame_rate or 0.0)
+    fps = TRIGGER_FPS
     if fps <= 0:
-        raise ValueError(f"Video {video.path} missing frame rate for rough sync")
+        raise ValueError("Configured trigger FPS must be positive for rough sync")
 
     total_frames = min(len(serials_full), len(frames_full))
     if total_frames == 0:
         return None
 
-    if video.duration and video.duration > 0:
-        duration_seconds = float(video.duration)
-    else:
-        duration_seconds = total_frames / fps
+    duration_seconds = total_frames / fps
 
     video_end_time = start_rt + timedelta(seconds=duration_seconds)
     if audio_end <= start_rt or audio_start >= video_end_time:
