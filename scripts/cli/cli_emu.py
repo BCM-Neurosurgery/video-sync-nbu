@@ -1426,6 +1426,7 @@ def extract_full_ns5_audio(
         "original_start_time_utc": start_dt.isoformat(),
         "original_end_time_utc": end_dt.isoformat(),
         "offset_applied_ms": 0,
+        "duration_seconds": duration_seconds,
         "audio_path": str(out_path),
         "ns5_path": str(task.stitched.nsp1_ns5.path),
     }
