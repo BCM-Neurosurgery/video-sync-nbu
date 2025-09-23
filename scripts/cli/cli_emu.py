@@ -58,6 +58,7 @@ from collections import defaultdict
 import json
 import logging
 import math
+import statistics
 import re
 import shutil
 import subprocess
@@ -65,7 +66,7 @@ import wave
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple, cast
 
 import numpy as np
 from scipy.io.wavfile import write as wav_write
@@ -84,6 +85,47 @@ LOGGER = logging.getLogger("cli_emu")
 
 # Empirical camera trigger rate used when mapping realtime windows to frames.
 TRIGGER_FPS = 29.97
+
+_REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+
+def _parse_realtime_string(value: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(value, _REALTIME_STRICT_FORMAT)
+    except Exception:
+        try:
+            return datetime.fromisoformat(value)
+        except Exception:
+            LOGGER.debug("Unable to parse realtime value '%s'", value)
+            return None
+
+
+def _coerce_real_times(values: Optional[Sequence[object]]) -> Optional[List[datetime]]:
+    if not values:
+        return None
+    parsed: List[datetime] = []
+    for item in values:
+        if isinstance(item, datetime):
+            parsed.append(item)
+        elif isinstance(item, str):
+            parsed_dt = _parse_realtime_string(item)
+            if parsed_dt is None:
+                return None
+            parsed.append(parsed_dt)
+        else:
+            LOGGER.debug("Unexpected realtime value type: %s", type(item).__name__)
+            return None
+    return parsed
+
+
+def _estimate_frame_interval(real_times: Sequence[datetime]) -> float:
+    deltas = [
+        (curr - prev).total_seconds() for prev, curr in zip(real_times, real_times[1:])
+    ]
+    positives = [delta for delta in deltas if delta > 0]
+    if not positives:
+        return 1.0 / TRIGGER_FPS
+    return statistics.median(positives)
 
 
 @dataclass(frozen=True)
@@ -396,6 +438,8 @@ def _build_cam_json_from_parser(
     ts: Optional[datetime],
     cam_value,
     cam_serial_str: str,
+    *,
+    real_times: Optional[List[datetime]] = None,
 ) -> CamJson:
     start_real = None
     try:
@@ -417,6 +461,7 @@ def _build_cam_json_from_parser(
         timestamp=ts,
         path=json_path,
         start_realtime=start_real,
+        real_times=list(real_times) if real_times else None,
         raw_serials=raw_serials,
         raw_frame_ids=raw_frame_ids,
         fixed_serials=fixed_serials,
@@ -434,7 +479,19 @@ def _build_video_from_json(
     ts: Optional[datetime],
     mp4_path: Path,
 ) -> Video:
-    cam_json = _build_cam_json_from_parser(jp, json_path, ts, cam_value, cam_serial_str)
+    parsed_real_times = getattr(jp, "_parsed_real_times", None)
+    if parsed_real_times is None:
+        parsed_real_times = _coerce_real_times(jp.dic.get("real_times"))
+        setattr(jp, "_parsed_real_times", parsed_real_times)
+
+    cam_json = _build_cam_json_from_parser(
+        jp,
+        json_path,
+        ts,
+        cam_value,
+        cam_serial_str,
+        real_times=parsed_real_times,
+    )
     try:
         probe = VideoFileParser(str(mp4_path))
         duration = probe.duration
@@ -727,39 +784,56 @@ def build_time_clip_plan(
     if not serials_full or not frames_full or len(serials_full) != len(frames_full):
         return None
 
-    if video.start_realtime is None:
-        start_rt = cam_json.start_realtime
-    else:
-        start_rt = video.start_realtime
+    real_times_seq = _coerce_real_times(getattr(cam_json, "real_times", None))
+    if not real_times_seq:
+        raise ValueError(
+            f"Video {video.path} missing realtime data required for rough sync"
+        )
+
+    if len(serials_full) != len(real_times_seq) or len(frames_full) != len(
+        real_times_seq
+    ):
+        raise ValueError(
+            (
+                "Rough sync expects matching lengths for serials, frame IDs, and realtime "
+                "stamps (serials=%d, frames=%d, realtime=%d)"
+            )
+            % (len(serials_full), len(frames_full), len(real_times_seq))
+        )
+
+    start_rt = video.start_realtime or cam_json.start_realtime
+    if start_rt is None and real_times_seq:
+        start_rt = real_times_seq[0]
     if start_rt is None:
-        return None
+        raise ValueError(f"Video {video.path} missing start realtime for rough sync")
 
-    fps = TRIGGER_FPS
-    if fps <= 0:
-        raise ValueError("Configured trigger FPS must be positive for rough sync")
-
-    total_frames = min(len(serials_full), len(frames_full))
+    total_frames = len(real_times_seq)
     if total_frames == 0:
         return None
 
-    duration_seconds = total_frames / fps
+    serials_full = [int(serials_full[i]) for i in range(total_frames)]
+    frames_full = [int(frames_full[i]) for i in range(total_frames)]
+    real_times_seq = list(real_times_seq[:total_frames])
 
-    video_end_time = start_rt + timedelta(seconds=duration_seconds)
-    if audio_end <= start_rt or audio_start >= video_end_time:
+    frame_interval = max(1e-6, _estimate_frame_interval(real_times_seq))
+    video_start_time = real_times_seq[0]
+    video_end_time = real_times_seq[-1] + timedelta(seconds=frame_interval)
+    if audio_end <= video_start_time or audio_start >= video_end_time:
         return None
 
-    start_sec = max(0.0, (audio_start - start_rt).total_seconds())
-    end_sec = min(duration_seconds, max(0.0, (audio_end - start_rt).total_seconds()))
-    if end_sec <= 0:
-        return None
-
-    start_idx = max(0, min(total_frames - 1, int(math.floor(start_sec * fps))))
-    end_idx = max(0, min(total_frames - 1, int(math.floor(end_sec * fps))))
+    start_idx = next(
+        (i for i, ts in enumerate(real_times_seq) if ts >= audio_start),
+        0,
+    )
+    end_idx = next(
+        (i for i in range(total_frames - 1, -1, -1) if real_times_seq[i] <= audio_end),
+        total_frames - 1,
+    )
     if end_idx < start_idx:
         end_idx = start_idx
 
-    serial_slice = [int(serials_full[i]) for i in range(start_idx, end_idx + 1)]
-    frame_slice = [int(frames_full[i]) for i in range(start_idx, end_idx + 1)]
+    serial_slice = serials_full[start_idx : end_idx + 1]
+    frame_slice = frames_full[start_idx : end_idx + 1]
     if not serial_slice or not frame_slice:
         return None
 
@@ -1080,16 +1154,35 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
     _ensure_tool("ffmpeg")
     out_dir.mkdir(parents=True, exist_ok=True)
     video = plan.video
-    if video.frame_rate is None or float(video.frame_rate) <= 0:
+    real_times: Optional[Sequence[datetime]] = None
+    if video.companion_json and getattr(video.companion_json, "real_times", None):
+        existing = video.companion_json.real_times
+        if existing and isinstance(existing[0], datetime):
+            real_times = cast(Sequence[datetime], existing)
+        else:
+            real_times = _coerce_real_times(existing)
+
+    fps = float(video.frame_rate or 0.0)
+    if fps <= 0:
+        if real_times:
+            fps = 1.0 / max(1e-6, _estimate_frame_interval(real_times))
+        else:
+            raise ValueError(
+                f"Video {video.path} missing frame rate and realtime metadata for clipping"
+            )
+
+    start_frame = int(plan.frame_ids[0])
+    end_frame = int(plan.frame_ids[-1])
+    if end_frame < start_frame:
         raise ValueError(
-            f"Video {video.path} is missing a valid frame rate for clipping"
+            f"Invalid clip frame window for {video.path.name}: {start_frame}>{end_frame}"
         )
-    fps = float(video.frame_rate)
-    start_frame = plan.frame_ids[0]
-    end_frame = plan.frame_ids[-1]
-    start_sec = start_frame / fps
-    end_sec = (end_frame + 1) / fps
-    duration = max(0.0, end_sec - start_sec)
+
+    end_frame_exclusive = end_frame + 1
+    vf_filter = (
+        f"trim=start_frame={start_frame}:end_frame={end_frame_exclusive},"
+        f"setpts=(N/{fps:.9f})/TB"
+    )
 
     out_path = out_dir / f"{video.segment_id}.{video.cam_serial}.clip.mp4"
     ff_cmd = [
@@ -1100,14 +1193,22 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
         "-y" if overwrite else "-n",
         "-i",
         str(video.path),
-        "-ss",
-        f"{start_sec:.6f}",
-        "-t",
-        f"{duration:.6f}",
-        "-c",
-        "copy",
+        "-vf",
+        vf_filter,
+        "-vsync",
+        "vfr",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
         str(out_path),
     ]
+
     result = subprocess.run(
         ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
@@ -1625,9 +1726,7 @@ def concat_videos(
                 "-crf",
                 "18",
                 "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
+                "copy",
             ]
         )
     else:
@@ -1663,17 +1762,25 @@ def mux_audio(
     if frame_count <= 0 or video_duration <= 0:
         raise RuntimeError("Invalid video probe data when muxing")
 
+    original_fps = float(video_probe.fps)
     target_fps = frame_count / audio_duration
     if not math.isfinite(target_fps) or target_fps <= 0:
-        target_fps = float(video_probe.fps)
-    target_fps = max(target_fps, 1.0)
+        target_fps = max(original_fps, 1.0)
+
+    speed_scale = audio_duration / video_duration
+    if not math.isfinite(speed_scale) or speed_scale <= 0:
+        speed_scale = 1.0
 
     LOGGER.debug(
-        "Muxing %s with audio %s (target_fps=%.6f, orig_fps=%.6f)",
+        "Muxing %s with audio %s (frame_count=%d, video_dur=%.6fs, audio_dur=%.6fs, target_fps=%.6f, orig_fps=%.6f, speed_scale=%.6f)",
         video_path.name,
         audio_path.name,
+        frame_count,
+        video_duration,
+        audio_duration,
         target_fps,
-        float(video_probe.fps),
+        original_fps,
+        speed_scale,
     )
 
     cmd = [
@@ -1693,27 +1800,38 @@ def mux_audio(
         "0:v:0",
         "-map",
         "1:a:0",
-        "-r",
-        f"{target_fps:.6f}",
-        "-vsync",
-        "cfr",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "20",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-shortest",
-        "-movflags",
-        "+faststart",
-        str(out_path),
     ]
+
+    if not math.isclose(speed_scale, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+        cmd.extend(
+            [
+                "-filter:v",
+                f"setpts={speed_scale:.12f}*PTS",
+            ]
+        )
+
+    cmd.extend(
+        [
+            "-vsync",
+            "passthrough",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(out_path),
+        ]
+    )
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
