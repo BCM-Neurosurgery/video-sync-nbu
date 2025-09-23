@@ -1190,6 +1190,9 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
         "-hide_banner",
         "-loglevel",
         "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         "-y" if overwrite else "-n",
         "-i",
         str(video.path),
@@ -1209,12 +1212,58 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
         str(out_path),
     ]
 
-    result = subprocess.run(
-        ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    LOGGER.info(
+        "Clipping %s [%d..%d] → %s",
+        video.path.name,
+        start_frame,
+        end_frame,
+        out_path.name,
     )
-    if result.returncode != 0:
+
+    proc = subprocess.Popen(
+        ff_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+
+    total_frames = max(1, end_frame - start_frame + 1)
+    progress_step = 0
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                break
+            continue
+        line = line.strip()
+        if line.startswith("frame="):
+            try:
+                current_frame = int(line.split("=", 1)[1])
+            except ValueError:
+                continue
+            percent = int(min(100, (current_frame * 100) // total_frames))
+            if percent >= progress_step:
+                LOGGER.info(
+                    "Clipping %s: %d%% (%d/%d frames)",
+                    video.path.name,
+                    percent,
+                    current_frame,
+                    total_frames,
+                )
+                progress_step = percent + 10
+        elif line == "progress=end":
+            LOGGER.info(
+                "Clipping %s: 100%% (%d frames)",
+                video.path.name,
+                total_frames,
+            )
+            break
+
+    _, stderr_output = proc.communicate()
+    if proc.returncode != 0:
         raise RuntimeError(
-            f"ffmpeg clip failed for {video.path.name}: {result.stderr.strip()}"
+            f"ffmpeg clip failed for {video.path.name}: {stderr_output.strip()}"
         )
     return out_path
 
