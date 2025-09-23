@@ -70,6 +70,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 from scipy.io.wavfile import write as wav_write
 
+from scripts.analysis.video_analysis import FrameIDAnalysisResult, analyze_video
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, DIGIEVTS, NEV, NS5, RoomAudio, StitchedTask, Video
 from scripts.pad.videoplanapplier import apply_video_padding_plan
@@ -1354,9 +1355,29 @@ def _execute_sync_plan(
         clips_dir = work_dir / "clips"
         clip_paths: List[Path] = []
         clip_metadata_entries: List[dict] = []
+        analysis_dir = work_dir / "analysis"
+        video_analysis_cache: Dict[Path, FrameIDAnalysisResult] = {}
 
         for clip_plan in cam_plans:
             try:
+                video_path = Path(clip_plan.video.path).resolve()
+                analysis_result = video_analysis_cache.get(video_path)
+                if analysis_result is None:
+                    try:
+                        analysis_result = analyze_video(
+                            clip_plan.video,
+                            outdir=analysis_dir,
+                        )
+                        video_analysis_cache[video_path] = analysis_result
+                    except Exception as analysis_exc:
+                        LOGGER.error(
+                            "Video analysis failed for %s cam %s: %s",
+                            clip_plan.video.segment_id,
+                            cam_serial,
+                            analysis_exc,
+                        )
+                        analysis_result = None
+
                 clip_path = clip_video(clip_plan, clips_dir, overwrite)
                 padded_path = pad_video_if_needed(clip_plan, clip_path, clips_dir)
                 clip_paths.append(padded_path)
@@ -1376,6 +1397,15 @@ def _execute_sync_plan(
                     "serial_end": int(clip_plan.serials[-1]),
                     "frame_rate": float(clip_plan.video.frame_rate or 0.0),
                 }
+                if analysis_result is not None:
+                    clip_entry["analysis_path"] = str(analysis_result.out_json_path)
+                    clip_entry["analysis_missing_frames"] = int(
+                        analysis_result.missing_frames
+                    )
+                    clip_entry["analysis_counts"] = analysis_result.counts
+                    clip_entry["analysis_strictly_monotonic"] = bool(
+                        analysis_result.strictly_monotonic
+                    )
                 if clip_plan.video.start_realtime:
                     clip_entry["segment_start_realtime"] = (
                         clip_plan.video.start_realtime.isoformat()

@@ -93,6 +93,18 @@ class JsonParser:
         fixed = fixer.fix(frameids)
         return fixed
 
+    def get_fixed_reindexed_frame_ids_list(self, cam_serial):
+        """Return fixed frame_ids reindexed to start at 0 (contiguous).
+
+        Reindex rule: subtract the first fixed frame id from each element.
+        If the list is empty, return an empty list.
+        """
+        fixed = self.get_fixed_frame_ids_list(cam_serial)
+        if not fixed:
+            return []
+        base = int(fixed[0])
+        return [int(fid) - base for fid in fixed]
+
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -134,6 +146,7 @@ def _main(argv=None) -> int:
         chunk_serials = jp.get_chunk_serial_list(cam_serial)
         fixed_frame_ids = jp.get_fixed_frame_ids_list(cam_serial)
         fixed_chunk_serials = jp.get_fixed_chunk_serial_list(cam_serial)
+        fixed_frameids_reindexed = jp.get_fixed_reindexed_frame_ids_list(cam_serial)
     except AssertionError as e:
         print(f"[ERROR] {e}")
         return 2
@@ -148,6 +161,7 @@ def _main(argv=None) -> int:
         "fixed_frame_ids": fixed_frame_ids,
         "fixed_chunk_serials": fixed_chunk_serials,
         "real_times": jp.dic.get("real_times", []),
+        "fixed_frameids_reindexed": fixed_frameids_reindexed,
     }
 
     try:
