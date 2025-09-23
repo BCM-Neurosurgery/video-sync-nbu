@@ -1804,20 +1804,47 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def configure_logging(level: str) -> None:
+def configure_logging(level: str, log_path: Optional[Path] = None) -> bool:
+    """Configure stream logging and optionally mirror output to a file."""
+
+    handlers: List[logging.Handler] = [logging.StreamHandler()]
+    file_handler_error: Optional[str] = None
+    file_handler_added = False
+    if log_path:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+            file_handler_added = True
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            file_handler_error = str(exc)
+
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format="[%(levelname)s] %(message)s",
+        handlers=handlers,
+        force=True,
     )
+
+    if log_path and not file_handler_added:
+        LOGGER.warning(
+            "Unable to create log file %s (%s); continuing with console logging only",
+            log_path,
+            file_handler_error or "unknown error",
+        )
+    return file_handler_added
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    configure_logging(args.log_level)
 
     patient_dir = args.patient_dir.resolve()
     video_dir = args.video_dir.resolve()
     out_dir = args.out_dir.resolve()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = out_dir / "logs" / f"cli_emu_{timestamp}.log"
+    if configure_logging(args.log_level, log_path):
+        LOGGER.info("Log file: %s", log_path)
 
     rough_sync_offset: Optional[timedelta] = None
     if args.rough_sync_offset_ms:
