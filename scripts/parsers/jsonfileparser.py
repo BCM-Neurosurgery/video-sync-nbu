@@ -147,6 +147,7 @@ def _main(argv=None) -> int:
         "chunk_serials": chunk_serials,
         "fixed_frame_ids": fixed_frame_ids,
         "fixed_chunk_serials": fixed_chunk_serials,
+        "real_times": jp.dic.get("real_times", []),
     }
 
     try:
