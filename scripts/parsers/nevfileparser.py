@@ -79,6 +79,18 @@ class Nev:
         """
         return self.timeOrigin
 
+    def get_recording_start_ts(self) -> int | None:
+        """
+        Return the first (earliest) RecordingEvent timestamp in ticks, or None if missing.
+
+        Assumes self.get_data()["recording_events"] is a NumPy structured array
+        with fields: ('TimeStamp','<u4|<u8'), ('Reason','<u2').
+        """
+        rec = self.get_data().get("recording_events", None)
+        if rec is None or len(rec) == 0:
+            return None
+        return int(rec["TimeStamp"].min())
+
     def get_data(self):
         return self.nevData
 
