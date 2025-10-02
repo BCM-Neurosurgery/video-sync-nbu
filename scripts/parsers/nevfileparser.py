@@ -1,6 +1,7 @@
 from brpylib import NevFile
 import pandas as pd
 import matplotlib.pyplot as plt
+from datetime import datetime
 from scripts.utility.utils import (
     ts2min,
     ts2unix,
@@ -91,6 +92,47 @@ class Nev:
             return None
         return int(rec["TimeStamp"].min())
 
+    def ticks_to_utc_from_anchor(self, ts: int) -> datetime:
+        """
+        Convert a packet timestamp (ticks) to absolute UTC using the file's
+        recording-start anchor (first 0xFFF9). If the anchor doesn't exist,
+        raise an error rather than silently falling back.
+
+        UTC = TimeOrigin + (ts - start_ts) / TimeStampResolution
+
+        Parameters
+        ----------
+        ts : int
+            Event timestamp in ticks.
+
+        Returns
+        -------
+        datetime
+            Absolute UTC timestamp for this event.
+
+        Raises
+        ------
+        RuntimeError
+            If no RecordingEvent (0xFFF9) is present in the file.
+        ValueError
+            If the event occurs before the recording-start anchor.
+        """
+        start_rec_ts = self.get_recording_start_ts()
+        if start_rec_ts is None:
+            raise RuntimeError(
+                "Recording start anchor (0xFFF9) not found in NEV: "
+                "cannot compute UTC without a valid recording start."
+            )
+
+        delta_ticks = int(ts) - int(start_rec_ts)
+        if delta_ticks < 0:
+            raise ValueError(
+                f"Event timestamp ({ts}) precedes recording start ({start_rec_ts}). "
+                "Check your file or event selection."
+            )
+
+        return ts2unix(self.timeOrigin, self.timestampResolution, delta_ticks)
+
     def get_data(self):
         return self.nevData
 
@@ -161,7 +203,7 @@ class Nev:
                 nums = [x for x in group["UnparsedData"]]
                 decimal_number = self.bits_to_decimal(nums)
                 timestamp = group["TimeStamps"].iloc[0]
-                unixTime = ts2unix(self.timeOrigin, self.timestampResolution, timestamp)
+                unixTime = self.ticks_to_utc_from_anchor(timestamp)
                 results.append((timestamp, decimal_number, unixTime))
         return pd.DataFrame.from_records(
             results, columns=["TimeStamps", "chunk_serial", "UTCTimeStamp"]
@@ -186,7 +228,7 @@ class Nev:
                 nums = [x for x in group["UnparsedData"]]
                 decimal_number = self.bits_to_decimal(nums)
                 timestamp = group["TimeStamps"].iloc[0]
-                unixTime = ts2unix(self.timeOrigin, self.timestampResolution, timestamp)
+                unixTime = self.ticks_to_utc_from_anchor(timestamp)
                 results.append((timestamp, decimal_number, unixTime))
         results = fill_missing_serials_with_gap(results)
         return pd.DataFrame.from_records(
