@@ -2,6 +2,7 @@ from brpylib import NevFile
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
+import warnings
 from scripts.utility.utils import (
     ts2min,
     ts2unix,
@@ -95,8 +96,8 @@ class Nev:
     def ticks_to_utc_from_anchor(self, ts: int) -> datetime:
         """
         Convert a packet timestamp (ticks) to absolute UTC using the file's
-        recording-start anchor (first 0xFFF9). If the anchor doesn't exist,
-        raise an error rather than silently falling back.
+        recording-start anchor (first 0xFFF9). If the anchor is missing, the
+        recording start is assumed to occur at tick 0.
 
         UTC = TimeOrigin + (ts - start_ts) / TimeStampResolution
 
@@ -112,17 +113,17 @@ class Nev:
 
         Raises
         ------
-        RuntimeError
-            If no RecordingEvent (0xFFF9) is present in the file.
         ValueError
             If the event occurs before the recording-start anchor.
         """
         start_rec_ts = self.get_recording_start_ts()
         if start_rec_ts is None:
-            raise RuntimeError(
-                "Recording start anchor (0xFFF9) not found in NEV: "
-                "cannot compute UTC without a valid recording start."
+            warnings.warn(
+                "Recording start anchor (0xFFF9) not found; assuming start tick 0.",
+                RuntimeWarning,
+                stacklevel=2,
             )
+            start_rec_ts = 0
 
         delta_ticks = int(ts) - int(start_rec_ts)
         if delta_ticks < 0:
