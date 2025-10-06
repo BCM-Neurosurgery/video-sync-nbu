@@ -1,0 +1,28 @@
+{
+  "root": "/mnt/datalake/data/TRBD-53761",
+  "out_dir": "/mnt/labworlds/Provenza/auto/NBU_sleep_audio_loss",
+  "fs_hz": 44100,
+  "prefilter": true,
+  "max_fwd_delta": 200,
+  "local_window": 3,
+  "top": 12,
+  "decoder_site": "nbu_sleep",
+  "room": "sleep",
+  "threshold": 0.5,
+  "split_chunk_seconds": 3600,
+  "split_overwrite": true,
+  "split_clean": true,
+  "patients": [
+    "TRBD001",
+    "TRBD002"
+  ],
+  "discovered": 13,
+  "analyzed": 13,
+  "skipped": 0,
+  "totals": {
+    "n_audios": 13,
+    "sum_analyzed_seconds": 792739.185,
+    "sum_missing_seconds": 12842.508,
+    "weighted_loss_pct": 1.62
+  }
+}

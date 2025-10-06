@@ -1,6 +1,6 @@
-# Quantifying Data Loss
+# Quantifying NBU Lounge Data Loss
 
-So how much data loss exactly do we have? This note summarizes how much serial‑aligned audio timing is effectively "missing" across analyzed NBU lounge recordings. The helper script `scripts.doc_helper.quantify_audio_loss` batch‑processes each serial audio file found through `/mnt/datalake/data/TRBD-53761` and emits JSON + CSV summaries.
+So how much data loss exactly do we have in the lounge? This note summarizes how much serial‑aligned audio timing is effectively "missing" across analyzed **NBU lounge** recordings. The helper script `scripts.doc_helper.quantify_audio_loss` batch‑processes each serial audio file found through `/mnt/datalake/data/TRBD-53761` and emits JSON + CSV summaries.
 
 ## 1. Executive snapshot
 
