@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-batch_audio_loss_report.py — Lounge-only pipeline:
+batch_audio_loss_report.py — NBU lounge/sleep pipeline:
 discover → split/decode/merge → GAPFILL → analyze → per-audio + global reports.
 
-What’s new
+What's new
 ----------
 • After merging the per-chunk CSVs, we call:
       gapfilled_csv = gapfill_csv_file(input_csv=merged_csv)
@@ -11,7 +11,8 @@ What’s new
 
 Scans ONLY:
 <root>/
-  TRBD001|TRBD002/NBU/<YYYY-MM-DD>/audio/lounge/...*03.(mp3|wav)
+  TRBD001|TRBD002/NBU/<YYYY-MM-DD>/audio/<room>/...*03.(mp3|wav)
+    where <room> is "lounge" (nbu_lounge) or "sleep" (nbu_sleep).
 
 Artifacts
 ---------
@@ -64,9 +65,13 @@ from scripts.fix.audiogapfiller import gapfill_csv_file  # type: ignore
 LOG = logging.getLogger("batch-audio-loss")
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$", re.ASCII)
-ROOM = "lounge"
 SERIAL_AUDIO_RE = re.compile(r".*03\.(mp3|wav)$", re.IGNORECASE)
-DECODER_SITE = "nbu_lounge"  # fixed for lounge
+SITE_TO_ROOM = {
+    "nbu_lounge": "lounge",
+    "nbu_sleep": "sleep",
+}
+DEFAULT_SITE = "nbu_lounge"
+SITE_CHOICES = tuple(sorted(SITE_TO_ROOM))
 
 
 # --------------------------------------------------------------------------------------
@@ -85,9 +90,11 @@ class AudioItem:
 
 
 # --------------------------------------------------------------------------------------
-# Discovery (lounge only)
+# Discovery (NBU sites)
 # --------------------------------------------------------------------------------------
-def find_serial_audios(root: Path, patients: Sequence[str]) -> List[AudioItem]:
+def find_serial_audios(
+    root: Path, patients: Sequence[str], room: str
+) -> List[AudioItem]:
     items: List[AudioItem] = []
     for patient in patients:
         base = root / patient / "NBU"
@@ -96,12 +103,12 @@ def find_serial_audios(root: Path, patients: Sequence[str]) -> List[AudioItem]:
         for date_dir in sorted(p for p in base.iterdir() if p.is_dir()):
             if not DATE_RE.match(date_dir.name):
                 continue
-            room_dir = date_dir / "audio" / ROOM
+            room_dir = date_dir / "audio" / room
             if not room_dir.exists():
                 continue
             for f in sorted(room_dir.iterdir()):
                 if f.is_file() and SERIAL_AUDIO_RE.match(f.name):
-                    items.append(AudioItem(patient, date_dir.name, ROOM, f))
+                    items.append(AudioItem(patient, date_dir.name, room, f))
     items.sort(key=lambda x: (x.patient, x.date, x.room, x.path.name))
     return items
 
@@ -114,6 +121,7 @@ def ensure_gapfilled_csv_for_audio(
     *,
     out_dir: Path,
     threshold: float,
+    decoder_site: str,
     split_chunk_seconds: int,
     split_overwrite: bool,
     split_clean: bool,
@@ -181,11 +189,11 @@ def ensure_gapfilled_csv_for_audio(
 
         # Decode per-chunk WAVs → per-chunk CSVs
         try:
-            LOG.info("Decoding chunks → CSVs: %s (site=%s)", chunks_dir, DECODER_SITE)
+            LOG.info("Decoding chunks → CSVs: %s (site=%s)", chunks_dir, decoder_site)
             decode_split_dir_to_csvs(
                 split_dir=chunks_dir,
                 outdir=split_csv_dir,
-                site=DECODER_SITE,
+                site=decoder_site,
                 threshold=float(threshold),
                 pattern=chunk_glob,
                 manifest=manifest_path,
@@ -238,6 +246,7 @@ def analyze_one_audio(
     local_window: int,
     top: int,
     threshold: float,
+    decoder_site: str,
     split_chunk_seconds: int,
     split_overwrite: bool,
     split_clean: bool,
@@ -251,6 +260,7 @@ def analyze_one_audio(
         audio,
         out_dir=out_dir,
         threshold=threshold,
+        decoder_site=decoder_site,
         split_chunk_seconds=split_chunk_seconds,
         split_overwrite=split_overwrite,
         split_clean=split_clean,
@@ -316,7 +326,8 @@ def analyze_one_audio(
     row = {
         "patient": audio.patient,
         "date": audio.date,
-        "room": audio.room,  # 'lounge'
+        "room": audio.room,
+        "decoder_site": decoder_site,
         "audio_file": audio.path.name,
         "raw_csv": str(merged_csv),
         "gapfilled_csv": str(gapfilled_csv),
@@ -367,6 +378,7 @@ def run_batch(
     *,
     root: Path,
     out_dir: Path,
+    site: str,
     fs: int,
     prefilter: bool,
     max_fwd_delta: Optional[int],
@@ -378,8 +390,14 @@ def run_batch(
     split_clean: bool,
     patients: Sequence[str],
 ) -> Tuple[pd.DataFrame, Dict]:
-    audios = find_serial_audios(root, patients)
-    LOG.info("Found %d lounge serial audio files.", len(audios))
+    try:
+        room = SITE_TO_ROOM[site]
+    except KeyError as exc:
+        valid = ", ".join(sorted(SITE_TO_ROOM))
+        raise ValueError(f"Unsupported site {site!r}; expected one of {valid}") from exc
+
+    audios = find_serial_audios(root, patients, room)
+    LOG.info("Found %d serial audio files (site=%s, room=%s).", len(audios), site, room)
 
     rows: List[Dict] = []
     skipped = 0
@@ -395,6 +413,7 @@ def run_batch(
             local_window=local_window,
             top=top,
             threshold=threshold,
+            decoder_site=site,
             split_chunk_seconds=split_chunk_seconds,
             split_overwrite=split_overwrite,
             split_clean=split_clean,
@@ -426,7 +445,8 @@ def run_batch(
                 "max_fwd_delta": max_fwd_delta,
                 "local_window": local_window,
                 "top": top,
-                "decoder_site": DECODER_SITE,  # fixed: nbu_lounge
+                "decoder_site": site,
+                "room": room,
                 "threshold": threshold,
                 "split_chunk_seconds": split_chunk_seconds,
                 "split_overwrite": split_overwrite,
@@ -451,7 +471,7 @@ def run_batch(
 # --------------------------------------------------------------------------------------
 def _build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Batch audio-loss report (LOUNGE only; split/decode/merge → GAPFILL → analyze)."
+        description="Batch audio-loss report (NBU lounge/sleep; split/decode/merge → GAPFILL → analyze)."
     )
     p.add_argument(
         "--root",
@@ -464,6 +484,12 @@ def _build_cli() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Output dir for work/, raw/, reports/, summary/",
+    )
+    p.add_argument(
+        "--site",
+        choices=SITE_CHOICES,
+        default=DEFAULT_SITE,
+        help="Site preset (nbu_lounge or nbu_sleep)",
     )
     p.add_argument(
         "--patients",
@@ -494,12 +520,12 @@ def _build_cli() -> argparse.ArgumentParser:
     p.add_argument(
         "--top", type=int, default=12, help="Top gaps to duplicate into per-audio JSON"
     )
-    # Split/Decode params (site fixed internally to 'nbu_lounge')
+    # Split/Decode params
     p.add_argument(
         "--threshold",
         type=float,
         default=0.5,
-        help="Decoder threshold (site fixed to 'nbu_lounge')",
+        help="Decoder threshold (tuned per site preset)",
     )
     p.add_argument(
         "--split-chunk-seconds",
@@ -539,6 +565,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_batch(
             root=args.root,
             out_dir=args.out_dir,
+            site=args.site,
             fs=int(args.fs),
             prefilter=bool(args.prefilter),
             max_fwd_delta=max_delta,
