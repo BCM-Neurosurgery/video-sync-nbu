@@ -29,6 +29,7 @@ from scripts.doc_helper.make_serial_plots import (
     maybe_flip,
     read_wav_mono_float32,
     savefig,
+    normalize01,
 )
 
 
@@ -75,6 +76,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Horizontal threshold line for the window plot (default: 0.5).",
+    )
+    parser.add_argument(
+        "--plot-normalized",
+        action="store_true",
+        help="Normalize audio to [0,1] before plotting.",
     )
     return parser.parse_args(argv)
 
@@ -142,6 +148,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     offs7: List[int] = cfg["offs7"]
     threshold = float(args.threshold)
 
+    if args.plot_normalized:
+        audio01 = normalize01(audio)
+        if audio01 is not None:
+            audio = audio01
     raw_scan = maybe_flip(audio, flip_signal)
     scan_start, scan_end = window_indices_for_scan(
         start, end, total_samples, flip_signal
