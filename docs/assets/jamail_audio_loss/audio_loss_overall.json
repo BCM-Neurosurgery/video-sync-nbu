@@ -1,0 +1,28 @@
+{
+  "root": "/mnt/datalake/data/TRBD-53761",
+  "out_dir": "/mnt/labworlds/Provenza/auto/jamail_audio_loss",
+  "fs_hz": 44100,
+  "prefilter": true,
+  "max_fwd_delta": 200,
+  "local_window": 3,
+  "top": 12,
+  "decoder_site": "jamail",
+  "room": "clinic",
+  "threshold": 0.5,
+  "split_chunk_seconds": 3600,
+  "split_overwrite": true,
+  "split_clean": true,
+  "patients": [
+    "TRBD001",
+    "TRBD002"
+  ],
+  "discovered": 7,
+  "analyzed": 7,
+  "skipped": 0,
+  "totals": {
+    "n_audios": 7,
+    "sum_analyzed_seconds": 40691.198,
+    "sum_missing_seconds": 2.246,
+    "weighted_loss_pct": 0.006
+  }
+}
