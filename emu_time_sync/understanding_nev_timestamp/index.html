@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../serial_quality/">
+        <link rel="prev" href="../how_much_data_without_serial/">
       
       
-        <link rel="next" href="../data_loss/">
+        <link rel="next" href="../nev_vs_camera_clock/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -20,7 +20,7 @@
     
     
       
-        <title>First Fix - Gap Filling - Video Sync Docs</title>
+        <title>Understanding NEV timestamp - Video Sync Docs</title>
       
     
     
@@ -62,7 +62,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#first-fix-gap-filling" class="md-skip">
+        <a href="#motivation" class="md-skip">
           Skip to content
         </a>
       
@@ -98,7 +98,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              First Fix - Gap Filling
+              Understanding NEV timestamp
             
           </span>
         </div>
@@ -213,8 +213,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -225,11 +227,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -245,7 +247,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             EMU Time Sync
@@ -259,7 +261,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../emu_time_sync/how_much_data_without_serial/" class="md-nav__link">
+      <a href="../how_much_data_without_serial/" class="md-nav__link">
         
   
   
@@ -279,10 +281,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../emu_time_sync/understanding_nev_timestamp/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Understanding NEV timestamp
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -293,6 +315,69 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#time-origin" class="md-nav__link">
+    <span class="md-ellipsis">
+      Time Origin
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#starting-time-in-serialdigitalio" class="md-nav__link">
+    <span class="md-ellipsis">
+      Starting Time in SerialDigitalIO
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#starting-time-of-recording" class="md-nav__link">
+    <span class="md-ellipsis">
+      Starting Time of Recording
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#utc-time-of-digital-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      UTC Time of Digital Events
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -305,7 +390,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../emu_time_sync/nev_vs_camera_clock/" class="md-nav__link">
+      <a href="../nev_vs_camera_clock/" class="md-nav__link">
         
   
   
@@ -332,8 +417,6 @@
       
   
   
-    
-  
   
   
     
@@ -346,11 +429,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -366,7 +449,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Understanding Audio
@@ -380,7 +463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../decoding_serial/" class="md-nav__link">
+      <a href="../../understanding_audio/decoding_serial/" class="md-nav__link">
         
   
   
@@ -403,7 +486,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../serial_quality/" class="md-nav__link">
+      <a href="../../understanding_audio/serial_quality/" class="md-nav__link">
         
   
   
@@ -423,32 +506,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    First Fix - Gap Filling
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/fill_gaps/" class="md-nav__link">
         
   
   
@@ -459,89 +520,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#files-in-this-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      Files in this page
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#motivation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Motivation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#intuition-midpoint-passes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Intuition: midpoint passes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
-    <span class="md-ellipsis">
-      High‑level algorithm (pseudocode)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#results" class="md-nav__link">
-    <span class="md-ellipsis">
-      Results
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#limitations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Limitations
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Notes
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -554,7 +532,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../data_loss/" class="md-nav__link">
+      <a href="../../understanding_audio/data_loss/" class="md-nav__link">
         
   
   
@@ -577,7 +555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../nbu_lounge_audio_loss/" class="md-nav__link">
+      <a href="../../understanding_audio/nbu_lounge_audio_loss/" class="md-nav__link">
         
   
   
@@ -600,7 +578,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../nbu_sleep_audio_loss/" class="md-nav__link">
+      <a href="../../understanding_audio/nbu_sleep_audio_loss/" class="md-nav__link">
         
   
   
@@ -623,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jamail_audio_loss/" class="md-nav__link">
+      <a href="../../understanding_audio/jamail_audio_loss/" class="md-nav__link">
         
   
   
@@ -663,23 +641,12 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#files-in-this-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      Files in this page
-    </span>
-  </a>
-  
-</li>
       
         <li class="md-nav__item">
   <a href="#motivation" class="md-nav__link">
@@ -691,45 +658,36 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#intuition-midpoint-passes" class="md-nav__link">
+  <a href="#time-origin" class="md-nav__link">
     <span class="md-ellipsis">
-      Intuition: midpoint passes
+      Time Origin
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
+  <a href="#starting-time-in-serialdigitalio" class="md-nav__link">
     <span class="md-ellipsis">
-      High‑level algorithm (pseudocode)
+      Starting Time in SerialDigitalIO
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#results" class="md-nav__link">
+  <a href="#starting-time-of-recording" class="md-nav__link">
     <span class="md-ellipsis">
-      Results
+      Starting Time of Recording
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#limitations" class="md-nav__link">
+  <a href="#utc-time-of-digital-events" class="md-nav__link">
     <span class="md-ellipsis">
-      Limitations
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Notes
+      UTC Time of Digital Events
     </span>
   </a>
   
@@ -751,131 +709,50 @@
 
 
 
-<h1 id="first-fix-gap-filling">First Fix — Gap Filling</h1>
-<p>From the <a href="../serial_quality/">previous page</a>, we observed that although there are many discontinuities: drops (negative deltas), forward jumps (delta &gt; 1), and adjacent duplicates (delta = 0), intuitively, we can "repair" the sequence using a "gap-filling" algorithm.</p>
-<hr />
-<h2 id="files-in-this-page">Files in this page</h2>
-<ul>
-<li>Raw 1-Hour Serial: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001.csv"><code>TRBD002_08062025-03-001.csv</code></a></li>
-<li>Raw 1-Hour Serial Analysis: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001.txt"><code>TRBD002_08062025-03-001.txt</code></a></li>
-<li>Gap-filled Serial: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.csv"><code>TRBD002_08062025-03-001-gapfilled.csv</code></a></li>
-<li>Gap-filled Serial Analysis: <a href="../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.txt"><code>TRBD002_08062025-03-001-gapfilled.txt</code></a></li>
-</ul>
-<hr />
+  <h1>Understanding NEV timestamp</h1>
+
 <h2 id="motivation">Motivation</h2>
-<ul>
-<li>The serial counter should increment by 1 for each frame (~30 fps), so consecutive values should form a near‑monotonic sequence.</li>
-<li>Many defects can be corrected without deleting or reordering rows by inferring the missing values between anchors that are likely correct.</li>
-</ul>
-<p>Goal: produce a cleaned serial column with fewer discontinuities, preserving row count and original sample ranges.</p>
+<p>To synchronize video and audio without serials, the best alternative is through timestamps. Understanding how timestamps are constructured and the meanings of those is critical for the successful synchronization. This page aims to explain the timestamps in a neural recording NEV file.</p>
 <hr />
-<h2 id="intuition-midpoint-passes">Intuition: midpoint passes</h2>
-<p>Rather than guessing each point independently, we run a small number of midpoint passes at different window sizes. Each pass “looks across” a fixed gap size g and nudges the center point(s) toward what the sequence should be if it were monotonic. For example, with <code>[1,2,3,3,5,6,7]</code>, slide a window of length 3; if the middle value <code>s[i]</code> is not between <code>s[i-1]</code> and <code>s[i+1]</code>, set it accordingly, yielding <code>[1,2,3,4,5,6,7]</code>.</p>
-<p>Key ideas:</p>
-<ul>
-<li>Work only on the serial values; never drop or reorder rows.</li>
-<li>Use multiple gap sizes (e.g., 10, 100, 1000) so local inconsistencies get corrected at the appropriate scale.</li>
-<li>Keep it stable and fast: each pass is O(n) and purely functional w.r.t. row layout.</li>
-</ul>
-<p>By stacking a few such passes, we can straighten out small step defects while leaving large‑scale structure intact.</p>
+<h2 id="time-origin">Time Origin</h2>
+<p>The <code>Time Origin</code> in the basic header of a NEV file, according to the <a href="https://blackrockneurotech.com/wp-content/uploads/LB-0023-7.00_NEV_File_Format.pdf">file spec</a> denotes <strong>"The UTC Time at which the data in the file was collected."</strong></p>
+<p><img alt="Time Origin" src="../../assets/understanding_nev_timestamp/timeorigin.png" /></p>
+<p>In Matlab, reading the <a href="../../assets/understanding_nev_timestamp/20251001-140304-002.nev">sample nev</a>, we get the value of Time Origin is <code>01-Oct-2025 19:09:47</code></p>
+<p><img alt="MatLab Time Origin" src="../../assets/understanding_nev_timestamp/matlabtimeorigin.png" /></p>
+<p>We can also load the NEV file with Python which returns <code>datetime.datetime(2025, 10, 1, 19, 9, 47, 630000)</code>. </p>
+<p>Note, however, this time only represents the time when the file was created, it <strong>does not</strong> denote the time when the recording started.</p>
 <hr />
-<h2 id="highlevel-algorithm-pseudocode">High‑level algorithm (pseudocode)</h2>
-<p>Input/Output contract:
-- Input: CSV or DataFrame with exactly 3 columns: <code>serial,start_sample,end_sample</code>.
-- Output: same schema; only <code>serial</code> values may change; length/order preserved.</p>
-<p>Parameters:
-- gaps: list of window sizes. If not provided, choose powers of 10 strictly less than the number of rows: [10, 100, 1000, …]. For n ≤ 10, no passes are applied.</p>
-<pre><code class="language-text">function gap_fill(series, gaps=None):
-    s = to_int_list(series)
-    if len(s) &lt; 3:
-        return s
-
-    G = sanitize_or_autoselect_gaps(gaps, n=len(s))   # e.g., [10, 100, 1000]
-    for g in G:
-        # A single midpoint pass at window size g
-        # (implementation detail lives in SerialFixer.apply_gap_passes_fast)
-        s = midpoint_pass(s, g)
-
-    return s
-
-function midpoint_pass(s, g):
-    # Conceptually: encourage monotone +1 progression across spans of size g.
-    # One simple mental model:
-    #   - compare s[i] and s[i+g]
-    #   - estimate what the midpoint(s) should be if the run from i..i+g were smooth
-    #   - adjust interior values slightly toward that estimate
-    # Actual implementation is optimized for speed and integer stability.
-    return adjusted_copy_of(s)
-</code></pre>
+<h2 id="starting-time-in-serialdigitalio">Starting Time in SerialDigitalIO</h2>
+<p>Expanding the Data section of NEV, we see <code>SerialDigitalIO</code> which packs the digital data from Arduino. </p>
+<p><img alt="SerialDigitalIO" src="../../assets/understanding_nev_timestamp/serialdigitalio.png" /></p>
+<p>Here, it's a data structure of length <code>15659</code> with fields TimeStamp, TimeStampSec, InsertionReason, and UnparsedData. The TimeStamp here, according to <a href="https://blackrockneurotech.com/wp-content/uploads/LB-0023-7.00_NEV_File_Format.pdf">file spec</a> on page 9, denotes the time at which the event occurred.</p>
+<p><img alt="Serial Time Stamp" src="../../assets/understanding_nev_timestamp/serialtimestamp.png" /></p>
+<p>In Pandas DF format, we can see the timestamps that correspond to each digital event.</p>
+<p><img alt="Digital Events DF" src="../../assets/understanding_nev_timestamp/digievts_df.png" /></p>
 <hr />
-<h2 id="results">Results</h2>
-<p>Analyzing with <code>scripts.fix.audiogapfiller</code> on the gap‑filled CSV, the first few rows look like:</p>
-<pre><code class="language-csv">serial,start_sample,end_sample
-32896102,226,457
-32896103,1735,1966
-32896104,3245,3476
-32896105,4755,4986
-32896106,6264,6495
-32896107,7773,8004
-32896108,9283,9514
-32896109,10792,11023
-32896110,12302,12533
-</code></pre>
-<p>Compared to before:</p>
-<pre><code class="language-csv">serial,start_sample,end_sample
-32896102,226,457
-32896096,1735,1966
-32896104,3245,3476
-32896104,4755,4986
-32896106,6264,6495
-32896104,7773,8004
-32896108,9283,9514
-32896108,10792,11023
-32896110,12302,12533
-</code></pre>
-<p>The analysis shows a significantly improved sequence:</p>
-<pre><code class="language-text">Values=105223  Steps=105222  ok=104404 (99.22%)
-Counts: drop=320, duplicate=79, forward_jump=419, ok=104404
-Adjacent duplicate events: 79
-</code></pre>
-<p>Compared to before:</p>
-<pre><code class="language-text">Values=105223  Steps=105222  ok=0 (0.00%)
-Counts: drop=31613, duplicate=24671, forward_jump=48938
-Adjacent duplicate events: 24671
-</code></pre>
-<p>It’s a significant improvement!!</p>
+<h2 id="starting-time-of-recording">Starting Time of Recording</h2>
+<p>So what's the starting time of recording?? From the file spec on page 14, the timestamp for a recording is from the Recording Events packet.</p>
+<p><img alt="Recording Events" src="../../assets/understanding_nev_timestamp/recordingevts.png" /></p>
+<p>Here the recording is actually the start of a recording, not file creation. On Matlab, it's visible from the <code>RecordingEvents</code> section.</p>
+<p><img alt="Recording Events Matlab" src="../../assets/understanding_nev_timestamp/recordingevtsmatlab.png" /></p>
 <hr />
-<h2 id="limitations">Limitations</h2>
-<p>Gap filling does not remove all drops, forward-jumps, and duplicates. An example of a remaining drop can be</p>
-<pre><code class="language-csv">...
-32953058,76591478,76591709
-32953059,76592987,76593218
-32953060,76594496,76594727
-32953348,76596471,76596702
-32953120,76597982,76598213
-32953122,76599491,76599722
-32953123,76601001,76601232
-...
+<h2 id="utc-time-of-digital-events">UTC Time of Digital Events</h2>
+<p>So how do we get the UTC timestamp of a digital event? This is accomplished by </p>
+<pre><code>Delta = TimeStamp in SerialDigitalIO - Starting Time of Recording
+UTC Time = Time Origin + Delta / Resolution
 </code></pre>
-<p>Serial gets bumped from 32953060 to 32953348 before it drops back to 32953120. </p>
-<p>Another example of a duplicate and a large forward-jump after gap-filling can be</p>
-<pre><code class="language-csv">...
-32897351,1708541,1708772
-32897352,1710051,1710282
-32897352,1711561,1711792
-17179869184,1712867,1713098
-34359738367,1713967,1714198
-32897414,1715223,1715454
-32897415,1716733,1716964
-32897416,1718242,1718473
-...
+<p>In this example NEV file, we are able to reconstruct the serial dataframe with <code>scripts.parsers.nevfileparser</code></p>
+<pre><code class="language-csv">TimeStamps,chunk_serial,UTCTimeStamp
+13726437,111090007,2025-10-01 19:09:47.667900
+13727438,111090008,2025-10-01 19:09:47.701267
+13728439,111090009,2025-10-01 19:09:47.734633
+13729441,111090010,2025-10-01 19:09:47.768033
+13730442,111090011,2025-10-01 19:09:47.801400
+13731444,111090012,2025-10-01 19:09:47.834800
+13732445,111090013,2025-10-01 19:09:47.868167
+13733446,111090014,2025-10-01 19:09:47.901533
+13734447,111090015,2025-10-01 19:09:47.934900
 </code></pre>
-<p>These are cases that can’t be corrected by gap filling alone because they exceed the local window constraints.</p>
-<h2 id="notes">Notes</h2>
-<ul>
-<li>This pass does not remove rows or reorder time; it only adjusts <code>serial</code> values.</li>
-<li>It’s designed to fix local inconsistencies efficiently; pathological corruption may require additional passes (e.g., duplicate removal, drop correction) or more advanced reconstruction.</li>
-</ul>
 
 
 

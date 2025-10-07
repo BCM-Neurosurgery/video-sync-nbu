@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../../emu_time_sync/nev_vs_camera_clock/">
+        <link rel="prev" href="../data_loss/">
       
       
-        <link rel="next" href="../serial_quality/">
+        <link rel="next" href="../nbu_sleep_audio_loss/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -20,7 +20,7 @@
     
     
       
-        <title>How to decode serial? - Video Sync Docs</title>
+        <title>NBU lounge data loss - Video Sync Docs</title>
       
     
     
@@ -62,7 +62,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#decoding-serial-from-audio-nbu-lounge-example" class="md-skip">
+        <a href="#quantifying-nbu-lounge-data-loss" class="md-skip">
           Skip to content
         </a>
       
@@ -98,7 +98,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              How to decode serial?
+              NBU lounge data loss
             
           </span>
         </div>
@@ -377,32 +377,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    How to decode serial?
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../decoding_serial/" class="md-nav__link">
         
   
   
@@ -413,149 +391,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#why-we-flip-the-entire-sequence-first-the-key-idea" class="md-nav__link">
-    <span class="md-ellipsis">
-      Why we flip the entire sequence first (the key idea)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#high-level-algorithm-pseudocode" class="md-nav__link">
-    <span class="md-ellipsis">
-      High-level algorithm (pseudocode)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#visual-tour-from-raw-wave-to-35-bit-ids" class="md-nav__link">
-    <span class="md-ellipsis">
-      Visual tour: from raw wave to 35-bit IDs
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Visual tour: from raw wave to 35-bit IDs">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-raw-serial-audio-overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      1) Raw serial audio (overview)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-from-wave-to-binary" class="md-nav__link">
-    <span class="md-ellipsis">
-      2) From wave to binary
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-global-flip-why-effect" class="md-nav__link">
-    <span class="md-ellipsis">
-      3) Global flip (why &amp; effect)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-window-selection-on-the-scanning-stream" class="md-nav__link">
-    <span class="md-ellipsis">
-      4) Window selection on the scanning stream
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-same-windows-mapped-back-to-original-time" class="md-nav__link">
-    <span class="md-ellipsis">
-      5) Same windows mapped back to original time
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-zoom-one-decoded-block-original-time" class="md-nav__link">
-    <span class="md-ellipsis">
-      6) Zoom one decoded block (original time)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#7-inside-the-window-anchors-taps-and-bit-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      7) Inside the window: anchors, taps, and bit order
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#msb-vs-lsb-how-bits-become-numbers" class="md-nav__link">
-    <span class="md-ellipsis">
-      MSB vs LSB — how bits become numbers
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#preset-constants-for-nbu_lounge-empirical" class="md-nav__link">
-    <span class="md-ellipsis">
-      Preset + constants for nbu_lounge (empirical)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#appendix-expected-images-fresh-run" class="md-nav__link">
-    <span class="md-ellipsis">
-      Appendix: expected images (fresh run)
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -634,10 +469,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../nbu_lounge_audio_loss/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    NBU lounge data loss
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -648,6 +505,80 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive snapshot
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-artifacts-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Artifacts &amp; reports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Configuration (for reproducibility)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-perrecording-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Per‑recording breakdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -733,123 +664,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-we-flip-the-entire-sequence-first-the-key-idea" class="md-nav__link">
+  <a href="#1-executive-snapshot" class="md-nav__link">
     <span class="md-ellipsis">
-      Why we flip the entire sequence first (the key idea)
+      1. Executive snapshot
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#high-level-algorithm-pseudocode" class="md-nav__link">
+  <a href="#2-artifacts-reports" class="md-nav__link">
     <span class="md-ellipsis">
-      High-level algorithm (pseudocode)
+      2. Artifacts &amp; reports
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#visual-tour-from-raw-wave-to-35-bit-ids" class="md-nav__link">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
     <span class="md-ellipsis">
-      Visual tour: from raw wave to 35-bit IDs
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Visual tour: from raw wave to 35-bit IDs">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-raw-serial-audio-overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      1) Raw serial audio (overview)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-from-wave-to-binary" class="md-nav__link">
-    <span class="md-ellipsis">
-      2) From wave to binary
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-global-flip-why-effect" class="md-nav__link">
-    <span class="md-ellipsis">
-      3) Global flip (why &amp; effect)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-window-selection-on-the-scanning-stream" class="md-nav__link">
-    <span class="md-ellipsis">
-      4) Window selection on the scanning stream
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-same-windows-mapped-back-to-original-time" class="md-nav__link">
-    <span class="md-ellipsis">
-      5) Same windows mapped back to original time
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-zoom-one-decoded-block-original-time" class="md-nav__link">
-    <span class="md-ellipsis">
-      6) Zoom one decoded block (original time)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#7-inside-the-window-anchors-taps-and-bit-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      7) Inside the window: anchors, taps, and bit order
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#msb-vs-lsb-how-bits-become-numbers" class="md-nav__link">
-    <span class="md-ellipsis">
-      MSB vs LSB — how bits become numbers
+      3. Configuration (for reproducibility)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#preset-constants-for-nbu_lounge-empirical" class="md-nav__link">
+  <a href="#4-perrecording-breakdown" class="md-nav__link">
     <span class="md-ellipsis">
-      Preset + constants for nbu_lounge (empirical)
+      4. Per‑recording breakdown
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#appendix-expected-images-fresh-run" class="md-nav__link">
+  <a href="#5-interpretation" class="md-nav__link">
     <span class="md-ellipsis">
-      Appendix: expected images (fresh run)
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
     </span>
   </a>
   
@@ -871,152 +733,210 @@
 
 
 
-<h1 id="decoding-serial-from-audio-nbu-lounge-example">Decoding Serial from Audio — NBU Lounge Example</h1>
-<p>This decoder extracts serials sent from Arduino embedded in a dedicated serial audio track.</p>
-<blockquote>
-<p>Example clip: recorded in <strong><code>nbu_lounge</code></strong> (source: <code>TRBD002_08062025-03.mp3</code>, path on Elias: <code>/mnt/datalake/data/TRBD-53761/TRBD002/NBU/2025-08-07/audio/lounge/TRBD002_08062025-03.mp3</code>, clipped with a 1-second window and converted to WAV for plotting).</p>
-</blockquote>
-<hr />
-<h2 id="why-we-flip-the-entire-sequence-first-the-key-idea">Why we flip the entire sequence first (the key idea)</h2>
-<p>Detecting a reliable <strong>start-of-block</strong> is easier if we conceptually "look from the end." Empirically, when scanning backward on the original stream, the <strong>drop to <code>0</code></strong> marks the block start (payload comes first, then padding).</p>
-<p>To keep the scan simple, we <strong>globally flip</strong> the binary stream once, scan forward in that flipped space, then map indices and ID order back to the original timeline.</p>
-<p>Per-window flips (if enabled by the site preset) are only to ensure each sampled byte is read <strong>MSB → LSB</strong>.</p>
-<hr />
-<h2 id="high-level-algorithm-pseudocode">High-level algorithm (pseudocode)</h2>
-<pre><code class="language-text">1) Read audio (wav/mp3) → mono float32 in [-1..1]
-2) Normalize to [0,1]; threshold → binary stream (0/1)
-
-3) Global flip (reverse entire binary stream):
-   Rationale: scanning forward on the flipped stream is equivalent to
-   scanning backward on the original and makes detecting block starts easy.
-
-4) Scan the flipped stream:
-   while i + W &lt;= N:
-     if stream[i] == 0:
-        win = stream[i : i + W]
-        if flip_window: win = reverse(win)
-
-        # Sample 5 anchors × 7 taps each
-        # Interpret taps MSB→LSB to get 5 values in [0..127]
-        # Concatenate b5‖b4‖b3‖b2‖b1 → one 35-bit frame ID
-
-        record (ID, start=i, end=i+W)
-        i += stride
-     else:
-        i += 1
-
-5) Map ranges back to original timeline and reverse the list of IDs/ranges
-   so outputs are chronological.
-
-6) Write CSV: serial,start_sample,end_sample
-</code></pre>
-<hr />
-<h2 id="visual-tour-from-raw-wave-to-35-bit-ids">Visual tour: from raw wave to 35-bit IDs</h2>
-<blockquote>
-<p>The figures below are produced by <code>scripts/tools/make_serial_plots.py</code> and saved under<br />
-<code>docs/assets/serial/</code>.</p>
-</blockquote>
-<h3 id="1-raw-serial-audio-overview">1) Raw serial audio (overview)</h3>
-<p>Short “bursty” plateaus carry the embedded bits.</p>
-<p><img alt="Raw serial audio (overview)" src="../../assets/serial/step01_raw.png" /></p>
-<h3 id="2-from-wave-to-binary">2) From wave to binary</h3>
-<p>Normalize to <code>[0,1]</code> and pick a threshold (default <code>0.5</code>):</p>
-<p><img alt="Normalized to [0,1] with threshold" src="../../assets/serial/step02_normalized.png" /></p>
-<p>Then binarize to get the decoder’s 0/1 stream (original, pre-flip):</p>
-<p><img alt="Binarized stream (original, pre-flip)" src="../../assets/serial/step03_binary_preflip.png" /></p>
-<h3 id="3-global-flip-why-effect">3) Global flip (why &amp; effect)</h3>
-<p>We reverse the <strong>entire</strong> 0/1 stream so that the <strong>first <code>0</code></strong> we see while scanning forward corresponds to a <strong>start-of-block</strong> (equivalently: scanning backward on the original and firing on 1→0 drops).</p>
-<p><img alt="Binarized scan stream" src="../../assets/serial/step04_binary_scanstream.png" /></p>
-<h3 id="4-window-selection-on-the-scanning-stream">4) Window selection on the scanning stream</h3>
-<p>Take windows of length <strong><code>W</code></strong> (site-specific; for <strong>nbu_lounge</strong> we use <strong>231</strong>) and hop by <strong><code>stride ≈ 1100</code></strong>.</p>
-<p><img alt="Window scan on scan-stream" src="../../assets/serial/step05_scanstream_windows.png" /></p>
-<h3 id="5-same-windows-mapped-back-to-original-time">5) Same windows mapped back to original time</h3>
-<p>For intuition, the same windows (starts/ends) shown on the original (pre-flip) axis:</p>
-<p><img alt="Windows on original axis" src="../../assets/serial/step06_original_windows.png" /></p>
-<h3 id="6-zoom-one-decoded-block-original-time">6) Zoom one decoded block (original time)</h3>
-<p>Zoom around a specific chronological block (by index), shading the exact sampling window:</p>
-<p><img alt="Zoom raw (original time)" src="../../assets/serial/step07_zoom_raw.png" /></p>
-<p>Zoomed binary view of the same region:</p>
-<p><img alt="Zoom binary (original time)" src="../../assets/serial/step08_zoom_binary.png" /></p>
-<h3 id="7-inside-the-window-anchors-taps-and-bit-order">7) Inside the window: anchors, taps, and bit order</h3>
-<p>The actual window used for sampling (after optional per-window flip to guarantee MSB→LSB).<br />
-We annotate <strong>5 groups</strong> (anchors) × <strong>7 taps</strong> each (dots), labeling <strong>G1 (MSB)</strong> through <strong>G5 (LSB)</strong> and listing the computed 7-bit byte values plus the concatenated <strong>35-bit ID</strong>. The bits are sampled based on empirical anchor points and offsets (counting backwards). Across NBU sleep room, NBU lounge, and Jamail, we use <code>anchors=[6, 53, 100, 147, 194]</code> and <code>offsets=[4, 9, 14, 19, 23, 28, 33, 37]</code> but we only sample the first 7 bits.</p>
-<p><img alt="Window with anchors/taps and bit annotations" src="../../assets/serial/step09_window_taps.png" /></p>
-<hr />
-<h2 id="msb-vs-lsb-how-bits-become-numbers">MSB vs LSB — how bits become numbers</h2>
-<ul>
-<li><strong>MSB (Most Significant Bit)</strong>: left-most bit (largest weight).  </li>
-<li><strong>LSB (Least Significant Bit)</strong>: right-most bit (smallest weight).</li>
-</ul>
-<p>Example 7-bit pattern (MSB→LSB): <code>1 0 1 1 0 0 1</code><br />
-Value = <code>1·2^6 + 0·2^5 + 1·2^4 + 1·2^3 + 0·2^2 + 0·2^1 + 1·2^0 = 89</code>.</p>
-<p>The decoder explicitly orders taps MSB→LSB.</p>
-<hr />
-<h2 id="preset-constants-for-nbu_lounge-empirical">Preset + constants for <code>nbu_lounge</code> (empirical)</h2>
+<h1 id="quantifying-nbu-lounge-data-loss">Quantifying NBU Lounge Data Loss</h1>
+<p>So how much data loss exactly do we have in the lounge? This note summarizes how much serial‑aligned audio timing is effectively "missing" across analyzed <strong>NBU lounge</strong> recordings. The helper script <code>scripts.doc_helper.quantify_audio_loss</code> batch‑processes each serial audio file found through <code>/mnt/datalake/data/TRBD-53761</code> and emits JSON + CSV summaries.</p>
+<h2 id="1-executive-snapshot">1. Executive snapshot</h2>
 <table>
 <thead>
 <tr>
-<th>Parameter</th>
-<th>Meaning</th>
-<th>Value / Note</th>
+<th>Metric</th>
+<th>Value</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>site</code></td>
-<td>Preset selection</td>
-<td><code>nbu_lounge</code></td>
+<td>Recordings analyzed</td>
+<td>14</td>
 </tr>
 <tr>
-<td><code>W</code></td>
-<td><strong>Sampling window length</strong></td>
-<td><strong>231</strong></td>
+<td>Total analyzed duration</td>
+<td>376,532.8 s (≈104.0 h)</td>
 </tr>
 <tr>
-<td><code>stride</code></td>
-<td>Hop between starts</td>
-<td><strong>≈ 1100</strong></td>
+<td>Estimated missing time</td>
+<td>7,146.35 s (≈1.98 h)</td>
 </tr>
 <tr>
-<td>Anchors (1-based)</td>
-<td>Fixed positions inside the window</td>
-<td><code>[6, 53, 100, 147, 194]</code></td>
+<td>Weighted loss (%)</td>
+<td>1.90%</td>
 </tr>
 <tr>
-<td>Tap offsets (1-based)</td>
-<td>8 documented; we use first <strong>7</strong></td>
-<td><code>[4, 9, 14, 19, 23, 28, 33, 37]</code></td>
-</tr>
-<tr>
-<td><code>flip_signal</code></td>
-<td>Reverse entire stream before scan?</td>
-<td><strong>True</strong> (so “first 0” is start)</td>
-</tr>
-<tr>
-<td><code>flip_window</code></td>
-<td>Reverse each window before taps?</td>
-<td><strong>True</strong> (guarantee MSB→LSB)</td>
-</tr>
-<tr>
-<td><code>threshold</code></td>
-<td>Binarization threshold in <code>[0,1]</code></td>
-<td><strong>0.5</strong> typical (try 0.4–0.6)</td>
+<td>Files with material loss (&gt;0.5%)</td>
+<td>3</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="appendix-expected-images-fresh-run">Appendix: expected images (fresh run)</h2>
-<pre><code>docs/assets/serial/
-  step01_raw.png
-  step02_normalized.png
-  step03_binary_preflip.png
-  step04_binary_scanstream.png
-  step05_scanstream_windows.png
-  step06_original_windows.png
-  step07_zoom_raw.png
-  step08_zoom_binary.png
-  step09_window_taps.png
+<p>Most recordings show near‑zero structural loss; the overall 1.9% is driven almost entirely by three outliers.</p>
+<h2 id="2-artifacts-reports">2. Artifacts &amp; reports</h2>
+<ul>
+<li>Overall config + rollup: <a href="../../assets/how_much_data_loss/audio_loss_overall.json">overall report</a></li>
+<li>Per‑recording CSV summary: <a href="../../assets/how_much_data_loss/audio_loss_summary.csv">summary report</a></li>
+</ul>
+<h2 id="3-configuration-for-reproducibility">3. Configuration (for reproducibility)</h2>
+<p>Key parameters embedded in the JSON (trimmed for readability):</p>
+<pre><code class="language-json">{
+  &quot;fs_hz&quot;: 44100,
+  &quot;prefilter&quot;: true,
+  &quot;max_fwd_delta&quot;: 200,
+  &quot;local_window&quot;: 3,
+  &quot;patients&quot;: [&quot;TRBD001&quot;, &quot;TRBD002&quot;],
+  &quot;discovered&quot;: 14,
+  &quot;analyzed&quot;: 14,
+  &quot;totals&quot;: {
+    &quot;n_audios&quot;: 14,
+    &quot;sum_analyzed_seconds&quot;: 376532.845,
+    &quot;sum_missing_seconds&quot;: 7146.35,
+    &quot;weighted_loss_pct&quot;: 1.898
+  }
+}
 </code></pre>
+<p>Weighted loss (%) is computed as:</p>
+<pre><code class="language-python">weighted_loss = 100.0 * sum_missing / sum_analyzed
+</code></pre>
+<h2 id="4-perrecording-breakdown">4. Per‑recording breakdown</h2>
+<table>
+<thead>
+<tr>
+<th>Patient</th>
+<th>Date</th>
+<th style="text-align: right;">Duration (s)</th>
+<th style="text-align: right;">Duration (h)</th>
+<th style="text-align: right;">Missing (s)</th>
+<th style="text-align: right;">Loss %</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TRBD001</td>
+<td>2025-04-16</td>
+<td style="text-align: right;">36985.01</td>
+<td style="text-align: right;">10.27</td>
+<td style="text-align: right;">4055.40</td>
+<td style="text-align: right;"><strong>10.96</strong></td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-03</td>
+<td style="text-align: right;">39263.53</td>
+<td style="text-align: right;">10.91</td>
+<td style="text-align: right;">0.14</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-04</td>
+<td style="text-align: right;">48083.01</td>
+<td style="text-align: right;">13.36</td>
+<td style="text-align: right;">2.84</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-10</td>
+<td style="text-align: right;">22586.69</td>
+<td style="text-align: right;">6.27</td>
+<td style="text-align: right;">0.94</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-10</td>
+<td style="text-align: right;">16117.47</td>
+<td style="text-align: right;">4.48</td>
+<td style="text-align: right;">0.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-11</td>
+<td style="text-align: right;">11384.07</td>
+<td style="text-align: right;">3.16</td>
+<td style="text-align: right;">0.24</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-17</td>
+<td style="text-align: right;">41946.43</td>
+<td style="text-align: right;">11.65</td>
+<td style="text-align: right;">0.64</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-18</td>
+<td style="text-align: right;">5230.64</td>
+<td style="text-align: right;">1.45</td>
+<td style="text-align: right;">0.10</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-05-21</td>
+<td style="text-align: right;">43088.39</td>
+<td style="text-align: right;">11.97</td>
+<td style="text-align: right;">0.87</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-10</td>
+<td style="text-align: right;">36716.97</td>
+<td style="text-align: right;">10.20</td>
+<td style="text-align: right;">0.72</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-10</td>
+<td style="text-align: right;">6807.50</td>
+<td style="text-align: right;">1.89</td>
+<td style="text-align: right;">0.16</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-23</td>
+<td style="text-align: right;">43543.35</td>
+<td style="text-align: right;">12.10</td>
+<td style="text-align: right;">3.05</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-08-07</td>
+<td style="text-align: right;">22267.96</td>
+<td style="text-align: right;">6.19</td>
+<td style="text-align: right;">2685.73</td>
+<td style="text-align: right;"><strong>12.06</strong></td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-08-07</td>
+<td style="text-align: right;">2511.82</td>
+<td style="text-align: right;">0.70</td>
+<td style="text-align: right;">395.50</td>
+<td style="text-align: right;"><strong>15.75</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Observations:</p>
+<ul>
+<li>Only two calendar dates (Apr 16 and Aug 07) contribute virtually all loss.</li>
+<li>The smaller Aug 07 file (≈0.70 h) shows very high relative loss (15.7%).</li>
+<li>Other sessions are effectively clean (&lt;0.02%).</li>
+</ul>
+<h2 id="5-interpretation">5. Interpretation</h2>
+<p>The overall 1.9% masks a bimodal pattern: nearly all sessions are clean; a small minority show sustained discontinuities (serial forward jumps).</p>
+<h2 id="6-reproduce-locally">6. Reproduce locally</h2>
+<pre><code class="language-bash">python -m scripts.doc_helper.quantify_audio_loss \
+  --root /mnt/datalake/data/TRBD-53761 \
+  --out-dir /mnt/labworlds/Provenza/auto/TRBD_audio_loss \
+  --site nbu_lounge
+</code></pre>
+<p>Outputs will mirror the JSON + CSV linked above.</p>
+<hr />
+<p>Concise takeaway: overall data integrity is strong; loss is localized to a small number of outlier recordings that warrant targeted investigation.</p>
 
 
 

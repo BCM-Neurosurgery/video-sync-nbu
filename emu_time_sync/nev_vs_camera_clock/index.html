@@ -1,0 +1,915 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../understanding_nev_timestamp/">
+      
+      
+        <link rel="next" href="../../understanding_audio/decoding_serial/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
+    
+    
+      
+        <title>NEV vs. Camera clock - Video Sync Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#question" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Video Sync Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              NEV vs. Camera clock
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Video Sync Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    EMU Time Sync
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            EMU Time Sync
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how_much_data_without_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How much data without serial
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../understanding_nev_timestamp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Understanding NEV timestamp
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    NEV vs. Camera clock
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    NEV vs. Camera clock
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#question" class="md-nav__link">
+    <span class="md-ellipsis">
+      Question
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequency-of-serial-data-in-nev-vs-camera-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frequency of serial data in NEV vs. Camera JSON
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Frequency of serial data in NEV vs. Camera JSON">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#question_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Question
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#methodology" class="md-nav__link">
+    <span class="md-ellipsis">
+      Methodology
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scripts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Understanding Audio
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Understanding Audio
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/decoding_serial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to decode serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/serial_quality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    What's the quality of serial?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/fill_gaps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/data_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Is there data loss?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/nbu_lounge_audio_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NBU lounge data loss
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/nbu_sleep_audio_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NBU sleep room data loss
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understanding_audio/jamail_audio_loss/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Jamail data loss
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#question" class="md-nav__link">
+    <span class="md-ellipsis">
+      Question
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequency-of-serial-data-in-nev-vs-camera-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frequency of serial data in NEV vs. Camera JSON
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Frequency of serial data in NEV vs. Camera JSON">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#question_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Question
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#methodology" class="md-nav__link">
+    <span class="md-ellipsis">
+      Methodology
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scripts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+  <h1>NEV vs. Camera clock</h1>
+
+<h2 id="question">Question</h2>
+<p>With a merged dataframe, do the clocks behave the same from NEV and from cameras? </p>
+<h2 id="frequency-of-serial-data-in-nev-vs-camera-json">Frequency of serial data in NEV vs. Camera JSON</h2>
+<h3 id="question_1">Question</h3>
+<p>Are there any differences between the sampling frequency of serials in NEV vs. in camera json?</p>
+<h3 id="methodology">Methodology</h3>
+<p>Sampling frequency of serials in NEV</p>
+<pre><code>- Random sample k NEV files from patient data that has serials
+- For each NEV, get serial dataframe, and calculate FPS of serials
+- Average FPS across k NEV files
+- Log report
+</code></pre>
+<p>Sampling frequency of serials in camera JSONs</p>
+<pre><code>- Random sample k camera json files from patient data
+- For each json, calculate FPS from real_times
+- Average FPS across k camera jsons
+- Log report
+</code></pre>
+<h3 id="scripts">Scripts</h3>
+<ul>
+<li><a href="../../assets/nev_vs_camera_clock/sample_serial_fps.py">Sample NEV serial FPS</a></li>
+<li><a href="../../assets/nev_vs_camera_clock/sample_camera_json_fps.py">Sample camera JSON FPS</a></li>
+</ul>
+<h3 id="results">Results</h3>
+<p>NEV serial FPS</p>
+<pre><code>Per-file summary (k=20):
+[INFO]   EMU-0055_subj-YFM_task-ABCD_run-01_blk-01_NSP-1.nev          -&gt; fps_overall=29.95840700 fps_median=29.96973057 dt_mean_ms=33.380
+[INFO]   EMU-0083_convo_NSP-1.nev                                     -&gt; fps_overall=29.96042561 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0068_subj-YFH_task-GoNoGoComplex-jumble-run-01_NSP-1.nev -&gt; fps_overall=29.95876643 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0019_subj-YFF_task-2-Back_Ac_run-01_NSP-1.nev            -&gt; fps_overall=29.95907354 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0022_subj-YFB_task-PEP_lead-RT2bHb_elec-4_NSP-1.nev      -&gt; fps_overall=29.95994112 fps_median=29.96973057 dt_mean_ms=33.378
+[INFO]   EMU-0120_subj-YFM_task-Pacman_time-20250317_175151_NSP-1.nev -&gt; fps_overall=29.96065988 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0004_subj-YFB_task-PEP_lead-RT1CM_elec-4_NSP-1.nev       -&gt; fps_overall=29.96004246 fps_median=29.96973057 dt_mean_ms=33.378
+[INFO]   EMU-0048_subj-YFD_task-EyesClosed_date-20240803_time-160423_NSP-1.nev -&gt; fps_overall=29.95870531 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0045_SAVE_NAME_NSP-1.nev                                 -&gt; fps_overall=29.96089412 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0038_subj-YFK_task-GoNoGoComplex-jumble-run-02_NSP-1.nev -&gt; fps_overall=29.96072207 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0049_SAVE_NAME_NSP-1.nev                                 -&gt; fps_overall=29.96098052 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0007_subj-YFD_task-4MAB_run-01_NSP-1.nev                 -&gt; fps_overall=29.95988899 fps_median=29.96973057 dt_mean_ms=33.378
+[INFO]   EMU-0025_convo_NSP-1.nev                                     -&gt; fps_overall=29.96065397 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0026_subj-YFN_task-EyesOpen_date-20250405_time-112613_NSP-1.nev -&gt; fps_overall=29.95920908 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0044_convo_NSP-1.nev                                     -&gt; fps_overall=29.95929569 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0032_MEM-SemOther_NSP-1.nev                              -&gt; fps_overall=29.96079917 fps_median=29.96973057 dt_mean_ms=33.377
+[INFO]   EMU-0008_subj-YFB_task-PEP_lead-LT2bHbE_elec-1_NSP-1.nev     -&gt; fps_overall=29.96024863 fps_median=29.96973057 dt_mean_ms=33.378
+[INFO]   EMU-0023_subj-YFH_task-PEP_lead-LT2aA_elec-13_NSP-1.nev      -&gt; fps_overall=29.95849363 fps_median=29.96973057 dt_mean_ms=33.380
+[INFO]   EMU-0111_subj-YFI_task-EyesOpen_date-20241020_time-161617_NSP-1.nev -&gt; fps_overall=29.95904762 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO]   EMU-0023_subj-YFF_task-noisyAV_run-03_NSP-1.nev              -&gt; fps_overall=29.95876598 fps_median=29.96973057 dt_mean_ms=33.379
+[INFO] 
+Aggregate statistics across sampled NEVs:
+[INFO]   mean_fps_overall   = 29.95975104
+[INFO]   median_fps_overall = 29.95991505
+[INFO]   mean_fps_median    = 29.96973057
+[INFO]   mean_dt_mean_ms    = 33.378
+[INFO]   max_fps_overall     = 29.96098052 (EMU-0049_SAVE_NAME_NSP-1.nev)
+[INFO]   min_fps_overall     = 29.95840700 (EMU-0055_subj-YFM_task-ABCD_run-01_blk-01_NSP-1.nev)
+</code></pre>
+<p>JSON Serial FPS</p>
+<pre><code>Per-file summary (k=50):
+[INFO]   YFGDatafile_20240926_102339.json                             -&gt; fps_overall=29.95883760 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFQDatafile_20250614_093817.json                             -&gt; fps_overall=29.95918666 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFGDatafile_20240928_060717.json                             -&gt; fps_overall=29.95838881 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFF_20240825_215540.json                                     -&gt; fps_overall=29.95794004 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFHDatafile_20241008_145507.json                             -&gt; fps_overall=29.95813950 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFF_20240823_200129.json                                     -&gt; fps_overall=29.95803977 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFF_20240829_190942.json                                     -&gt; fps_overall=29.95813950 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFQDatafile_20250617_143915.json                             -&gt; fps_overall=29.95679325 fps_median=30.30303030 dt_mean_ms=33.381
+[INFO]   YFC_20240725_202804.json                                     -&gt; fps_overall=29.96018403 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFGDatafile_20240928_034706.json                             -&gt; fps_overall=29.95838881 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFODatafile_20250426_223712.json                             -&gt; fps_overall=29.95998455 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFLDatafile_20250227_200037.json                             -&gt; fps_overall=29.95908693 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFLDatafile_20250228_193231.json                             -&gt; fps_overall=29.95963547 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFPDatafile_20250512_181143.json                             -&gt; fps_overall=29.96123134 fps_median=30.30303030 dt_mean_ms=33.376
+[INFO]   YFKDatafile_20250216_221957.json                             -&gt; fps_overall=29.96013416 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFB_20240506_192344.json                                     -&gt; fps_overall=29.95888746 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFHDatafile_20241004_113351.json                             -&gt; fps_overall=29.95823922 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFODatafile_20250424_151244.json                             -&gt; fps_overall=29.95878773 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFSDatafile_20250718_112628.json                             -&gt; fps_overall=29.95704254 fps_median=30.30303030 dt_mean_ms=33.381
+[INFO]   YFGDatafile_20240925_071604.json                             -&gt; fps_overall=29.95843868 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFNDatafile_20250401_171348.json                             -&gt; fps_overall=29.95853841 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFD_20240803_163310.json                                     -&gt; fps_overall=29.95828909 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFC_20240720_172804.json                                     -&gt; fps_overall=29.95938613 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFODatafile_20250424_024143.json                             -&gt; fps_overall=29.95973521 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFB_20240509_114401.json                                     -&gt; fps_overall=29.95893733 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFJDatafile_20241109_233226.json                             -&gt; fps_overall=29.95913680 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFQDatafile_20250611_080220.json                             -&gt; fps_overall=29.95953573 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFPDatafile_20250506_222831.json                             -&gt; fps_overall=29.96053313 fps_median=30.30303030 dt_mean_ms=33.377
+[INFO]   YFLDatafile_20250305_132101.json                             -&gt; fps_overall=29.95993468 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFGDatafile_20240925_115627.json                             -&gt; fps_overall=29.95893733 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFSDatafile_20250716_202306.json                             -&gt; fps_overall=29.95659381 fps_median=30.30303030 dt_mean_ms=33.382
+[INFO]   YFE_20240814_020710.json                                     -&gt; fps_overall=29.95888746 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFE_20240814_203842.json                                     -&gt; fps_overall=29.95794004 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   calibration_20240918_141049.json                             -&gt; fps_overall=29.96571646 fps_median=30.30303030 dt_mean_ms=33.371
+[INFO]   YFTDatafile_20250731_084337.json                             -&gt; fps_overall=29.95828909 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFTDatafile_20250802_173819.json                             -&gt; fps_overall=29.95878773 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFIDatafile_20241018_194628.json                             -&gt; fps_overall=29.95913680 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFF_20240824_232347.json                                     -&gt; fps_overall=29.95848854 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFQDatafile_20250611_140249.json                             -&gt; fps_overall=29.95983495 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFPDatafile_20250515_135713.json                             -&gt; fps_overall=29.95838881 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFMDatafile_20250312_180329.json                             -&gt; fps_overall=29.95863814 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFPDatafile_20250512_091842.json                             -&gt; fps_overall=29.96153059 fps_median=30.30303030 dt_mean_ms=33.376
+[INFO]   YFHDatafile_20241010_020801.json                             -&gt; fps_overall=29.95848854 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFIDatafile_20241021_042105.json                             -&gt; fps_overall=29.95943600 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFC_20240721_000837.json                                     -&gt; fps_overall=29.95898720 fps_median=30.30303030 dt_mean_ms=33.379
+[INFO]   YFKDatafile_20250215_194749.json                             -&gt; fps_overall=29.95953573 fps_median=30.30303030 dt_mean_ms=33.378
+[INFO]   YFPDatafile_20250515_214752.json                             -&gt; fps_overall=29.95828909 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFPDatafile_20250509_031240.json                             -&gt; fps_overall=29.96113159 fps_median=30.30303030 dt_mean_ms=33.377
+[INFO]   YFPDatafile_20250514_223557.json                             -&gt; fps_overall=29.95828909 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO]   YFHDatafile_20241010_140901.json                             -&gt; fps_overall=29.95813950 fps_median=30.30303030 dt_mean_ms=33.380
+[INFO] 
+Aggregate statistics across sampled JSONs:
+[INFO]   mean_fps_overall   = 29.95905998
+[INFO]   median_fps_overall = 29.95886253
+[INFO]   mean_fps_median    = 30.30303030
+[INFO]   mean_dt_mean_ms    = 33.379
+[INFO]   max_fps_overall     = 29.96571646 (calibration_20240918_141049.json)
+[INFO]   min_fps_overall     = 29.95659381 (YFSDatafile_20250716_202306.json)
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+    
+  </body>
+</html>
