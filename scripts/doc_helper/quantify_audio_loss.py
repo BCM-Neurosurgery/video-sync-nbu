@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-batch_audio_loss_report.py — NBU lounge/sleep pipeline:
+batch_audio_loss_report.py — NBU lounge/sleep + Jamail clinic pipeline:
 discover → split/decode/merge → GAPFILL → analyze → per-audio + global reports.
 
 What's new
@@ -13,6 +13,7 @@ Scans ONLY:
 <root>/
   TRBD001|TRBD002/NBU/<YYYY-MM-DD>/audio/<room>/...*03.(mp3|wav)
     where <room> is "lounge" (nbu_lounge) or "sleep" (nbu_sleep).
+  TRBD001|TRBD002/clinic/<YYYY-MM-DD>/audio/...*03.(mp3|wav)  (jamail site)
 
 Artifacts
 ---------
@@ -66,12 +67,38 @@ LOG = logging.getLogger("batch-audio-loss")
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$", re.ASCII)
 SERIAL_AUDIO_RE = re.compile(r".*03\.(mp3|wav)$", re.IGNORECASE)
-SITE_TO_ROOM = {
-    "nbu_lounge": "lounge",
-    "nbu_sleep": "sleep",
+
+
+@dataclass(frozen=True)
+class SiteLayout:
+    patient_subdir: str  # e.g., "NBU" or "clinic"
+    audio_subdir: str  # usually "audio"
+    include_room_subdir: bool  # whether to append /<room> after audio_subdir
+    room: str  # logical room name for reporting
+
+
+SITE_LAYOUTS: Dict[str, SiteLayout] = {
+    "nbu_lounge": SiteLayout(
+        patient_subdir="NBU",
+        audio_subdir="audio",
+        include_room_subdir=True,
+        room="lounge",
+    ),
+    "nbu_sleep": SiteLayout(
+        patient_subdir="NBU",
+        audio_subdir="audio",
+        include_room_subdir=True,
+        room="sleep",
+    ),
+    "jamail": SiteLayout(
+        patient_subdir="clinic",
+        audio_subdir="audio",
+        include_room_subdir=False,
+        room="clinic",
+    ),
 }
 DEFAULT_SITE = "nbu_lounge"
-SITE_CHOICES = tuple(sorted(SITE_TO_ROOM))
+SITE_CHOICES = tuple(sorted(SITE_LAYOUTS))
 
 
 # --------------------------------------------------------------------------------------
@@ -90,25 +117,28 @@ class AudioItem:
 
 
 # --------------------------------------------------------------------------------------
-# Discovery (NBU sites)
+# Discovery (per site layout)
 # --------------------------------------------------------------------------------------
 def find_serial_audios(
-    root: Path, patients: Sequence[str], room: str
+    root: Path, patients: Sequence[str], layout: SiteLayout
 ) -> List[AudioItem]:
     items: List[AudioItem] = []
     for patient in patients:
-        base = root / patient / "NBU"
+        base = root / patient / layout.patient_subdir
         if not base.exists():
             continue
         for date_dir in sorted(p for p in base.iterdir() if p.is_dir()):
             if not DATE_RE.match(date_dir.name):
                 continue
-            room_dir = date_dir / "audio" / room
+            audio_root = date_dir / layout.audio_subdir
+            room_dir = (
+                audio_root / layout.room if layout.include_room_subdir else audio_root
+            )
             if not room_dir.exists():
                 continue
             for f in sorted(room_dir.iterdir()):
                 if f.is_file() and SERIAL_AUDIO_RE.match(f.name):
-                    items.append(AudioItem(patient, date_dir.name, room, f))
+                    items.append(AudioItem(patient, date_dir.name, layout.room, f))
     items.sort(key=lambda x: (x.patient, x.date, x.room, x.path.name))
     return items
 
@@ -391,13 +421,18 @@ def run_batch(
     patients: Sequence[str],
 ) -> Tuple[pd.DataFrame, Dict]:
     try:
-        room = SITE_TO_ROOM[site]
+        layout = SITE_LAYOUTS[site]
     except KeyError as exc:
-        valid = ", ".join(sorted(SITE_TO_ROOM))
+        valid = ", ".join(sorted(SITE_LAYOUTS))
         raise ValueError(f"Unsupported site {site!r}; expected one of {valid}") from exc
 
-    audios = find_serial_audios(root, patients, room)
-    LOG.info("Found %d serial audio files (site=%s, room=%s).", len(audios), site, room)
+    audios = find_serial_audios(root, patients, layout)
+    LOG.info(
+        "Found %d serial audio files (site=%s, room=%s).",
+        len(audios),
+        site,
+        layout.room,
+    )
 
     rows: List[Dict] = []
     skipped = 0
@@ -446,7 +481,7 @@ def run_batch(
                 "local_window": local_window,
                 "top": top,
                 "decoder_site": site,
-                "room": room,
+                "room": layout.room,
                 "threshold": threshold,
                 "split_chunk_seconds": split_chunk_seconds,
                 "split_overwrite": split_overwrite,
@@ -471,7 +506,7 @@ def run_batch(
 # --------------------------------------------------------------------------------------
 def _build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Batch audio-loss report (NBU lounge/sleep; split/decode/merge → GAPFILL → analyze)."
+        description="Batch audio-loss report (NBU lounge/sleep + Jamail clinic; split/decode/merge → GAPFILL → analyze)."
     )
     p.add_argument(
         "--root",
@@ -489,7 +524,7 @@ def _build_cli() -> argparse.ArgumentParser:
         "--site",
         choices=SITE_CHOICES,
         default=DEFAULT_SITE,
-        help="Site preset (nbu_lounge or nbu_sleep)",
+        help="Site preset (nbu_lounge, nbu_sleep, or jamail)",
     )
     p.add_argument(
         "--patients",
