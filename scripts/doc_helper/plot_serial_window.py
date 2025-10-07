@@ -101,9 +101,11 @@ def annotate_window(
     offs7: List[int],
     flip_window: bool,
     threshold: float,
+    serial: Optional[str],
 ) -> None:
     """Draw anchor/tap guides on the supplied axes."""
     title_stub = "after per-window flip" if flip_window else "sampling window"
+    serial_label = f" · serial {serial}" if serial else ""
 
     for gi, tpos in enumerate(trans):
         if not (0 <= tpos < len(window)):
@@ -115,7 +117,7 @@ def annotate_window(
             continue
         ax.plot(taps, window[taps], marker="o", linestyle="None")
 
-    ax.set_title(f"{title_stub} with anchors/taps (raw amplitude)")
+    ax.set_title(f"{title_stub}{serial_label} with anchors/taps (raw amplitude)")
     ax.axhline(threshold, linestyle=":", color="tab:red", linewidth=1.0)
 
 
@@ -205,9 +207,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ax.set_ylim(ymin - 0.1, ymax + 0.1)
     ax.set_xlabel("Window sample index (0-based)")
     ax.set_ylabel("Amplitude")
-    annotate_window(ax, window_for_taps, trans, offs7, flip_window, threshold)
-    savefig(fig, out_dir, "window_taps.png")
-
+    annotate_window(
+        ax, window_for_taps, trans, offs7, flip_window, threshold, args.serial
+    )
+    savefig(fig, out_dir, f"window_taps_{args.serial}.png")
     print(f"Wrote window plots to: {out_dir.resolve()}")
     return 0
 
