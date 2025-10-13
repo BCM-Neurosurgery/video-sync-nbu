@@ -979,11 +979,41 @@ def concat_videos(
     """Concatenate clip files into a single MP4, optionally re-encoding."""
     if not clip_paths:
         raise RuntimeError("No clips to merge")
-    if len(clip_paths) == 1:
-        return clip_paths[0]
 
     _ensure_tool("ffmpeg")
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    if len(clip_paths) == 1:
+        source = clip_paths[0]
+        if not target_fps:
+            return source
+        out_path = work_dir / f"{source.stem}.fps{target_fps:.3f}.mp4"
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y" if overwrite else "-n",
+            "-i",
+            str(source),
+            "-vf",
+            f"fps={target_fps}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-an",
+            str(out_path),
+        ]
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg fps convert failed: {result.stderr.strip()}")
+        return out_path
+
     concat_file = work_dir / "concat.txt"
 
     def _quote(p: Path) -> str:
@@ -1019,8 +1049,7 @@ def concat_videos(
                 "medium",
                 "-crf",
                 "18",
-                "-c:a",
-                "copy",
+                "-an",
             ]
         )
     else:
@@ -1282,8 +1311,24 @@ def _execute_sync_plan(
             )
 
         merged_dir = work_dir / "merged"
+        total_frames = sum(len(plan.frame_ids) for plan in cam_plans)
+        audio_span = (sync_plan.audio_end - sync_plan.audio_start).total_seconds()
+        target_fps = (
+            total_frames / audio_span if audio_span > 0 and total_frames > 0 else None
+        )
+        if target_fps:
+            LOGGER.debug(
+                "Target FPS for %s camera %s set to %.6f (frames=%d span=%.3fs)",
+                task.task_id,
+                cam_serial,
+                target_fps,
+                total_frames,
+                audio_span,
+            )
         try:
-            merged_video = concat_videos(clip_paths, merged_dir, overwrite)
+            merged_video = concat_videos(
+                clip_paths, merged_dir, overwrite, target_fps=target_fps
+            )
         except Exception as exc:
             LOGGER.error(
                 "Video concat failed for %s camera %s (rough mode): %s",
