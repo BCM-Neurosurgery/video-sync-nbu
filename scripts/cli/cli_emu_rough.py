@@ -161,11 +161,13 @@ class SyncPlan:
 
 
 def _ensure_tool(name: str) -> None:
+    """Ensure an external CLI dependency is available."""
     if shutil.which(name) is None:
         raise RuntimeError(f"Required tool '{name}' not found on PATH.")
 
 
 def _parse_realtime_string(value: str) -> Optional[datetime]:
+    """Parse a realtime string into a datetime if possible."""
     try:
         return datetime.strptime(value, _REALTIME_STRICT_FORMAT)
     except Exception:
@@ -177,6 +179,7 @@ def _parse_realtime_string(value: str) -> Optional[datetime]:
 
 
 def _coerce_real_times(values: Optional[Sequence[object]]) -> Optional[List[datetime]]:
+    """Convert a sequence of mixed values into datetimes or return None on failure."""
     if not values:
         return None
     parsed: List[datetime] = []
@@ -195,6 +198,7 @@ def _coerce_real_times(values: Optional[Sequence[object]]) -> Optional[List[date
 
 
 def _estimate_frame_interval(real_times: Sequence[datetime]) -> float:
+    """Return the median positive spacing between realtime samples."""
     deltas = [
         (curr - prev).total_seconds() for prev, curr in zip(real_times, real_times[1:])
     ]
@@ -205,12 +209,14 @@ def _estimate_frame_interval(real_times: Sequence[datetime]) -> float:
 
 
 def _infer_sample_rate(sample_resolution: float) -> int:
+    """Convert NSx sample resolution ticks into an integer sample rate."""
     if sample_resolution <= 0:
         return 0
     return int(round(float(sample_resolution)))
 
 
 def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
+    """Return the first NSP-1 file with the requested extension in a task."""
     pattern = f"*NSP-1.{ext}"
     matches = sorted(task_dir.glob(pattern))
     if not matches:
@@ -231,6 +237,7 @@ def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
 
 
 def load_nev(path: Path) -> tuple[NEV, Nev]:
+    """Load NEV metadata and return it alongside the open parser."""
     parser = Nev(str(path))
     data = parser.get_data()
     raw_events = data.get("digital_events") if isinstance(data, dict) else None
@@ -276,6 +283,7 @@ def load_nev(path: Path) -> tuple[NEV, Nev]:
 
 
 def load_ns5(path: Path) -> tuple[NS5, Nsx]:
+    """Load NS5 metadata and return it alongside the open parser."""
     parser = Nsx(str(path))
     sample_resolution = float(parser.get_sample_resolution())
     sample_rate = _infer_sample_rate(sample_resolution)
@@ -317,6 +325,7 @@ def load_ns5(path: Path) -> tuple[NS5, Nsx]:
 
 
 def _build_placeholder_nev(nev_path: Path) -> NEV:
+    """Create a minimal NEV model when no real NEV file is available."""
     placeholder_events = DIGIEVTS(
         raw=None,
         raw_df=None,
@@ -341,6 +350,7 @@ def discover_task_contexts(
     *,
     require_nev: bool,
 ) -> List[TaskContext]:
+    """Discover stitched task contexts under a patient directory."""
     contexts: List[TaskContext] = []
     for task_dir in sorted(p for p in patient_dir.iterdir() if p.is_dir()):
         name = task_dir.name
@@ -432,6 +442,7 @@ def _iter_date_dirs(video_dir: Path) -> List[Path]:
 
 
 def _iter_segment_entries(video_dir: Path):
+    """Yield segment IDs with their JSON companions and per-camera MP4s."""
     for date_dir in _iter_date_dirs(video_dir):
         for json_path in sorted(date_dir.glob("*.json")):
             seg_id = json_path.stem
@@ -445,6 +456,7 @@ def _iter_segment_entries(video_dir: Path):
 
 
 def _as_int_list(seq: Optional[Iterable[object]]) -> Optional[List[int]]:
+    """Attempt to convert an iterable to a list of integers."""
     if seq is None:
         return None
     result: List[int] = []
@@ -465,6 +477,7 @@ def _build_cam_json_from_parser(
     *,
     real_times: Optional[List[datetime]] = None,
 ) -> CamJson:
+    """Build a CamJson model from parser data and optional realtime overrides."""
     start_real = None
     try:
         start_real = jp.get_start_realtime()
@@ -503,6 +516,7 @@ def _build_video_from_json(
     ts: Optional[datetime],
     mp4_path: Path,
 ) -> Video:
+    """Construct a Video model enriched with its companion JSON metadata."""
     parsed_real_times = getattr(jp, "_parsed_real_times", None)
     if parsed_real_times is None:
         parsed_real_times = _coerce_real_times(jp.dic.get("real_times"))
@@ -546,12 +560,14 @@ def _build_video_from_json(
 
 
 def _choose_serials(cam_json: CamJson) -> List[int]:
+    """Return the fixed chunk serials for a camera JSON."""
     if not cam_json.fixed_serials:
         raise ValueError("CamJson missing fixed_serials")
     return [int(s) for s in cam_json.fixed_serials]
 
 
 def _choose_frame_ids(cam_json: CamJson) -> List[int]:
+    """Return the normalized frame IDs for a camera JSON."""
     if not cam_json.fixed_reidx_frame_ids:
         raise ValueError("CamJson missing fixed_reidx_frame_ids")
     return [int(f) for f in cam_json.fixed_reidx_frame_ids]
@@ -560,6 +576,7 @@ def _choose_frame_ids(cam_json: CamJson) -> List[int]:
 def _timestamp_to_datetime(
     time_origin: datetime, resolution: float, timestamp: int
 ) -> datetime:
+    """Translate an NSx timestamp tick into an absolute datetime."""
     return ts2unix(time_origin, int(resolution), int(timestamp))
 
 
@@ -682,6 +699,7 @@ def collect_videos_by_time(
 def build_time_clip_plan(
     video: Video, audio_start: datetime, audio_end: datetime
 ) -> Optional[VideoSegmentClipPlan]:
+    """Derive the frame slice that overlaps an audio window for one video."""
     cam_json = video.companion_json
     if cam_json is None:
         return None
@@ -753,6 +771,7 @@ def _build_time_clip_plans_for_camera(
     audio_start: datetime,
     audio_end: datetime,
 ) -> List[VideoSegmentClipPlan]:
+    """Compile clip plans for a camera limited to the audio overlap window."""
     cam_plans: List[VideoSegmentClipPlan] = []
     for video in videos:
         try:
@@ -784,6 +803,7 @@ def _warn_missing_cameras(
     requested: Optional[Set[str]],
     available: Set[str],
 ) -> None:
+    """Warn if requested cameras are absent from the available set."""
     if not requested:
         return
     for cam_serial in sorted({cam for cam in requested if cam not in available}):
@@ -806,6 +826,7 @@ def extract_full_ns5_audio(
     out_path: Path,
     overwrite: bool,
 ) -> tuple[Path, datetime, datetime]:
+    """Export the NS5 room-mic audio and metadata for the task."""
     channel_lookup = {"roommic1": "RoomMic1", "roommic2": "RoomMic2"}
     channel_name = channel_lookup[room_mic.lower()]
     audio = (
@@ -879,6 +900,7 @@ def extract_full_ns5_audio(
 
 
 def build_padding_operations(plan: VideoSegmentClipPlan) -> List[dict]:
+    """Describe how many frames to insert to bridge serial gaps."""
     ops: List[dict] = []
     serials = plan.serials
     frames_local = plan.frame_ids_local
@@ -907,6 +929,7 @@ def pad_video_if_needed(
     clip_path: Path,
     work_dir: Path,
 ) -> Path:
+    """Apply padding operations to a clip when frame gaps exist."""
     ops = build_padding_operations(plan)
     if not ops:
         return clip_path
@@ -958,6 +981,7 @@ def pad_video_if_needed(
 
 
 def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Path:
+    """Trim the source video to the frames described by the clip plan."""
     _ensure_tool("ffmpeg")
     out_dir.mkdir(parents=True, exist_ok=True)
     video = plan.video
@@ -1027,6 +1051,7 @@ def concat_videos(
     *,
     target_fps: Optional[float] = None,
 ) -> Path:
+    """Concatenate clip files into a single MP4, optionally re-encoding."""
     if not clip_paths:
         raise RuntimeError("No clips to merge")
     if len(clip_paths) == 1:
@@ -1088,6 +1113,7 @@ def concat_videos(
 def mux_audio(
     video_path: Path, audio_path: Path, out_path: Path, overwrite: bool
 ) -> Path:
+    """Combine merged video with audio, retiming video if durations differ."""
     _ensure_tool("ffmpeg")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1230,6 +1256,7 @@ def _execute_sync_plan(
     room_mic: str,
     overwrite: bool,
 ) -> bool:
+    """Run clipping, padding, merging, and muxing for a prepared sync plan."""
     if not sync_plan.audio_ready:
         raise RuntimeError("Rough sync requires a prepared audio track")
 
@@ -1374,6 +1401,7 @@ def prepare_rough_sync_plan(
     overwrite: bool,
     rough_offset: Optional[timedelta],
 ) -> Optional[SyncPlan]:
+    """Assemble the clip and audio plan required to run the rough sync pipeline."""
     LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
 
     audio_dir = out_dir / "audio"
@@ -1500,6 +1528,7 @@ def process_task(
     camera_serials: Optional[Set[str]] = None,
     rough_sync_offset: Optional[timedelta] = None,
 ) -> bool:
+    """Execute the rough sync workflow for a stitched task."""
     sync_plan = prepare_rough_sync_plan(
         task,
         video_dir,
@@ -1521,6 +1550,7 @@ def process_task(
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse command-line arguments for the rough sync CLI."""
     parser = argparse.ArgumentParser(description="EMU rough-sync utility")
     parser.add_argument("--patient-dir", type=Path, required=True)
     parser.add_argument("--video-dir", type=Path, required=True)
@@ -1570,6 +1600,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def configure_logging(level: str, log_path: Optional[Path] = None) -> bool:
+    """Configure logging outputs and report whether file logging is active."""
     handlers: List[logging.Handler] = [logging.StreamHandler()]
     file_handler_error: Optional[str] = None
     file_handler_added = False
@@ -1598,6 +1629,7 @@ def configure_logging(level: str, log_path: Optional[Path] = None) -> bool:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI entry point for the EMU rough sync workflow."""
     args = parse_args(argv)
 
     patient_dir = args.patient_dir.resolve()
