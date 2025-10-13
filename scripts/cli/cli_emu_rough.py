@@ -161,6 +161,7 @@ def load_ns5(
     reference_start_timestamp: int,
 ) -> tuple[StitchedNS5, Nsx, datetime, datetime]:
     """Load NS5 metadata using the first chunk NEV as the UTC reference."""
+    LOGGER.debug("Loading NS5 file %s", path)
     parser = Nsx(str(path))
     sample_rate = float(parser.get_sample_resolution())
     if sample_rate <= 0:
@@ -170,6 +171,13 @@ def load_ns5(
     start_utc = reference_time_origin + timedelta(seconds=offset_seconds)
     recording_duration = max(0.0, float(parser.get_recording_duration_s()))
     end_utc = start_utc + timedelta(seconds=recording_duration)
+    LOGGER.debug(
+        "NS5 %s calibrated with start UTC %s and end UTC %s (duration %.2fs)",
+        path.name,
+        start_utc.isoformat(),
+        end_utc.isoformat(),
+        recording_duration,
+    )
 
     def _load_channel(channel_name: str) -> RoomAudio:
         try:
@@ -243,6 +251,7 @@ def discover_task_contexts(
         if keywords and not any(kw.lower() in task_id.lower() for kw in keywords):
             LOGGER.debug("Skipping task %s (keyword filter)", task_id)
             continue
+        LOGGER.debug("Inspecting task directory %s", task_dir)
 
         nev_path = _find_nsp1_file(task_dir, "nev")
         ns5_path = _find_nsp1_file(task_dir, "ns5")
@@ -260,6 +269,13 @@ def discover_task_contexts(
             first_nev_parser = Nev(str(first_nev_path))
             reference_origin = first_nev_parser.get_time_origin()
             reference_start_ts = int(first_nev_parser.get_start_timestamp())
+            LOGGER.debug(
+                "Resolved first chunk NEV for %s: %s (origin=%s start_ts=%d)",
+                task_id,
+                first_nev_path,
+                reference_origin.isoformat(),
+                reference_start_ts,
+            )
         except Exception as exc:
             LOGGER.error("Failed to resolve first NEV for %s: %s", task_id, exc)
             continue
@@ -285,6 +301,12 @@ def discover_task_contexts(
                 ns5_start_utc=ns5_start_utc,
                 ns5_end_utc=ns5_end_utc,
             )
+        )
+        LOGGER.debug(
+            "Task %s ready (NS5 window %s -> %s)",
+            task_id,
+            ns5_start_utc.isoformat(),
+            ns5_end_utc.isoformat(),
         )
 
     LOGGER.info("Built %d stitched task context(s) from %s", len(contexts), patient_dir)
@@ -475,6 +497,12 @@ def collect_videos_by_time(
         {c.strip() for c in camera_filter} if camera_filter else None
     )
     matches: Dict[str, List[Video]] = defaultdict(list)
+    LOGGER.debug(
+        "Scanning videos between %s and %s (filter=%s)",
+        window_start.isoformat(),
+        window_end.isoformat(),
+        sorted(allowed) if allowed else "ALL",
+    )
 
     def classify_segment(
         seg_id: str,
@@ -561,6 +589,13 @@ def collect_videos_by_time(
             if end_rt < window_start or start_rt > window_end:
                 continue
             matches[cam_serial].append(video)
+            LOGGER.debug(
+                "Queued segment %s cam %s (start=%s end=%s)",
+                seg_id,
+                cam_serial,
+                start_rt.isoformat(),
+                end_rt.isoformat(),
+            )
 
     for cam_serial, videos in matches.items():
         videos.sort(
@@ -714,6 +749,12 @@ def extract_full_ns5_audio(
     audio = task.ns5.room_mic1 if channel_name == "RoomMic1" else task.ns5.room_mic2
     if audio.raw_array is None:
         raise RuntimeError(f"Room audio {channel_name} unavailable in NS5")
+    LOGGER.debug(
+        "Extracting NS5 audio for task %s mic %s -> %s",
+        task.task_id,
+        channel_name,
+        out_path,
+    )
 
     sample_rate = float(task.ns5.sample_resolution)
     if sample_rate <= 0:
@@ -763,6 +804,13 @@ def extract_full_ns5_audio(
     metadata_path = out_path.with_suffix(".json")
     if not metadata_path.exists() or overwrite:
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    LOGGER.debug(
+        "Audio export complete (%s) start=%s end=%s samples=%d",
+        out_path,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+        arr.size,
+    )
 
     return out_path, start_dt, end_dt
 
@@ -806,6 +854,7 @@ def pad_video_if_needed(
     ops = build_padding_operations(plan)
     if not ops:
         return clip_path
+    LOGGER.debug("Padding clip %s with %d operations", clip_path.name, len(ops))
 
     padded_dir = work_dir / "padded"
     padded_dir.mkdir(parents=True, exist_ok=True)
@@ -858,6 +907,12 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
     _ensure_tool("ffmpeg")
     out_dir.mkdir(parents=True, exist_ok=True)
     video = plan.video
+    LOGGER.debug(
+        "Clipping %s from frame %d to %d",
+        video.path.name,
+        plan.frame_ids[0],
+        plan.frame_ids[-1],
+    )
     real_times: Optional[Sequence[datetime]] = None
     if video.companion_json and getattr(video.companion_json, "real_times", None):
         existing = video.companion_json.real_times
@@ -1272,6 +1327,12 @@ def prepare_rough_sync_plan(
 ) -> Optional[SyncPlan]:
     """Assemble the clip and audio plan required to run the rough sync pipeline."""
     LOGGER.info("Starting rough sync for %s", task.task_id)
+    LOGGER.debug(
+        "Task %s NS5 window %s -> %s",
+        task.task_id,
+        task.ns5_start_utc.isoformat(),
+        task.ns5_end_utc.isoformat(),
+    )
 
     audio_dir = out_dir / "audio"
     audio_path = audio_dir / f"{task.task_id}-{room_mic}.wav"
@@ -1299,6 +1360,11 @@ def prepare_rough_sync_plan(
         camera_serials,
         set(videos_by_cam.keys()),
     )
+    LOGGER.debug(
+        "Task %s will process cameras: %s",
+        task.task_id,
+        ", ".join(sorted(videos_by_cam.keys())) if videos_by_cam else "none",
+    )
 
     clip_plans_by_cam: Dict[str, List[VideoSegmentClipPlan]] = {}
     for cam_serial, videos in sorted(videos_by_cam.items()):
@@ -1306,6 +1372,12 @@ def prepare_rough_sync_plan(
             continue
         if not videos:
             continue
+        LOGGER.debug(
+            "Building clip plans for task %s camera %s (%d videos)",
+            task.task_id,
+            cam_serial,
+            len(videos),
+        )
         cam_plans = _build_time_clip_plans_for_camera(
             task.task_id,
             cam_serial,
@@ -1481,6 +1553,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         if not result:
             exit_code = 4
+        else:
+            LOGGER.debug("Task %s completed successfully", context.task_id)
     return exit_code
 
 
