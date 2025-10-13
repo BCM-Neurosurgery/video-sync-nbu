@@ -121,57 +121,75 @@ def fill_missing_data(nev_digital_events_df, bit_number: int):
 
 def fill_missing_serials_with_gap(data):
     """
-    Fills in missing chunk serial numbers where the gap is greater than 1.
-    The missing chunks are added with interpolated timestamps between the two existing ones.
+    Fill gaps in chunk serial numbers by interpolating missing rows.
 
-    Parameters:
-    -----------
-    data : list of tuples
-        Each tuple contains (timestamp, chunk_serial, UTCTimeStamp).
+    Parameters
+    ----------
+    data : list[tuple[int, int]] | list[tuple[int, int, datetime]]
+        Ordered (timestamp, chunk_serial) pairs. A third element (UTC datetime)
+        is optional; when present it is interpolated alongside timestamps.
 
-    Returns:
+    Returns
+    -------
+    list[tuple[int, int]] | list[tuple[int, int, datetime]]
+        Input data with evenly spaced rows inserted wherever serial numbers
+        jump by more than one. The tuple shape matches the input.
+
+    Examples
     --------
-    list of tuples
-        The list with the missing chunk serials filled in where appropriate.
+    >>> fill_missing_serials_with_gap([(1, 10), (5, 13)])
+    [(1, 10), (2, 11), (3, 12), (5, 13)]
 
-    Example:
-    --------
-    >>> data = [(5412181557, 21428921, datetime(2024, 7, 26, 20, 30, 25, 509900)),
-                (5412182558, 21428922, datetime(2024, 7, 26, 20, 30, 25, 543267)),
-                (5412184559, 21428925, datetime(2024, 7, 26, 20, 30, 25, 609967))]
-    >>> result = fill_missing_serials_with_gap(data)
-    >>> for row in result:
-    >>>     print(row)
-    (5412181557, 21428921, datetime.datetime(2024, 7, 26, 20, 30, 25, 509900))
-    (5412182558, 21428922, datetime.datetime(2024, 7, 26, 20, 30, 25, 543267))
-    (5412183225, 21428923, datetime.datetime(2024, 7, 26, 20, 30, 25, 565500))
-    (5412183891, 21428924, datetime.datetime(2024, 7, 26, 20, 30, 25, 587733))
-    (5412184559, 21428925, datetime.datetime(2024, 7, 26, 20, 30, 25, 609967))
+    >>> fill_missing_serials_with_gap(
+    ...     [
+    ...         (10, 20, datetime(2024, 7, 26, 20, 30, 25, 509900)),
+    ...         (16, 23, datetime(2024, 7, 26, 20, 30, 25, 609900)),
+    ...     ]
+    ... )
+    [(10, 20, datetime.datetime(2024, 7, 26, 20, 30, 25, 509900)),
+     (12, 21, datetime.datetime(2024, 7, 26, 20, 30, 25, 543233)),
+     (14, 22, datetime.datetime(2024, 7, 26, 20, 30, 25, 576567)),
+     (16, 23, datetime.datetime(2024, 7, 26, 20, 30, 25, 609900))]
     """
+    if not data or len(data) == 1:
+        return data
+
+    tuple_len = len(data[0])
+    if tuple_len not in (2, 3):
+        raise ValueError(
+            "Expected tuples of length 2 or 3: (timestamp, serial[, utc])."
+        )
+
+    if any(len(row) != tuple_len for row in data):
+        raise ValueError("Inconsistent tuple lengths detected in data.")
+
     filled_data = []
 
     for i in range(len(data) - 1):
-        # Append the current tuple to the result list
-        filled_data.append(data[i])
+        current = data[i]
+        nxt = data[i + 1]
+        filled_data.append(current)
 
-        # Calculate the gap between consecutive chunk serial numbers
-        current_serial = data[i][1]
-        next_serial = data[i + 1][1]
+        current_serial = current[1]
+        next_serial = nxt[1]
         gap = next_serial - current_serial
 
-        if gap > 1:
-            # Calculate the time delta between the two timestamps
-            time_delta = data[i + 1][2] - data[i][2]
-            time_tsp_delta = data[i + 1][0] - data[i][0]
+        if gap <= 1:
+            continue
 
-            # Populate missing serials
-            for j in range(1, gap):
-                new_serial = current_serial + j
-                new_timestamp = data[i][2] + (time_delta / gap) * j
-                new_timestp = data[i][0] + (time_tsp_delta // gap) * j
-                filled_data.append((new_timestp, new_serial, new_timestamp))
+        ts_delta = nxt[0] - current[0]
+        utc_delta = None
+        if tuple_len == 3:
+            utc_delta = nxt[2] - current[2]
 
-    # Append the last tuple
+        for j in range(1, gap):
+            new_serial = current_serial + j
+            new_timestamp = current[0] + (ts_delta // gap) * j
+            if tuple_len == 3:
+                new_utc = current[2] + (utc_delta / gap) * j
+                filled_data.append((new_timestamp, new_serial, new_utc))
+            else:
+                filled_data.append((new_timestamp, new_serial))
+
     filled_data.append(data[-1])
-
     return filled_data

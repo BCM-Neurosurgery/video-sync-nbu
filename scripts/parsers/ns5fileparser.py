@@ -89,7 +89,9 @@ class Nsx:
             self.timeStamp, self.timeStamp + num_samples
         )
         channel_df["UTCTimeStamp"] = channel_df["TimeStamp"].apply(
-            lambda x: ts2unix(self.timeOrigin, self.timestampResolution, x)
+            lambda x: ts2unix(
+                self.timeOrigin, self.timestampResolution, x - self.timeStamp
+            )
         )
         # reordering
         channel_df = channel_df[["TimeStamp", "Amplitude", "UTCTimeStamp"]]
@@ -168,7 +170,9 @@ class Nsx:
                 "TimeStamp": timestamps,
                 "Amplitude": sliced_data,
                 "UTCTimeStamp": [
-                    ts2unix(self.timeOrigin, self.timestampResolution, ts)
+                    ts2unix(
+                        self.timeOrigin, self.timestampResolution, ts - self.timeStamp
+                    )
                     for ts in timestamps
                 ],
             }
@@ -219,7 +223,8 @@ class Nsx:
         head_ts = np.arange(ts0, ts0 + head_n)
         if include_utc:
             head_utc = [
-                ts2unix(self.timeOrigin, self.timestampResolution, ts) for ts in head_ts
+                ts2unix(self.timeOrigin, self.timestampResolution, ts - self.timeStamp)
+                for ts in head_ts
             ]
         # Build tail slice
         tail_amp = channel_data[n - tail_n : n] if tail_n > 0 else []
@@ -227,7 +232,8 @@ class Nsx:
         tail_ts = np.arange(tail_ts_start, ts0 + n) if tail_n > 0 else np.array([])
         if include_utc and tail_n > 0:
             tail_utc = [
-                ts2unix(self.timeOrigin, self.timestampResolution, ts) for ts in tail_ts
+                ts2unix(self.timeOrigin, self.timestampResolution, ts - self.timeStamp)
+                for ts in tail_ts
             ]
 
         # Assemble small DataFrames for nice column alignment

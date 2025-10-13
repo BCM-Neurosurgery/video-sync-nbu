@@ -204,10 +204,10 @@ class Nev:
                 nums = [x for x in group["UnparsedData"]]
                 decimal_number = self.bits_to_decimal(nums)
                 timestamp = group["TimeStamps"].iloc[0]
-                unixTime = self.ticks_to_utc_from_anchor(timestamp)
-                results.append((timestamp, decimal_number, unixTime))
+                # unixTime = self.ticks_to_utc_from_anchor(timestamp)
+                results.append((timestamp, decimal_number))
         return pd.DataFrame.from_records(
-            results, columns=["TimeStamps", "chunk_serial", "UTCTimeStamp"]
+            results, columns=["TimeStamps", "chunk_serial"]
         )
 
     def get_chunk_serial_df(self):
@@ -229,11 +229,11 @@ class Nev:
                 nums = [x for x in group["UnparsedData"]]
                 decimal_number = self.bits_to_decimal(nums)
                 timestamp = group["TimeStamps"].iloc[0]
-                unixTime = self.ticks_to_utc_from_anchor(timestamp)
-                results.append((timestamp, decimal_number, unixTime))
+                # unixTime = self.ticks_to_utc_from_anchor(timestamp)
+                results.append((timestamp, decimal_number))
         results = fill_missing_serials_with_gap(results)
         return pd.DataFrame.from_records(
-            results, columns=["TimeStamps", "chunk_serial", "UTCTimeStamp"]
+            results, columns=["TimeStamps", "chunk_serial"]
         )
 
     def has_unparsed_data(self):
