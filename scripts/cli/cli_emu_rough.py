@@ -6,9 +6,9 @@ Self-contained command line utility that performs "rough" alignment of EMU
 recordings when chunk serials are unavailable. The workflow:
 
 1. Discover matching EMU tasks (patient directory + NS5 audio).
-2. Export the full-room NS5 audio for each task and, if a camera-to-NS5 clock
-   offset is supplied, shift the audio window accordingly.
-3. Locate camera segments whose realtime metadata overlaps the audio window and
+2. Export the full-room NS5 audio for each task after calibrating the NS5 UTC
+   origin via the first NEV chunk.
+3. Locate camera segments whose realtime metadata overlaps the NS5 window and
    build clip plans using fixed chunk/frame metadata from the JSON companions.
 4. Clip, pad, merge, and mux the candidate videos with the extracted audio to
    produce per-camera MP4s ready for review.
@@ -27,8 +27,8 @@ import logging
 import math
 import re
 import shutil
-import statistics
 import subprocess
+import sys
 import wave
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,86 +40,17 @@ from scipy.io.wavfile import write as wav_write
 
 from scripts.analysis.video_analysis import FrameIDAnalysisResult, analyze_video
 from scripts.index.filepatterns import FilePatterns
-from scripts.models import CamJson, DIGIEVTS, NEV, NS5, RoomAudio, StitchedTask, Video
+from scripts.models import CamJson, RoomAudio, StitchedNS5, Video
 from scripts.pad.videoplanapplier import apply_video_padding_plan
 from scripts.parsers.jsonfileparser import JsonParser
 from scripts.parsers.nevfileparser import Nev
 from scripts.parsers.ns5fileparser import Nsx
 from scripts.parsers.videofileparser import VideoFileParser
-from scripts.utility.utils import ts2unix
 
 LOGGER = logging.getLogger("cli_emu_rough")
 
-TRIGGER_FPS = 29.97
 _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
-
-
-def _parse_timedelta_arg(value: object) -> timedelta:
-    """Return a timedelta parsed from CLI input.
-
-    Accepts actual ``timedelta`` instances, numeric seconds, or strings in the
-    form ``[[±]HH:]MM:SS[.ffffff]``. A plain seconds value (e.g. ``1.5``) is
-    also supported. Raises ``ArgumentTypeError`` on parse failure.
-    """
-
-    if isinstance(value, timedelta):
-        return value
-
-    if isinstance(value, (int, float)):
-        return timedelta(seconds=float(value))
-
-    if not isinstance(value, str):
-        raise argparse.ArgumentTypeError(
-            f"Cannot interpret offset value of type {type(value).__name__}"
-        )
-
-    text = value.strip()
-    if not text:
-        raise argparse.ArgumentTypeError("Offset value cannot be empty")
-
-    sign = 1
-    if text[0] in "+-":
-        if text[0] == "-":
-            sign = -1
-        text = text[1:].strip()
-    if not text:
-        raise argparse.ArgumentTypeError("Offset value cannot be empty")
-
-    # Allow strings produced by timedelta.__str__ (e.g. '1 day, 2:03:04')
-    if "day" in text:
-        try:
-            days_part, time_part = text.split(",", 1)
-            days = int(days_part.split()[0])
-            text = time_part.strip()
-        except Exception as exc:
-            raise argparse.ArgumentTypeError(
-                f"Could not parse offset '{value}'"
-            ) from exc
-        base = timedelta(days=days)
-    else:
-        base = timedelta(0)
-
-    parts = text.split(":")
-    try:
-        if len(parts) == 1:
-            seconds = float(parts[0])
-            delta = timedelta(seconds=seconds)
-        elif len(parts) == 2:
-            minutes = int(parts[0])
-            seconds = float(parts[1])
-            delta = timedelta(minutes=minutes, seconds=seconds)
-        elif len(parts) == 3:
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            seconds = float(parts[2])
-            delta = timedelta(hours=hours, minutes=minutes, seconds=seconds)
-        else:
-            raise ValueError("Too many ':' separators")
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"Could not parse offset '{value}'") from exc
-
-    return (base + delta) * sign
 
 
 @dataclass(frozen=True)
@@ -136,11 +67,16 @@ class VideoSegmentClipPlan:
 
 @dataclass
 class TaskContext:
-    """Bundle that holds the stitched models and open parsers for a task."""
+    """Bundle task identity, NS5 media, and calibrated UTC bounds."""
 
-    stitched: StitchedTask
-    nev_parser: Optional[Nev]
+    patient_id: str
+    task_id: str
+    ns5: StitchedNS5
     nsx_parser: Nsx
+    stitched_nev_path: Path
+    first_nev_path: Path
+    ns5_start_utc: datetime
+    ns5_end_utc: datetime
 
 
 @dataclass
@@ -197,24 +133,6 @@ def _coerce_real_times(values: Optional[Sequence[object]]) -> Optional[List[date
     return parsed
 
 
-def _estimate_frame_interval(real_times: Sequence[datetime]) -> float:
-    """Return the median positive spacing between realtime samples."""
-    deltas = [
-        (curr - prev).total_seconds() for prev, curr in zip(real_times, real_times[1:])
-    ]
-    positives = [delta for delta in deltas if delta > 0]
-    if not positives:
-        return 1.0 / TRIGGER_FPS
-    return statistics.median(positives)
-
-
-def _infer_sample_rate(sample_resolution: float) -> int:
-    """Convert NSx sample resolution ticks into an integer sample rate."""
-    if sample_resolution <= 0:
-        return 0
-    return int(round(float(sample_resolution)))
-
-
 def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
     """Return the first NSP-1 file with the requested extension in a task."""
     pattern = f"*NSP-1.{ext}"
@@ -236,70 +154,34 @@ def _find_nsp1_file(task_dir: Path, ext: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
-def load_nev(path: Path) -> tuple[NEV, Nev]:
-    """Load NEV metadata and return it alongside the open parser."""
-    parser = Nev(str(path))
-    data = parser.get_data()
-    raw_events = data.get("digital_events") if isinstance(data, dict) else None
-    raw_df = parser.get_digital_events_df()
-    chunk_df = parser.get_chunk_serial_df() if parser.has_unparsed_data() else None
-
-    start_serial = None
-    end_serial = None
-    start_ts = None
-    end_ts = None
-    if chunk_df is not None and not chunk_df.empty:
-        start_serial = int(chunk_df["chunk_serial"].iloc[0])
-        end_serial = int(chunk_df["chunk_serial"].iloc[-1])
-        start_ts = int(chunk_df["TimeStamps"].iloc[0])
-        end_ts = int(chunk_df["TimeStamps"].iloc[-1])
-
-    digital_events = DIGIEVTS(
-        raw=raw_events,
-        raw_df=raw_df,
-        chunk_serial_df=chunk_df,
-        start_serial=start_serial,
-        end_serial=end_serial,
-        start_timestamp=start_ts,
-        end_timestamp=end_ts,
-    )
-
-    basic_header = parser.get_basic_header()
-    sample_resolution = float(
-        basic_header.get("SampleTimeResolution", parser.get_timestampResolution())
-    )
-    duration_sec = (parser.get_end_timestamp() - parser.get_start_timestamp()) / float(
-        parser.get_timestampResolution()
-    )
-
-    nev_model = NEV(
-        path=path,
-        start_utc_time=parser.get_time_origin(),
-        sample_resolution=sample_resolution,
-        duration=duration_sec,
-        digital_events=digital_events,
-    )
-    return nev_model, parser
-
-
-def load_ns5(path: Path) -> tuple[NS5, Nsx]:
-    """Load NS5 metadata and return it alongside the open parser."""
+def load_ns5(
+    path: Path,
+    *,
+    reference_time_origin: datetime,
+    reference_start_timestamp: int,
+) -> tuple[StitchedNS5, Nsx, datetime, datetime]:
+    """Load NS5 metadata using the first chunk NEV as the UTC reference."""
     parser = Nsx(str(path))
-    sample_resolution = float(parser.get_sample_resolution())
-    sample_rate = _infer_sample_rate(sample_resolution)
+    sample_rate = float(parser.get_sample_resolution())
+    if sample_rate <= 0:
+        raise RuntimeError("NS5 sample resolution must be positive")
     start_ts = int(parser.get_start_timestamp())
+    offset_seconds = (start_ts - reference_start_timestamp) / float(sample_rate)
+    start_utc = reference_time_origin + timedelta(seconds=offset_seconds)
+    recording_duration = max(0.0, float(parser.get_recording_duration_s()))
+    end_utc = start_utc + timedelta(seconds=recording_duration)
 
     def _load_channel(channel_name: str) -> RoomAudio:
         try:
             channel_array = parser.get_channel_array(channel_name)
             arr = np.asarray(channel_array)
             num_samples = int(arr.shape[0])
-            end_ts = start_ts + max(0, num_samples - 1)
+            channel_end_ts = start_ts + max(0, num_samples - 1)
             duration = num_samples / sample_rate if sample_rate else None
             return RoomAudio(
                 raw_array=arr,
                 start_timestamp=start_ts,
-                end_timestamp=end_ts,
+                end_timestamp=channel_end_ts,
                 duration=duration,
             )
         except Exception as exc:  # pragma: no cover - defensive
@@ -313,88 +195,96 @@ def load_ns5(path: Path) -> tuple[NS5, Nsx]:
                 duration=None,
             )
 
-    ns5_model = NS5(
+    ns5_model = StitchedNS5(
         path=path,
-        start_utc_time=parser.get_timeOrigin(),
-        sample_resolution=sample_resolution,
-        duration=float(parser.get_recording_duration_s()),
+        start_utc_time=start_utc,
+        sample_resolution=sample_rate,
+        duration=recording_duration,
         room_mic1=_load_channel("RoomMic1"),
         room_mic2=_load_channel("RoomMic2"),
     )
-    return ns5_model, parser
+    return ns5_model, parser, start_utc, end_utc
 
 
-def _build_placeholder_nev(nev_path: Path) -> NEV:
-    """Create a minimal NEV model when no real NEV file is available."""
-    placeholder_events = DIGIEVTS(
-        raw=None,
-        raw_df=None,
-        chunk_serial_df=None,
-        start_serial=None,
-        end_serial=None,
-        start_timestamp=None,
-        end_timestamp=None,
+def _resolve_first_chunk_nev(stitched_nev: Path) -> Path:
+    """Return the path to the first chunk NEV for a stitched NEV."""
+    script = (
+        Path(__file__).resolve().parent.parent
+        / "dj"
+        / "find_first_nev_from_stitched.py"
     )
-    return NEV(
-        path=nev_path,
-        start_utc_time=datetime.min,
-        sample_resolution=0.0,
-        duration=0.0,
-        digital_events=placeholder_events,
+    if not script.exists():
+        raise FileNotFoundError(
+            f"find_first_nev_from_stitched.py not found at {script}"
+        )
+    proc = subprocess.run(
+        [sys.executable, str(script), str(stitched_nev)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
+    if proc.returncode != 0:
+        message = proc.stderr.strip() or "unknown error"
+        raise RuntimeError(f"find_first_nev_from_stitched failed: {message}")
+    output = proc.stdout.strip()
+    if not output:
+        raise RuntimeError("find_first_nev_from_stitched returned no path")
+    return Path(output)
 
 
 def discover_task_contexts(
     patient_dir: Path,
     keywords: Optional[Sequence[str]],
-    *,
-    require_nev: bool,
 ) -> List[TaskContext]:
-    """Discover stitched task contexts under a patient directory."""
+    """Discover NS5 tasks and calibrate their UTC range via the first NEV chunk."""
     contexts: List[TaskContext] = []
     for task_dir in sorted(p for p in patient_dir.iterdir() if p.is_dir()):
-        name = task_dir.name
-        if keywords and not any(kw.lower() in name.lower() for kw in keywords):
-            LOGGER.debug("Skipping task %s (keyword filter)", name)
+        task_id = task_dir.name
+        if keywords and not any(kw.lower() in task_id.lower() for kw in keywords):
+            LOGGER.debug("Skipping task %s (keyword filter)", task_id)
             continue
 
         nev_path = _find_nsp1_file(task_dir, "nev")
         ns5_path = _find_nsp1_file(task_dir, "ns5")
-        if require_nev and (not nev_path or not ns5_path):
+        if not nev_path or not ns5_path:
             LOGGER.warning(
-                "Missing NEV/NS5 in %s (nev=%s, ns5=%s)",
-                name,
+                "Skipping %s: missing stitched NEV (%s) or NS5 (%s)",
+                task_id,
                 bool(nev_path),
                 bool(ns5_path),
             )
             continue
-        if not ns5_path:
-            LOGGER.warning("Missing NS5 in %s; skipping", name)
+
+        try:
+            first_nev_path = _resolve_first_chunk_nev(nev_path)
+            first_nev_parser = Nev(str(first_nev_path))
+            reference_origin = first_nev_parser.get_time_origin()
+            reference_start_ts = int(first_nev_parser.get_start_timestamp())
+        except Exception as exc:
+            LOGGER.error("Failed to resolve first NEV for %s: %s", task_id, exc)
             continue
 
         try:
-            if require_nev:
-                if not nev_path:
-                    LOGGER.warning("Missing NEV for %s; skipping", name)
-                    continue
-                nev_model, nev_parser = load_nev(nev_path)
-            else:
-                placeholder_path = nev_path if nev_path else task_dir / f"{name}.nev"
-                nev_model = _build_placeholder_nev(placeholder_path)
-                nev_parser = None
-            ns5_model, nsx_parser = load_ns5(ns5_path)
-        except Exception as exc:  # pragma: no cover - I/O heavy
-            LOGGER.error("Failed loading task %s: %s", name, exc)
+            ns5_model, nsx_parser, ns5_start_utc, ns5_end_utc = load_ns5(
+                ns5_path,
+                reference_time_origin=reference_origin,
+                reference_start_timestamp=reference_start_ts,
+            )
+        except Exception as exc:
+            LOGGER.error("Failed loading NS5 for %s: %s", task_id, exc)
             continue
 
-        stitched = StitchedTask(
-            patient_id=patient_dir.name,
-            task_id=name,
-            nsp1_nev=nev_model,
-            nsp1_ns5=ns5_model,
-        )
         contexts.append(
-            TaskContext(stitched=stitched, nev_parser=nev_parser, nsx_parser=nsx_parser)
+            TaskContext(
+                patient_id=patient_dir.name,
+                task_id=task_id,
+                ns5=ns5_model,
+                nsx_parser=nsx_parser,
+                stitched_nev_path=nev_path,
+                first_nev_path=first_nev_path,
+                ns5_start_utc=ns5_start_utc,
+                ns5_end_utc=ns5_end_utc,
+            )
         )
 
     LOGGER.info("Built %d stitched task context(s) from %s", len(contexts), patient_dir)
@@ -573,20 +463,13 @@ def _choose_frame_ids(cam_json: CamJson) -> List[int]:
     return [int(f) for f in cam_json.fixed_reidx_frame_ids]
 
 
-def _timestamp_to_datetime(
-    time_origin: datetime, resolution: float, timestamp: int
-) -> datetime:
-    """Translate an NSx timestamp tick into an absolute datetime."""
-    return ts2unix(time_origin, int(resolution), int(timestamp))
-
-
 def collect_videos_by_time(
     video_dir: Path,
-    audio_start: datetime,
-    audio_end: datetime,
+    window_start: datetime,
+    window_end: datetime,
     camera_filter: Optional[Set[str]] = None,
 ) -> Dict[str, List[Video]]:
-    """Group videos by camera whose realtime span overlaps the audio window."""
+    """Group videos by camera whose realtime span overlaps the target window."""
 
     allowed: Optional[Set[str]] = (
         {c.strip() for c in camera_filter} if camera_filter else None
@@ -604,10 +487,10 @@ def collect_videos_by_time(
                 seg_id,
             )
             return "skip"
-        if end_rt < audio_start:
+        if end_rt < window_start:
             LOGGER.debug("Segment %s ends before audio window; skipping.", seg_id)
             return "before"
-        if start_rt > audio_end:
+        if start_rt > window_end:
             LOGGER.debug("Segment %s starts after audio window; stopping scan.", seg_id)
             return "after"
         return "include"
@@ -675,14 +558,14 @@ def collect_videos_by_time(
                     cam_serial,
                 )
                 continue
-            if end_rt < audio_start or start_rt > audio_end:
+            if end_rt < window_start or start_rt > window_end:
                 continue
             matches[cam_serial].append(video)
 
     for cam_serial, videos in matches.items():
         videos.sort(
             key=lambda v: (
-                v.start_realtime or v.timestamp or audio_start,
+                v.start_realtime or v.timestamp or window_start,
                 v.path.name,
             )
         )
@@ -690,8 +573,8 @@ def collect_videos_by_time(
     LOGGER.info(
         "Found videos for %d camera(s) overlapping %s-%s",
         len(matches),
-        audio_start,
-        audio_end,
+        window_start,
+        window_end,
     )
     return matches
 
@@ -729,9 +612,8 @@ def build_time_clip_plan(
     if total_frames == 0:
         return None
 
-    frame_interval = max(1e-6, _estimate_frame_interval(real_times_seq))
     video_start_time = real_times_seq[0]
-    video_end_time = real_times_seq[-1] + timedelta(seconds=frame_interval)
+    video_end_time = real_times_seq[-1]
     if audio_end <= video_start_time or audio_start >= video_end_time:
         return None
 
@@ -829,15 +711,11 @@ def extract_full_ns5_audio(
     """Export the NS5 room-mic audio and metadata for the task."""
     channel_lookup = {"roommic1": "RoomMic1", "roommic2": "RoomMic2"}
     channel_name = channel_lookup[room_mic.lower()]
-    audio = (
-        task.stitched.nsp1_ns5.room_mic1
-        if channel_name == "RoomMic1"
-        else task.stitched.nsp1_ns5.room_mic2
-    )
+    audio = task.ns5.room_mic1 if channel_name == "RoomMic1" else task.ns5.room_mic2
     if audio.raw_array is None:
         raise RuntimeError(f"Room audio {channel_name} unavailable in NS5")
 
-    sample_rate = _infer_sample_rate(task.stitched.nsp1_ns5.sample_resolution)
+    sample_rate = float(task.ns5.sample_resolution)
     if sample_rate <= 0:
         raise RuntimeError("Invalid NS5 sample rate")
 
@@ -856,12 +734,11 @@ def extract_full_ns5_audio(
         else start_ts + max(0, arr.size - 1)
     )
 
-    start_dt = _timestamp_to_datetime(
-        nsx.get_timeOrigin(), nsx.timestampResolution, start_ts
-    )
-    end_dt = _timestamp_to_datetime(
-        nsx.get_timeOrigin(), nsx.timestampResolution, end_ts
-    )
+    ns5_start_ts = int(nsx.get_start_timestamp())
+    start_offset = (start_ts - ns5_start_ts) / float(sample_rate)
+    end_offset = (end_ts - ns5_start_ts) / float(sample_rate)
+    start_dt = task.ns5_start_utc + timedelta(seconds=start_offset)
+    end_dt = task.ns5_start_utc + timedelta(seconds=end_offset)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not out_path.exists() or overwrite:
@@ -869,8 +746,8 @@ def extract_full_ns5_audio(
 
     duration_seconds = float(arr.size) / float(sample_rate)
     metadata = {
-        "patient_id": task.stitched.patient_id,
-        "task_id": task.stitched.task_id,
+        "patient_id": task.patient_id,
+        "task_id": task.task_id,
         "room_mic": room_mic,
         "channel_name": channel_name,
         "sample_rate_hz": int(sample_rate),
@@ -880,12 +757,8 @@ def extract_full_ns5_audio(
         "end_timestamp_ticks": int(end_ts),
         "start_time_utc": start_dt.isoformat(),
         "end_time_utc": end_dt.isoformat(),
-        "original_start_time_utc": start_dt.isoformat(),
-        "original_end_time_utc": end_dt.isoformat(),
-        "offset_applied_ms": 0,
-        "offset_definition": "camera_clock_minus_ns5_clock",
         "audio_path": str(out_path),
-        "ns5_path": str(task.stitched.nsp1_ns5.path),
+        "ns5_path": str(task.ns5.path),
     }
     metadata_path = out_path.with_suffix(".json")
     if not metadata_path.exists() or overwrite:
@@ -995,12 +868,9 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
 
     fps = float(video.frame_rate or 0.0)
     if fps <= 0:
-        if real_times:
-            fps = 1.0 / max(1e-6, _estimate_frame_interval(real_times))
-        else:
-            raise ValueError(
-                f"Video {video.path} missing frame rate and realtime metadata for clipping"
-            )
+        raise ValueError(
+            f"Video {video.path} missing frame rate and realtime metadata for clipping"
+        )
 
     start_frame = int(plan.frame_ids[0])
     end_frame = int(plan.frame_ids[-1])
@@ -1335,14 +1205,14 @@ def _execute_sync_plan(
         if not clip_paths:
             LOGGER.error(
                 "No successfully prepared clips for %s camera %s (rough mode)",
-                task.stitched.task_id,
+                task.task_id,
                 cam_serial,
             )
             continue
 
         work_dir.mkdir(parents=True, exist_ok=True)
         clip_metadata_doc = {
-            "task_id": task.stitched.task_id,
+            "task_id": task.task_id,
             "mode": sync_plan.mode,
             "cam_serial": cam_serial,
             "audio_path": str(sync_plan.audio_path),
@@ -1362,7 +1232,7 @@ def _execute_sync_plan(
         except Exception as exc:
             LOGGER.error(
                 "Video concat failed for %s camera %s (rough mode): %s",
-                task.stitched.task_id,
+                task.task_id,
                 cam_serial,
                 exc,
             )
@@ -1370,13 +1240,13 @@ def _execute_sync_plan(
 
         synced_dir = cam_dir / "synced_video"
         synced_dir.mkdir(parents=True, exist_ok=True)
-        final_path = synced_dir / f"{task.stitched.task_id}_{cam_serial}.mp4"
+        final_path = synced_dir / f"{task.task_id}_{cam_serial}.mp4"
         try:
             mux_audio(merged_video, sync_plan.audio_path, final_path, overwrite)
         except Exception as exc:
             LOGGER.error(
                 "Mux failed for %s camera %s (rough mode): %s",
-                task.stitched.task_id,
+                task.task_id,
                 cam_serial,
                 exc,
             )
@@ -1399,92 +1269,32 @@ def prepare_rough_sync_plan(
     room_mic: str,
     camera_serials: Optional[Set[str]],
     overwrite: bool,
-    rough_offset: Optional[timedelta],
 ) -> Optional[SyncPlan]:
     """Assemble the clip and audio plan required to run the rough sync pipeline."""
-    LOGGER.info("Starting rough sync for %s", task.stitched.task_id)
+    LOGGER.info("Starting rough sync for %s", task.task_id)
 
     audio_dir = out_dir / "audio"
-    audio_path = audio_dir / f"{task.stitched.task_id}-{room_mic}.wav"
+    audio_path = audio_dir / f"{task.task_id}-{room_mic}.wav"
     try:
-        audio_path, raw_audio_start, raw_audio_end = extract_full_ns5_audio(
+        audio_path, audio_start, audio_end = extract_full_ns5_audio(
             task, room_mic, audio_path, overwrite
         )
     except Exception as exc:
-        LOGGER.error(
-            "Audio extraction (rough) failed for %s: %s", task.stitched.task_id, exc
-        )
+        LOGGER.error("Audio extraction (rough) failed for %s: %s", task.task_id, exc)
         return None
 
-    audio_start = raw_audio_start
-    audio_end = raw_audio_end
-
-    offset_delta = rough_offset or timedelta(0)
-    if offset_delta:
-        adjusted_start = audio_start + offset_delta
-        adjusted_end = audio_end + offset_delta
-        if adjusted_end <= adjusted_start:
-            LOGGER.error(
-                (
-                    "Rough sync offset %s collapses audio window for %s "
-                    "(adjusted %s -> %s)"
-                ),
-                offset_delta,
-                task.stitched.task_id,
-                adjusted_start,
-                adjusted_end,
-            )
-            return None
-        LOGGER.info(
-            (
-                "Applying rough sync offset (camera - NS5) of %s "
-                "(adjusted audio window: %s -> %s)"
-            ),
-            offset_delta,
-            adjusted_start,
-            adjusted_end,
-        )
-        audio_start = adjusted_start
-        audio_end = adjusted_end
-
-    metadata_path = audio_path.with_suffix(".json")
-    offset_ms = int(round(offset_delta.total_seconds() * 1000))
-    if metadata_path.exists():
-        try:
-            metadata_doc = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except Exception as exc:  # pragma: no cover - best effort logging update
-            LOGGER.debug(
-                "Failed to update audio metadata for %s: %s",
-                task.stitched.task_id,
-                exc,
-            )
-        else:
-            metadata_doc.setdefault(
-                "original_start_time_utc", raw_audio_start.isoformat()
-            )
-            metadata_doc.setdefault("original_end_time_utc", raw_audio_end.isoformat())
-            metadata_doc["start_time_utc"] = audio_start.isoformat()
-            metadata_doc["end_time_utc"] = audio_end.isoformat()
-            metadata_doc["adjusted_start_time_utc"] = audio_start.isoformat()
-            metadata_doc["adjusted_end_time_utc"] = audio_end.isoformat()
-            metadata_doc["offset_applied_ms"] = offset_ms
-            metadata_doc["offset_definition"] = "camera_clock_minus_ns5_clock"
-            metadata_path.write_text(
-                json.dumps(metadata_doc, indent=2), encoding="utf-8"
-            )
-
     videos_by_cam = collect_videos_by_time(
-        video_dir, audio_start, audio_end, camera_serials
+        video_dir, task.ns5_start_utc, task.ns5_end_utc, camera_serials
     )
     if not videos_by_cam:
         LOGGER.warning(
             "No videos overlap NS5 audio window for %s (rough mode)",
-            task.stitched.task_id,
+            task.task_id,
         )
         return None
 
     _warn_missing_cameras(
-        task.stitched.task_id,
+        task.task_id,
         "rough",
         camera_serials,
         set(videos_by_cam.keys()),
@@ -1497,7 +1307,7 @@ def prepare_rough_sync_plan(
         if not videos:
             continue
         cam_plans = _build_time_clip_plans_for_camera(
-            task.stitched.task_id,
+            task.task_id,
             cam_serial,
             videos,
             audio_start,
@@ -1526,7 +1336,6 @@ def process_task(
     room_mic: str,
     overwrite: bool,
     camera_serials: Optional[Set[str]] = None,
-    rough_sync_offset: Optional[timedelta] = None,
 ) -> bool:
     """Execute the rough sync workflow for a stitched task."""
     sync_plan = prepare_rough_sync_plan(
@@ -1536,7 +1345,6 @@ def process_task(
         room_mic,
         camera_serials,
         overwrite,
-        rough_sync_offset,
     )
     if not sync_plan:
         return False
@@ -1568,17 +1376,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help=(
             "Camera serial to process (repeat for multiple). If omitted, all cameras are synced."
-        ),
-    )
-    parser.add_argument(
-        "--rough-sync-offset",
-        type=_parse_timedelta_arg,
-        default=None,
-        metavar="OFFSET",
-        help=(
-            "Timedelta describing camera clock minus NS5 clock. "
-            "Accepts values like '1:23:45.678' or '-30.5'. "
-            "Positive values shift audio later in time; negative values shift it earlier."
         ),
     )
     parser.add_argument(
@@ -1641,8 +1438,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if configure_logging(args.log_level, log_path):
         LOGGER.info("Log file: %s", log_path)
 
-    rough_sync_offset: Optional[timedelta] = args.rough_sync_offset
-
     if not patient_dir.is_dir():
         LOGGER.error("Patient dir not found: %s", patient_dir)
         return 2
@@ -1660,7 +1455,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     contexts = discover_task_contexts(
         patient_dir,
         args.keywords,
-        require_nev=False,
     )
     if not contexts:
         LOGGER.error("No stitched tasks discovered.")
@@ -1674,9 +1468,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     exit_code = 0
     for context in contexts:
-        task_out_dir = out_dir / context.stitched.patient_id / context.stitched.task_id
+        task_out_dir = out_dir / context.patient_id / context.task_id
         task_out_dir.mkdir(parents=True, exist_ok=True)
-        LOGGER.info("Processing task %s", context.stitched.task_id)
+        LOGGER.info("Processing task %s", context.task_id)
         result = process_task(
             context,
             video_dir=video_dir,
@@ -1684,7 +1478,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             room_mic=args.room_mic,
             overwrite=args.overwrite,
             camera_serials=camera_serials,
-            rough_sync_offset=rough_sync_offset,
         )
         if not result:
             exit_code = 4
