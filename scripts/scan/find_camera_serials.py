@@ -16,9 +16,9 @@ The script expects a directory structure that looks like::
                     segment_*.json
 
 For each patient directory matching ``Y*Datafile`` the tool gathers every JSON
-within ``VIDEO/YYYYMMDD`` folders, samples ``k`` of them (default 5), and
-reports the camera serials observed. Results are written to a single JSON file
-containing per-patient summaries.
+within ``VIDEO/YYYYMMDD`` folders, takes the first ``k`` it encounters (default
+5), and reports the camera serials observed. Results are written to a single
+JSON file containing per-patient summaries.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import random
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +38,8 @@ LOGGER = logging.getLogger(__name__)
 
 DATE_DIR_RE = re.compile(r"\d{8}")
 PATIENT_DIR_RE = re.compile(r"^Y.*Datafile$")
+
+__all__ = ["find_shared_camera_serials"]
 
 
 @dataclass
@@ -70,13 +72,7 @@ class PatientSummary:
 
     @property
     def shared_serials(self) -> List[str]:
-        shared: Optional[Set[str]] = None
-        for entry in self.sampled_jsons:
-            if shared is None:
-                shared = set(entry.serials)
-            else:
-                shared &= set(entry.serials)
-        return sorted(shared) if shared else []
+        return compute_shared_camera_serials(self.sampled_jsons)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -96,6 +92,20 @@ class PatientSummary:
         }
 
 
+def compute_shared_camera_serials(samples: Sequence[SampledJson]) -> List[str]:
+    """Return sorted camera serials shared across every sampled JSON entry."""
+    shared: Optional[Set[str]] = None
+    for entry in samples:
+        current = set(entry.serials)
+        if shared is None:
+            shared = current
+        else:
+            shared &= current
+        if not shared:
+            break
+    return sorted(shared) if shared else []
+
+
 def iter_patient_dirs(root_dir: Path) -> Iterable[Path]:
     """Yield patient directories that follow the ``Y*Datafile`` pattern."""
     for child in sorted(root_dir.iterdir()):
@@ -104,29 +114,36 @@ def iter_patient_dirs(root_dir: Path) -> Iterable[Path]:
             yield child
 
 
-def sample_json_paths(video_dir: Path, sample_size: int) -> tuple[int, List[Path]]:
-    """
-    Reservoir-sample JSON paths beneath VIDEO/YYYYMMDD folders.
-
-    Returns the total number of JSON files discovered along with the sampled
-    subset (at most ``sample_size`` entries). This avoids the memory hit of
-    materialising every path when directories contain thousands of files.
-    """
-    reservoir: List[Path] = []
-    total = 0
+def iter_video_json_paths(video_dir: Path) -> Iterable[Path]:
+    """Yield JSON companion paths within the VIDEO directory hierarchy."""
     for date_dir in sorted(video_dir.iterdir()):
         if not date_dir.is_dir() or not DATE_DIR_RE.fullmatch(date_dir.name):
             continue
         LOGGER.debug("Scanning date folder %s", date_dir)
-        for json_path in sorted(date_dir.glob("*.json")):
-            total += 1
-            if len(reservoir) < sample_size:
-                reservoir.append(json_path)
-            else:
-                idx = random.randint(0, total - 1)
-                if idx < sample_size:
-                    reservoir[idx] = json_path
-    return total, reservoir
+        with os.scandir(date_dir) as entries:
+            for entry in entries:
+                if entry.is_file() and entry.name.endswith(".json"):
+                    yield Path(entry.path)
+
+
+def sample_json_paths(video_dir: Path, sample_size: int) -> tuple[int, List[Path]]:
+    """
+    Collect up to ``sample_size`` JSON paths beneath VIDEO/YYYYMMDD folders.
+
+    Returns the total number of JSON files discovered along with the sampled
+    subset (at most ``sample_size`` entries). Files are returned in the order
+    discovered while traversing the dated subdirectories.
+    """
+    if sample_size <= 0:
+        return 0, []
+
+    sampled: List[Path] = []
+    total = 0
+    for json_path in iter_video_json_paths(video_dir):
+        total += 1
+        if len(sampled) < sample_size:
+            sampled.append(json_path)
+    return total, sampled
 
 
 def parse_camera_serials(json_path: Path) -> SampledJson:
@@ -172,11 +189,64 @@ def summarize_patient_jsons(
         len(sampled_entries),
     )
 
-    return PatientSummary(
+    summary = PatientSummary(
         patient_id=patient_dir.name,
         total_json_count=total_jsons,
         sampled_jsons=sampled_entries,
     )
+    LOGGER.debug(
+        "Patient %s shared serials: %s",
+        patient_dir.name,
+        ", ".join(summary.shared_serials) or "None",
+    )
+    return summary
+
+
+def find_shared_camera_serials(
+    video_dir: Path | str, sample_size: int = 5, seed: Optional[int] = None
+) -> List[str]:
+    """
+    Sample JSON companions within a VIDEO directory and return shared serials.
+
+    Parameters
+    ----------
+    video_dir : Path or str
+        VIDEO directory containing YYYYMMDD subfolders with JSON assets.
+    sample_size : int, default 5
+        Number of JSON files to sample when computing shared camera serials.
+    seed : Optional[int]
+        Retained for backward compatibility; sampling now uses the first
+        ``sample_size`` files and this parameter is ignored.
+
+    Returns
+    -------
+    list of str
+        Sorted list of camera serials common to every sampled JSON. Returns an
+        empty list if no JSON files are available or no serials overlap.
+    """
+    video_path = Path(video_dir).expanduser().resolve()
+    if not video_path.is_dir():
+        raise FileNotFoundError(f"VIDEO directory not found: {video_path}")
+    if sample_size <= 0:
+        raise ValueError("sample_size must be a positive integer")
+
+    if seed is not None:
+        LOGGER.debug(
+            "Seed argument ignored for find_shared_camera_serials; using first %d file(s).",
+            sample_size,
+        )
+    total_jsons, sample_paths = sample_json_paths(video_path, sample_size)
+    LOGGER.debug(
+        "find_shared_camera_serials: %s total=%d sampled=%d",
+        video_path,
+        total_jsons,
+        len(sample_paths),
+    )
+    if total_jsons == 0 or not sample_paths:
+        return []
+
+    samples = [parse_camera_serials(path) for path in sample_paths]
+    return compute_shared_camera_serials(samples)
 
 
 def write_master_summary(
@@ -221,7 +291,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--seed",
         type=int,
         default=None,
-        help="Optional random seed for deterministic sampling.",
+        help="Deprecated; retained for compatibility and ignored by the scanner.",
     )
     parser.add_argument(
         "--log-level",
@@ -236,9 +306,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
 
-    if args.seed is not None:
-        random.seed(args.seed)
-
     root_dir: Path = args.root.expanduser().resolve()
     if not root_dir.is_dir():
         LOGGER.error("Root directory not found: %s", root_dir)
@@ -249,12 +316,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     LOGGER.info("Writing summary to %s", output_path)
 
     sample_size = max(1, int(args.sample_size))
+    if args.seed is not None:
+        LOGGER.warning(
+            "--seed is ignored; sampling uses the first %d JSON file(s) per patient.",
+            sample_size,
+        )
 
     summaries: List[PatientSummary] = []
     for patient_dir in iter_patient_dirs(root_dir):
+        video_dir = patient_dir / "VIDEO"
+        if not video_dir.is_dir():
+            LOGGER.info("Skipping %s (VIDEO directory missing)", patient_dir)
+            continue
         summary = summarize_patient_jsons(patient_dir, sample_size)
         if summary is None:
             continue
+        if summary.shared_serials:
+            LOGGER.debug(
+                "Patient %s shared serials via CLI path: %s",
+                patient_dir.name,
+                ", ".join(summary.shared_serials),
+            )
         summaries.append(summary)
 
     if not summaries:
