@@ -1,5 +1,5 @@
 """
-EMU Rough Sync CLI
+EMU Time Sync CLI
 ==================
 
 Self-contained command line utility that performs "rough" alignment of EMU
@@ -1502,7 +1502,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_dir = args.out_dir.resolve()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = out_dir / "logs" / f"cli_emu_rough_{timestamp}.log"
+    log_path = out_dir / "logs" / f"cli_emu_time_{timestamp}.log"
     if configure_logging(args.log_level, log_path):
         LOGGER.info("Log file: %s", log_path)
 
