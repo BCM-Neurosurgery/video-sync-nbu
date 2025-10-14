@@ -38,6 +38,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set
 import numpy as np
 from scipy.io.wavfile import write as wav_write
 
+from scripts.align.sync import clip_video_by_frames
 from scripts.analysis.video_analysis import FrameIDAnalysisResult, analyze_video
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, RoomAudio, StitchedNS5, Video
@@ -906,6 +907,7 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
     """Trim the source video to the frames described by the clip plan."""
     _ensure_tool("ffmpeg")
     out_dir.mkdir(parents=True, exist_ok=True)
+
     video = plan.video
     LOGGER.debug(
         "Clipping %s from frame %d to %d",
@@ -913,6 +915,7 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
         plan.frame_ids[0],
         plan.frame_ids[-1],
     )
+
     real_times: Optional[Sequence[datetime]] = None
     if video.companion_json and getattr(video.companion_json, "real_times", None):
         existing = video.companion_json.real_times
@@ -934,34 +937,11 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
             f"Invalid clip frame window for {video.path.name}: {start_frame}>{end_frame}"
         )
 
-    end_frame_exclusive = end_frame + 1
-    vf_filter = (
-        f"trim=start_frame={start_frame}:end_frame={end_frame_exclusive},"
-        f"setpts=(N/{fps:.9f})/TB"
-    )
-
     out_path = out_dir / f"{video.segment_id}.{video.cam_serial}.clip.mp4"
-    ff_cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y" if overwrite else "-n",
-        "-i",
-        str(video.path),
-        "-vf",
-        vf_filter,
-        "-an",
-        str(out_path),
-    ]
-    proc = subprocess.run(
-        ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg clip failed for {video.path.name}: {proc.stderr.strip()}"
-        )
-    return out_path
+    if out_path.exists() and not overwrite:
+        return out_path
+
+    return clip_video_by_frames(Path(video.path), start_frame, end_frame, fps, out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -973,10 +953,7 @@ def concat_videos(
     clip_paths: List[Path],
     work_dir: Path,
     overwrite: bool,
-    *,
-    target_fps: Optional[float] = None,
 ) -> Path:
-    """Concatenate clip files into a single MP4, optionally re-encoding."""
     if not clip_paths:
         raise RuntimeError("No clips to merge")
 
@@ -984,35 +961,8 @@ def concat_videos(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     if len(clip_paths) == 1:
-        source = clip_paths[0]
-        if not target_fps:
-            return source
-        out_path = work_dir / f"{source.stem}.fps{target_fps:.3f}.mp4"
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y" if overwrite else "-n",
-            "-i",
-            str(source),
-            "-vf",
-            f"fps={target_fps}",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "18",
-            "-an",
-            str(out_path),
-        ]
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"ffmpeg fps convert failed: {result.stderr.strip()}")
-        return out_path
+        # Return the single clip untouched; CFR will be enforced later during mux.
+        return clip_paths[0]
 
     concat_file = work_dir / "concat.txt"
 
@@ -1024,6 +974,8 @@ def concat_videos(
         encoding="utf-8",
     )
     out_path = work_dir / "merged.mp4"
+
+    # Try stream-copy first (preserves frames & timestamps).
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -1036,26 +988,44 @@ def concat_videos(
         "0",
         "-i",
         str(concat_file),
+        "-vsync",
+        "passthrough",
+        "-c",
+        "copy",
+        str(out_path),
     ]
+    result = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    if result.returncode == 0:
+        return out_path
 
-    if target_fps:
-        cmd.extend(
-            [
-                "-vf",
-                f"fps={target_fps}",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "18",
-                "-an",
-            ]
-        )
-    else:
-        cmd.extend(["-c", "copy"])
-
-    cmd.append(str(out_path))
+    # Fallback: re-encode WITHOUT fps filter (still preserves frame count).
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y" if overwrite else "-n",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_file),
+        "-vsync",
+        "passthrough",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        str(out_path),
+    ]
     result = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
@@ -1067,10 +1037,10 @@ def concat_videos(
 def mux_audio(
     video_path: Path, audio_path: Path, out_path: Path, overwrite: bool
 ) -> Path:
-    """Combine merged video with audio, retiming video if durations differ."""
     _ensure_tool("ffmpeg")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # --- Measure audio duration exactly ---
     with wave.open(str(audio_path), "rb") as wav_in:
         audio_frames = wav_in.getnframes()
         audio_rate = wav_in.getframerate()
@@ -1080,32 +1050,31 @@ def mux_audio(
     if audio_duration <= 0:
         raise RuntimeError("Invalid audio duration when muxing")
 
+    # --- Probe merged video for frame count (we keep every frame) ---
     video_probe = VideoFileParser(str(video_path))
     frame_count = int(video_probe.frame_count)
     video_duration = float(video_probe.duration)
     if frame_count <= 0 or video_duration <= 0:
         raise RuntimeError("Invalid video probe data when muxing")
 
-    original_fps = float(video_probe.fps)
+    # --- Compute CFR that matches audio duration with NO frame drop ---
+    #     All frames preserved; timestamps rewritten onto a CFR grid.
     target_fps = frame_count / audio_duration
     if not math.isfinite(target_fps) or target_fps <= 0:
-        target_fps = max(original_fps, 1.0)
-
-    speed_scale = audio_duration / video_duration
-    if not math.isfinite(speed_scale) or speed_scale <= 0:
-        speed_scale = 1.0
+        target_fps = max(float(video_probe.fps) or 1.0, 1.0)
 
     LOGGER.debug(
-        "Muxing %s with audio %s (frame_count=%d, video_dur=%.6fs, audio_dur=%.6fs, target_fps=%.6f, orig_fps=%.6f, speed_scale=%.6f)",
+        "Muxing %s with %s -> CFR target_fps=%.8f (frames=%d, video_dur=%.6f, audio_dur=%.6f)",
         video_path.name,
         audio_path.name,
+        target_fps,
         frame_count,
         video_duration,
         audio_duration,
-        target_fps,
-        original_fps,
-        speed_scale,
     )
+
+    # setpts=N/(fps*TB) assigns evenly-spaced timestamps: CFR, no drop/dup of originals.
+    setpts_expr = f"N/({target_fps:.12f}*TB)"
 
     cmd = [
         "ffmpeg",
@@ -1120,42 +1089,36 @@ def mux_audio(
         str(video_path),
         "-i",
         str(audio_path),
+        # CFR enforcement (timestamps & muxer):
+        "-filter:v",
+        f"setpts={setpts_expr}",
+        "-vsync",
+        "cfr",
+        "-r",
+        f"{target_fps:.12f}",
+        # Map streams & encode
         "-map",
         "0:v:0",
         "-map",
         "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(out_path),
     ]
 
-    if not math.isclose(speed_scale, 1.0, rel_tol=1e-6, abs_tol=1e-6):
-        cmd.extend(
-            [
-                "-filter:v",
-                f"setpts={speed_scale:.12f}*PTS",
-            ]
-        )
-
-    cmd.extend(
-        [
-            "-vsync",
-            "passthrough",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            "-movflags",
-            "+faststart",
-            str(out_path),
-        ]
-    )
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -1311,23 +1274,11 @@ def _execute_sync_plan(
             )
 
         merged_dir = work_dir / "merged"
-        total_frames = sum(len(plan.frame_ids) for plan in cam_plans)
-        audio_span = (sync_plan.audio_end - sync_plan.audio_start).total_seconds()
-        target_fps = (
-            total_frames / audio_span if audio_span > 0 and total_frames > 0 else None
-        )
-        if target_fps:
-            LOGGER.debug(
-                "Target FPS for %s camera %s set to %.6f (frames=%d span=%.3fs)",
-                task.task_id,
-                cam_serial,
-                target_fps,
-                total_frames,
-                audio_span,
-            )
         try:
             merged_video = concat_videos(
-                clip_paths, merged_dir, overwrite, target_fps=target_fps
+                clip_paths,
+                merged_dir,
+                overwrite,
             )
         except Exception as exc:
             LOGGER.error(
