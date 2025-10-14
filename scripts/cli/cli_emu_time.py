@@ -2,7 +2,7 @@
 EMU Time Sync CLI
 ==================
 
-Self-contained command line utility that performs "rough" alignment of EMU
+Self-contained command line utility that performs time-based alignment of EMU
 recordings when chunk serials are unavailable. The workflow:
 
 1. Discover matching EMU tasks (patient directory + NS5 audio).
@@ -14,7 +14,7 @@ recordings when chunk serials are unavailable. The workflow:
    produce per-camera MP4s ready for review.
 
 The implementation used to live across ``cli_emu.py`` and
-``cli_emu_time.py``. This module consolidates the rough-sync functionality so
+``cli_emu_rough.py``. This module consolidates the time-sync functionality so
 it stands alone and does not depend on the serial-sync CLI.
 """
 
@@ -48,7 +48,7 @@ from scripts.parsers.nevfileparser import Nev
 from scripts.parsers.ns5fileparser import Nsx
 from scripts.parsers.videofileparser import VideoFileParser
 
-LOGGER = logging.getLogger("cli_emu_rough")
+LOGGER = logging.getLogger("cli_emu_time")
 
 _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
@@ -543,7 +543,7 @@ def collect_videos_by_time(
     ) -> str:
         if start_rt is None or end_rt is None:
             LOGGER.debug(
-                "Segment %s lacks realtime bounds in JSON; skipping rough lookup.",
+                "Segment %s lacks realtime bounds in JSON; skipping time-sync lookup.",
                 seg_id,
             )
             return "skip"
@@ -570,7 +570,7 @@ def collect_videos_by_time(
         if decision == "skip":
             message = (
                 f"Segment {seg_id} lacks realtime bounds in {json_path.name}; "
-                "rough sync accuracy may be degraded."
+                "time sync accuracy may be degraded."
             )
             LOGGER.warning(message)
             if diagnostics:
@@ -623,7 +623,7 @@ def collect_videos_by_time(
             if start_rt is None or end_rt is None:
                 message = (
                     f"Segment {seg_id} cam {cam_serial} lacks realtime bounds in {json_path.name}; "
-                    "rough sync accuracy may be degraded."
+                    "time sync accuracy may be degraded."
                 )
                 LOGGER.warning(message)
                 if diagnostics:
@@ -673,7 +673,7 @@ def build_time_clip_plan(
     real_times_seq = _coerce_real_times(getattr(cam_json, "real_times", None))
     if not real_times_seq:
         raise ValueError(
-            f"Video {video.path} missing realtime data required for rough sync"
+            f"Video {video.path} missing realtime data required for time sync"
         )
 
     if len(serials_full) != len(real_times_seq) or len(frames_full) != len(
@@ -739,7 +739,7 @@ def _build_time_clip_plans_for_camera(
             plan = build_time_clip_plan(video, audio_start, audio_end)
         except Exception as exc:
             LOGGER.error(
-                "Failed building clip plan for %s cam %s (rough mode): %s",
+                "Failed building clip plan for %s cam %s (time-sync mode): %s",
                 video.path.name,
                 cam_serial,
                 exc,
@@ -757,13 +757,13 @@ def _build_time_clip_plans_for_camera(
             cam_plans.append(plan)
     if not cam_plans:
         LOGGER.error(
-            "No usable video segments for %s camera %s (rough mode)",
+            "No usable video segments for %s camera %s (time-sync mode)",
             task_id,
             cam_serial,
         )
         if diagnostics:
             diagnostics.add_warning(
-                f"No usable video segments for camera {cam_serial}; rough sync could not be generated.",
+                f"No usable video segments for camera {cam_serial}; time sync could not be generated.",
                 camera=cam_serial,
             )
     else:
@@ -1299,7 +1299,7 @@ def _execute_sync_plan(
                 clip_metadata_entries.append(clip_entry)
             except Exception as exc:
                 LOGGER.error(
-                    "Clip/pad failed for %s cam %s (rough mode): %s",
+                    "Clip/pad failed for %s cam %s (time-sync mode): %s",
                     clip_plan.video.segment_id,
                     cam_serial,
                     exc,
@@ -1308,7 +1308,7 @@ def _execute_sync_plan(
 
         if not clip_paths:
             LOGGER.error(
-                "No successfully prepared clips for %s camera %s (rough mode)",
+                "No successfully prepared clips for %s camera %s (time-sync mode)",
                 task.task_id,
                 cam_serial,
             )
@@ -1339,7 +1339,7 @@ def _execute_sync_plan(
             )
         except Exception as exc:
             LOGGER.error(
-                "Video concat failed for %s camera %s (rough mode): %s",
+                "Video concat failed for %s camera %s (time-sync mode): %s",
                 task.task_id,
                 cam_serial,
                 exc,
@@ -1355,7 +1355,7 @@ def _execute_sync_plan(
             )
         except Exception as exc:
             LOGGER.error(
-                "Mux failed for %s camera %s (rough mode): %s",
+                "Mux failed for %s camera %s (time-sync mode): %s",
                 task.task_id,
                 cam_serial,
                 exc,
@@ -1456,7 +1456,7 @@ def _execute_sync_plan(
     return success
 
 
-def prepare_rough_sync_plan(
+def prepare_time_sync_plan(
     task: TaskContext,
     video_dir: Path,
     out_dir: Path,
@@ -1464,8 +1464,8 @@ def prepare_rough_sync_plan(
     camera_serials: Optional[Set[str]],
     overwrite: bool,
 ) -> Optional[SyncPlan]:
-    """Assemble the clip and audio plan required to run the rough sync pipeline."""
-    LOGGER.info("Starting rough sync for %s", task.task_id)
+    """Assemble the clip and audio plan required to run the time-sync pipeline."""
+    LOGGER.info("Starting time sync for %s", task.task_id)
     LOGGER.debug(
         "Task %s NS5 window %s -> %s",
         task.task_id,
@@ -1480,7 +1480,7 @@ def prepare_rough_sync_plan(
             task, room_mic, audio_path, overwrite
         )
     except Exception as exc:
-        LOGGER.error("Audio extraction (rough) failed for %s: %s", task.task_id, exc)
+        LOGGER.error("Audio extraction (time) failed for %s: %s", task.task_id, exc)
         return None
 
     diagnostics = SyncDiagnostics()
@@ -1493,14 +1493,14 @@ def prepare_rough_sync_plan(
     )
     if not videos_by_cam:
         LOGGER.warning(
-            "No videos overlap NS5 audio window for %s (rough mode)",
+            "No videos overlap NS5 audio window for %s (time-sync mode)",
             task.task_id,
         )
         return None
 
     _warn_missing_cameras(
         task.task_id,
-        "rough",
+        "time",
         camera_serials,
         set(videos_by_cam.keys()),
     )
@@ -1537,7 +1537,7 @@ def prepare_rough_sync_plan(
         return None
 
     return SyncPlan(
-        mode="rough",
+        mode="time",
         audio_path=audio_path,
         clip_plans_by_cam=clip_plans_by_cam,
         audio_start=audio_start,
@@ -1555,8 +1555,8 @@ def process_task(
     overwrite: bool,
     camera_serials: Optional[Set[str]] = None,
 ) -> bool:
-    """Execute the rough sync workflow for a stitched task."""
-    sync_plan = prepare_rough_sync_plan(
+    """Execute the time-sync workflow for a stitched task."""
+    sync_plan = prepare_time_sync_plan(
         task,
         video_dir,
         out_dir,
@@ -1576,8 +1576,8 @@ def process_task(
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    """Parse command-line arguments for the rough sync CLI."""
-    parser = argparse.ArgumentParser(description="EMU rough-sync utility")
+    """Parse command-line arguments for the time-sync CLI."""
+    parser = argparse.ArgumentParser(description="EMU time-sync utility")
     parser.add_argument("--patient-dir", type=Path, required=True)
     parser.add_argument("--video-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
@@ -1644,7 +1644,7 @@ def configure_logging(level: str, log_path: Optional[Path] = None) -> bool:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """CLI entry point for the EMU rough sync workflow."""
+    """CLI entry point for the EMU time sync workflow."""
     args = parse_args(argv)
 
     patient_dir = args.patient_dir.resolve()
