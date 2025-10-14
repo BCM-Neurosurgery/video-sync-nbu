@@ -14,7 +14,7 @@ recordings when chunk serials are unavailable. The workflow:
    produce per-camera MP4s ready for review.
 
 The implementation used to live across ``cli_emu.py`` and
-``cli_emu_rough.py``. This module consolidates the rough-sync functionality so
+``cli_emu_time.py``. This module consolidates the rough-sync functionality so
 it stands alone and does not depend on the serial-sync CLI.
 """
 
@@ -30,10 +30,10 @@ import shutil
 import subprocess
 import sys
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from scipy.io.wavfile import write as wav_write
@@ -52,6 +52,8 @@ LOGGER = logging.getLogger("cli_emu_rough")
 
 _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
+EXPECTED_MUX_FPS = 29.96
+MUX_FPS_TOLERANCE = 0.2
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,35 @@ class TaskContext:
 
 
 @dataclass
+class SyncDiagnostics:
+    """Accumulate warnings encountered while preparing sync outputs."""
+
+    global_warnings: List[str] = field(default_factory=list)
+    camera_warnings: Dict[str, List[str]] = field(default_factory=dict)
+
+    def add_warning(self, message: str, *, camera: Optional[str] = None) -> None:
+        """Record a warning, optionally tied to a specific camera."""
+        if camera:
+            self.camera_warnings.setdefault(camera, []).append(message)
+        else:
+            self.global_warnings.append(message)
+
+    def warnings_for_camera(self, camera: str) -> List[str]:
+        """Return unique warnings relevant to a camera (global + camera-specific)."""
+        combined = list(self.global_warnings)
+        combined.extend(self.camera_warnings.get(camera, []))
+        seen: Set[str] = set()
+        unique: List[str] = []
+        for msg in combined:
+            if msg not in seen:
+                unique.append(msg)
+                seen.add(msg)
+        return unique
+
+
+@dataclass
 class SyncPlan:
-    """Inputs required to run the rough-sync pipeline for one task."""
+    """Inputs required to run the time-sync pipeline for one task."""
 
     mode: str
     audio_path: Path
@@ -90,6 +119,7 @@ class SyncPlan:
     audio_start: datetime
     audio_end: datetime
     audio_ready: bool = True
+    diagnostics: SyncDiagnostics = field(default_factory=SyncDiagnostics)
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +521,7 @@ def collect_videos_by_time(
     window_start: datetime,
     window_end: datetime,
     camera_filter: Optional[Set[str]] = None,
+    diagnostics: Optional[SyncDiagnostics] = None,
 ) -> Dict[str, List[Video]]:
     """Group videos by camera whose realtime span overlaps the target window."""
 
@@ -536,7 +567,16 @@ def collect_videos_by_time(
         segment_end_rt = jp.get_end_realtime()
 
         decision = classify_segment(seg_id, segment_start_rt, segment_end_rt)
-        if decision in {"skip", "before"}:
+        if decision == "skip":
+            message = (
+                f"Segment {seg_id} lacks realtime bounds in {json_path.name}; "
+                "rough sync accuracy may be degraded."
+            )
+            LOGGER.warning(message)
+            if diagnostics:
+                diagnostics.add_warning(message)
+            continue
+        if decision == "before":
             continue
         if decision == "after":
             break
@@ -581,11 +621,13 @@ def collect_videos_by_time(
             start_rt = start_rt or segment_start_rt
             end_rt = segment_end_rt
             if start_rt is None or end_rt is None:
-                LOGGER.debug(
-                    "Skipping segment %s cam %s due to missing realtime bounds.",
-                    seg_id,
-                    cam_serial,
+                message = (
+                    f"Segment {seg_id} cam {cam_serial} lacks realtime bounds in {json_path.name}; "
+                    "rough sync accuracy may be degraded."
                 )
+                LOGGER.warning(message)
+                if diagnostics:
+                    diagnostics.add_warning(message, camera=cam_serial)
                 continue
             if end_rt < window_start or start_rt > window_end:
                 continue
@@ -688,6 +730,7 @@ def _build_time_clip_plans_for_camera(
     videos: Sequence[Video],
     audio_start: datetime,
     audio_end: datetime,
+    diagnostics: Optional[SyncDiagnostics] = None,
 ) -> List[VideoSegmentClipPlan]:
     """Compile clip plans for a camera limited to the audio overlap window."""
     cam_plans: List[VideoSegmentClipPlan] = []
@@ -701,6 +744,14 @@ def _build_time_clip_plans_for_camera(
                 cam_serial,
                 exc,
             )
+            if diagnostics:
+                diagnostics.add_warning(
+                    (
+                        f"Failed to build clip plan for camera {cam_serial} "
+                        f"video {video.path.name}: {exc}"
+                    ),
+                    camera=cam_serial,
+                )
             continue
         if plan:
             cam_plans.append(plan)
@@ -710,6 +761,11 @@ def _build_time_clip_plans_for_camera(
             task_id,
             cam_serial,
         )
+        if diagnostics:
+            diagnostics.add_warning(
+                f"No usable video segments for camera {cam_serial}; rough sync could not be generated.",
+                camera=cam_serial,
+            )
     else:
         cam_plans.sort(key=lambda p: (p.video.segment_id, p.clip_start_index))
     return cam_plans
@@ -1036,7 +1092,7 @@ def concat_videos(
 
 def mux_audio(
     video_path: Path, audio_path: Path, out_path: Path, overwrite: bool
-) -> Path:
+) -> Tuple[Path, float]:
     _ensure_tool("ffmpeg")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1158,7 +1214,7 @@ def mux_audio(
     _, stderr_output = proc.communicate()
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg mux failed: {stderr_output.strip()}")
-    return out_path
+    return out_path, target_fps
 
 
 # ---------------------------------------------------------------------------
@@ -1177,6 +1233,7 @@ def _execute_sync_plan(
     if not sync_plan.audio_ready:
         raise RuntimeError("Rough sync requires a prepared audio track")
 
+    diagnostics = sync_plan.diagnostics
     success = False
     for cam_serial, cam_plans in sorted(sync_plan.clip_plans_by_cam.items()):
         cam_dir = out_dir / cam_serial
@@ -1257,6 +1314,10 @@ def _execute_sync_plan(
             )
             continue
 
+        camera_warnings: List[str] = []
+        if diagnostics:
+            camera_warnings = list(diagnostics.warnings_for_camera(cam_serial))
+
         work_dir.mkdir(parents=True, exist_ok=True)
         clip_metadata_doc = {
             "task_id": task.task_id,
@@ -1268,10 +1329,6 @@ def _execute_sync_plan(
             "clip_entries": clip_metadata_entries,
         }
         metadata_path = work_dir / "clip_metadata.json"
-        if not metadata_path.exists() or overwrite:
-            metadata_path.write_text(
-                json.dumps(clip_metadata_doc, indent=2), encoding="utf-8"
-            )
 
         merged_dir = work_dir / "merged"
         try:
@@ -1293,7 +1350,9 @@ def _execute_sync_plan(
         synced_dir.mkdir(parents=True, exist_ok=True)
         final_path = synced_dir / f"{task.task_id}_{cam_serial}.mp4"
         try:
-            mux_audio(merged_video, sync_plan.audio_path, final_path, overwrite)
+            final_path, target_mux_fps = mux_audio(
+                merged_video, sync_plan.audio_path, final_path, overwrite
+            )
         except Exception as exc:
             LOGGER.error(
                 "Mux failed for %s camera %s (rough mode): %s",
@@ -1303,12 +1362,96 @@ def _execute_sync_plan(
             )
             continue
 
+        fps_delta = abs(target_mux_fps - EXPECTED_MUX_FPS)
+        quality_status = "bad" if fps_delta > MUX_FPS_TOLERANCE else "good"
+        if quality_status == "bad":
+            fps_warning = (
+                f"Muxed target FPS {target_mux_fps:.4f} deviates from expected "
+                f"{EXPECTED_MUX_FPS:.2f} by {fps_delta:.4f}"
+            )
+            camera_warnings.append(fps_warning)
+
+        clip_metadata_doc["expected_mux_fps"] = EXPECTED_MUX_FPS
+        clip_metadata_doc["target_mux_fps"] = target_mux_fps
+        clip_metadata_doc["target_mux_fps_delta"] = fps_delta
+        clip_metadata_doc["mux_fps_tolerance"] = MUX_FPS_TOLERANCE
+        clip_metadata_doc["sync_quality_status"] = quality_status
+        if camera_warnings:
+            clip_metadata_doc["sync_quality_warnings"] = camera_warnings
+        elif "sync_quality_warnings" in clip_metadata_doc:
+            clip_metadata_doc.pop("sync_quality_warnings", None)
+
+        if not metadata_path.exists() or overwrite:
+            metadata_path.write_text(
+                json.dumps(clip_metadata_doc, indent=2), encoding="utf-8"
+            )
+
         LOGGER.info(
             "Rough-synced output written: %s (camera %s)",
             final_path,
             cam_serial,
         )
         success = True
+
+        generated_ts = datetime.now().isoformat()
+        quality_doc = {
+            "task_id": task.task_id,
+            "camera": cam_serial,
+            "status": quality_status,
+            "warnings": camera_warnings,
+            "video_path": str(final_path),
+            "generated_at": generated_ts,
+            "expected_mux_fps": EXPECTED_MUX_FPS,
+            "target_mux_fps": target_mux_fps,
+            "target_mux_fps_delta": fps_delta,
+            "mux_fps_tolerance": MUX_FPS_TOLERANCE,
+        }
+        quality_json_path = synced_dir / "sync_quality.json"
+        if not quality_json_path.exists() or overwrite:
+            quality_json_path.write_text(
+                json.dumps(quality_doc, indent=2), encoding="utf-8"
+            )
+
+        quality_txt_path = synced_dir / "sync_quality.txt"
+        if not quality_txt_path.exists() or overwrite:
+            status_label = quality_status.upper()
+            summary_lines = [
+                f"STATUS: {status_label}",
+                f"Task: {task.task_id}",
+                f"Camera: {cam_serial}",
+                f"Video: {final_path.name}",
+                f"Generated: {generated_ts}",
+                f"Expected FPS: {EXPECTED_MUX_FPS:.4f}",
+                f"Target FPS: {target_mux_fps:.4f}",
+                f"Delta: {fps_delta:.4f}",
+                f"Tolerance: ±{MUX_FPS_TOLERANCE:.4f}",
+            ]
+            summary_lines.append("")
+            if camera_warnings:
+                summary_lines.append("WARNINGS:")
+                summary_lines.extend(f"- {warn}" for warn in camera_warnings)
+            else:
+                summary_lines.append(
+                    "No warnings recorded; sync quality checks passed."
+                )
+            quality_txt_path.write_text(
+                "\n".join(summary_lines) + "\n", encoding="utf-8"
+            )
+
+        if quality_status == "bad":
+            LOGGER.warning(
+                "Sync quality flagged BAD for task %s camera %s; see %s",
+                task.task_id,
+                cam_serial,
+                quality_txt_path,
+            )
+        elif camera_warnings:
+            LOGGER.warning(
+                "Sync quality warnings recorded for task %s camera %s; see %s",
+                task.task_id,
+                cam_serial,
+                quality_txt_path,
+            )
 
     return success
 
@@ -1340,8 +1483,13 @@ def prepare_rough_sync_plan(
         LOGGER.error("Audio extraction (rough) failed for %s: %s", task.task_id, exc)
         return None
 
+    diagnostics = SyncDiagnostics()
     videos_by_cam = collect_videos_by_time(
-        video_dir, task.ns5_start_utc, task.ns5_end_utc, camera_serials
+        video_dir,
+        task.ns5_start_utc,
+        task.ns5_end_utc,
+        camera_serials,
+        diagnostics=diagnostics,
     )
     if not videos_by_cam:
         LOGGER.warning(
@@ -1380,6 +1528,7 @@ def prepare_rough_sync_plan(
             videos,
             audio_start,
             audio_end,
+            diagnostics=diagnostics,
         )
         if cam_plans:
             clip_plans_by_cam[cam_serial] = cam_plans
@@ -1394,6 +1543,7 @@ def prepare_rough_sync_plan(
         audio_start=audio_start,
         audio_end=audio_end,
         audio_ready=True,
+        diagnostics=diagnostics,
     )
 
 
