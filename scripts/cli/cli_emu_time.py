@@ -12,10 +12,6 @@ recordings when chunk serials are unavailable. The workflow:
    build clip plans using fixed chunk/frame metadata from the JSON companions.
 4. Clip, pad, merge, and mux the candidate videos with the extracted audio to
    produce per-camera MP4s ready for review.
-
-The implementation used to live across ``cli_emu.py`` and
-``cli_emu_rough.py``. This module consolidates the time-sync functionality so
-it stands alone and does not depend on the serial-sync CLI.
 """
 
 from __future__ import annotations
@@ -681,7 +677,7 @@ def build_time_clip_plan(
     ):
         raise ValueError(
             (
-                "Rough sync expects matching lengths for serials, frame IDs, and realtime "
+                "Time sync expects matching lengths for serials, frame IDs, and realtime "
                 "stamps"
             )
         )
@@ -1231,7 +1227,7 @@ def _execute_sync_plan(
 ) -> bool:
     """Run clipping, padding, merging, and muxing for a prepared sync plan."""
     if not sync_plan.audio_ready:
-        raise RuntimeError("Rough sync requires a prepared audio track")
+        raise RuntimeError("Time sync requires a prepared audio track")
 
     diagnostics = sync_plan.diagnostics
     success = False
@@ -1387,7 +1383,7 @@ def _execute_sync_plan(
             )
 
         LOGGER.info(
-            "Rough-synced output written: %s (camera %s)",
+            "Time-synced output written: %s (camera %s)",
             final_path,
             cam_serial,
         )
