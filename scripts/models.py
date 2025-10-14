@@ -35,6 +35,7 @@ class CamJson:
     timestamp: The timestamp extracted from the JSON file
     path: The file path to this camera's JSON file.
     start_realtime: The start real time (UTC) from json.
+    real_times: List of all real times (UTC) from json
     raw_serials: List of original chunk serial data
     raw_frame_ids: List of original frame ids
     fixed_serials: List of fixed chunk serial data
@@ -46,6 +47,7 @@ class CamJson:
     timestamp: Optional[datetime]
     path: Optional[Path]
     start_realtime: Optional[datetime]
+    real_times: Optional[List[datetime]]
     raw_serials: Optional[List[int]]
     raw_frame_ids: Optional[List[int]]
     fixed_serials: Optional[List[int]]
@@ -252,8 +254,8 @@ class RoomAudio:
 
 
 @dataclass(frozen=True)
-class NS5:
-    """An NS5 file.
+class StitchedNS5:
+    """An Stitched NS5 file.
 
     Attributes
     ----------
@@ -271,21 +273,3 @@ class NS5:
     duration: float
     room_mic1: RoomAudio
     room_mic2: RoomAudio
-
-
-@dataclass(frozen=True)
-class StitchedTask:
-    """A stitched task.
-
-    Attributes
-    ----------
-    patient_id: str. E.g. YFP
-    task_id: str. E.g. EMU-0088_convo
-    nsp1_nev: NEV. E.g. EMU-0088_convo_NSP-1.nev
-    nsp1_ns5: NS5. E.g. EMU-0088_convo_NSP-1.ns5
-    """
-
-    patient_id: str
-    task_id: str
-    nsp1_nev: NEV
-    nsp1_ns5: NS5
