@@ -1,0 +1,1 @@
+tmux new -s prefect-server -d 'prefect server start'
