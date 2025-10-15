@@ -47,13 +47,14 @@ def main(argv: List[str] | None = None) -> int:
         print(f"[prefect-run] {exc}", file=sys.stderr)
         return 1
 
-    results = time_sync_flow(runs)
-    # The flow returns a list of output directories; logging is handled inside Prefect.
-    if not results:
-        print("[prefect-run] Flow returned no results.", file=sys.stderr)
-        return 1
-    for idx, out_dir in enumerate(results, start=1):
+    results: List[str] = []
+    for idx, config in enumerate(runs, start=1):
+        out_dir = time_sync_flow(config)
+        results.append(out_dir)
         print(f"[prefect-run] Run {idx} outputs -> {out_dir}")
+    if not results:
+        print("[prefect-run] No runs executed.", file=sys.stderr)
+        return 1
     return 0
 
 

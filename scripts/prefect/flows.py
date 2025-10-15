@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from collections.abc import Sequence as SequenceABC
 from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Sequence
 
-from prefect import flow, get_run_logger, task
+from prefect import flow, get_run_logger
 
 from scripts.cli import cli_emu_time
 
@@ -17,6 +18,7 @@ class TimeSyncRunConfig:
     patient_dir: Path
     video_dir: Path
     out_dir: Path
+    name: Optional[str] = None
     keywords: Optional[Sequence[str]] = None
     cam_serials: Optional[Sequence[str]] = None
     room_mic: str = "roommic1"
@@ -62,10 +64,18 @@ class TimeSyncRunConfig:
                 "Double-check the JSON parameters in Prefect."
             )
 
+        name_raw = payload.get("name")
+        name = None
+        if name_raw is not None:
+            name_str = str(name_raw).strip()
+            if name_str:
+                name = name_str
+
         return cls(
             patient_dir=Path(str(payload["patient_dir"])).expanduser(),
             video_dir=Path(str(payload["video_dir"])).expanduser(),
             out_dir=Path(str(payload["out_dir"])).expanduser(),
+            name=name,
             keywords=_ensure_list(payload.get("keywords")),
             cam_serials=_ensure_list(
                 payload.get("cam_serials") or payload.get("cam_serial")
@@ -100,9 +110,16 @@ class TimeSyncRunConfig:
         return args
 
     @property
+    def display_name(self) -> str:
+        base = self.name or self.patient_dir.name or str(self.patient_dir)
+        return base
+
+    @property
     def label(self) -> str:
         """Human-friendly label to identify the run."""
-        return f"{self.patient_dir.name}:{self.video_dir.name}"
+        details = f"{self.patient_dir.name}:{self.video_dir.name}"
+        base = self.display_name
+        return details if base == details else f"{base} [{details}]"
 
 
 class _PrefectLogHandler(logging.Handler):
@@ -136,12 +153,57 @@ class _PrefectLogHandler(logging.Handler):
             self.handleError(record)
 
 
-@task
-def run_time_sync_task(config: TimeSyncRunConfig) -> str:
-    """Execute cli_emu_time for a single configuration."""
+def _extract_single_config(
+    data: TimeSyncRunConfig | Mapping[str, object] | Sequence[object] | object,
+) -> TimeSyncRunConfig:
+    if isinstance(data, TimeSyncRunConfig):
+        return data
+
+    if isinstance(data, Mapping):
+        if "runs" in data:
+            return _extract_single_config(data["runs"])
+        keys = set(data.keys())
+        required = {"patient_dir", "video_dir", "out_dir"}
+        if required <= keys:
+            return TimeSyncRunConfig.from_mapping(data)
+        if len(data) == 1:
+            return _extract_single_config(next(iter(data.values())))
+        raise ValueError(
+            "Unable to determine which patient to run. Provide a single patient "
+            "configuration (mapping with patient_dir/video_dir/out_dir)."
+        )
+
+    if isinstance(data, (list, tuple, SequenceABC)) and not isinstance(
+        data, (str, bytes)
+    ):
+        seq = list(data)
+        if not seq:
+            raise ValueError("No patient configuration provided.")
+        if len(seq) > 1:
+            raise ValueError(
+                "Multiple patient configurations provided. Run one patient per flow run."
+            )
+        return _extract_single_config(seq[0])
+
+    raise TypeError(
+        f"Unsupported configuration type {type(data)!r}; "
+        "provide a mapping or TimeSyncRunConfig."
+    )
+
+
+@flow(name="EMU-Time-Sync", flow_run_name="{run_label}")
+def time_sync_flow(
+    runs: TimeSyncRunConfig | Mapping[str, object] | Sequence[object],
+    run_label: Optional[str] = None,
+) -> str:
+    """Trigger cli_emu_time for a single patient configuration."""
+    config = _extract_single_config(runs)
+    if not run_label:
+        run_label = config.name
     logger = get_run_logger()
     logger.info("Starting cli_emu_time for %s", config.label)
     config.out_dir.mkdir(parents=True, exist_ok=True)
+
     handler = _PrefectLogHandler(logger)
     cli_emu_time.register_extra_log_handler(handler)
     try:
@@ -152,37 +214,12 @@ def run_time_sync_task(config: TimeSyncRunConfig) -> str:
         if handler in root_logger.handlers:
             root_logger.removeHandler(handler)
         handler.close()
+
     if exit_code != 0:
         raise RuntimeError(
             f"cli_emu_time failed for {config.label} with exit code {exit_code}"
         )
+
     completed_path = config.out_dir.resolve()
     logger.info("Completed cli_emu_time for %s -> %s", config.label, completed_path)
     return str(completed_path)
-
-
-def _coerce_runs(
-    runs: Sequence[TimeSyncRunConfig | Mapping[str, object]],
-) -> List[TimeSyncRunConfig]:
-    normalized: List[TimeSyncRunConfig] = []
-    for run in runs:
-        if isinstance(run, TimeSyncRunConfig):
-            normalized.append(run)
-        else:
-            normalized.append(TimeSyncRunConfig.from_mapping(run))
-    return normalized
-
-
-@flow(name="cli-emu-time-batch")
-def time_sync_flow(
-    runs: Sequence[TimeSyncRunConfig | Mapping[str, object]],
-) -> List[str]:
-    """Trigger cli_emu_time for each provided configuration."""
-    configs = _coerce_runs(runs)
-    if not configs:
-        raise ValueError("No runs provided to time_sync_flow.")
-    results: List[str] = []
-    for config in configs:
-        result = run_time_sync_task(config)
-        results.append(result)
-    return results
