@@ -6,11 +6,13 @@ Self-contained command line utility that performs time-based alignment of EMU
 recordings when chunk serials are unavailable. The workflow:
 
 1. Discover matching EMU tasks (patient directory + NS5 audio).
-2. Export the full-room NS5 audio for each task after calibrating the NS5 UTC
+2. Determine which camera serials to process (explicit CLI list or shared serials
+   discovered by sampling JSON companions).
+3. Export the full-room NS5 audio for each task after calibrating the NS5 UTC
    origin via the first NEV chunk.
-3. Locate camera segments whose realtime metadata overlaps the NS5 window and
+4. Locate camera segments whose realtime metadata overlaps the NS5 window and
    build clip plans using fixed chunk/frame metadata from the JSON companions.
-4. Clip, pad, merge, and mux the candidate videos with the extracted audio to
+5. Clip, pad, merge, and mux the candidate videos with the extracted audio to
    produce per-camera MP4s ready for review.
 """
 
@@ -38,6 +40,7 @@ from scripts.align.sync import clip_video_by_frames
 from scripts.analysis.video_analysis import FrameIDAnalysisResult, analyze_video
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, RoomAudio, StitchedNS5, Video
+from scripts.scan.find_camera_serials import find_shared_camera_serials
 from scripts.pad.videoplanapplier import apply_video_padding_plan
 from scripts.parsers.jsonfileparser import JsonParser
 from scripts.parsers.nevfileparser import Nev
@@ -1571,6 +1574,52 @@ def process_task(
 # ---------------------------------------------------------------------------
 
 
+def resolve_camera_serials(
+    explicit_serials: Optional[Sequence[str]],
+    video_dir: Path,
+    *,
+    sample_size: int = 5,
+) -> Optional[Set[str]]:
+    """
+    Determine which camera serials to process for a recording session.
+
+    Explicit CLI values win; otherwise, sample JSON companions to discover the
+    serials shared across the session. Returns ``None`` when all cameras should
+    be considered.
+    """
+    if explicit_serials:
+        cleaned = {
+            serial.strip() for serial in explicit_serials if serial and serial.strip()
+        }
+        return cleaned or None
+
+    try:
+        shared_serials = find_shared_camera_serials(video_dir, sample_size=sample_size)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning(
+            "Auto-discovery of camera serials failed via find_camera_serials: %s",
+            exc,
+        )
+        return None
+
+    cleaned_shared = {
+        serial.strip() for serial in shared_serials if serial and serial.strip()
+    }
+    if not cleaned_shared:
+        LOGGER.info(
+            "No shared camera serials detected under %s; processing all cameras.",
+            video_dir,
+        )
+        return None
+
+    LOGGER.info(
+        "Discovered shared camera serials for %s: %s",
+        video_dir,
+        ", ".join(sorted(cleaned_shared)),
+    )
+    return cleaned_shared
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments for the time-sync CLI."""
     parser = argparse.ArgumentParser(description="EMU time-sync utility")
@@ -1674,11 +1723,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         LOGGER.error("No stitched tasks discovered.")
         return 3
 
-    camera_serials: Optional[Set[str]] = None
-    if args.cam_serials:
-        camera_serials = {c.strip() for c in args.cam_serials if c and c.strip()}
-        if not camera_serials:
-            camera_serials = None
+    camera_serials = resolve_camera_serials(args.cam_serials, video_dir)
 
     exit_code = 0
     for context in contexts:
