@@ -1,0 +1,13 @@
+prefect-version: 3.4.23
+deployments:
+  - name: emu-local
+    description: Run cli_emu_time via Prefect on the local machine.
+    entrypoint: scripts/prefect/flows.py:time_sync_flow
+    parameters: {}
+    schedule: null
+    tags: []
+    enforce_parameter_schema: false
+    work_pool:
+      name: default-agent-pool
+      work_queue_name: default
+      job_variables: {}

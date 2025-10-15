@@ -1,0 +1,13 @@
+# Copy this file to prefect/time_sync_runs.yml and customize paths for your data.
+# Paths should reference locations on the host filesystem when running locally.
+runs:
+  - patient_dir: /mnt/stitched/EMU-18112/YFO
+    video_dir: /mnt/datalake/data/emu/YFODatafile/VIDEO
+    out_dir: ./data/emu_serial_example_1/out
+    keywords:
+      - "0062"
+    cam_serials:
+      - "18486638"
+    room_mic: roommic1
+    log_level: DEBUG
+    overwrite: true
