@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Sequence
@@ -104,13 +105,53 @@ class TimeSyncRunConfig:
         return f"{self.patient_dir.name}:{self.video_dir.name}"
 
 
+class _PrefectLogHandler(logging.Handler):
+    """Bridge standard logging records to the Prefect run logger."""
+
+    def __init__(self, prefect_logger: logging.Logger) -> None:
+        super().__init__()
+        self.prefect_logger = prefect_logger
+        self.formatter = logging.Formatter("%(message)s")
+        self.addFilter(self._allow_record)
+
+    @staticmethod
+    def _allow_record(record: logging.LogRecord) -> bool:
+        if getattr(record, "_prefect_forwarded", False):
+            return False
+        if record.name.startswith(("prefect.", "httpx.", "httpcore.", "anyio.")):
+            return False
+        if "HTTP Request" in record.getMessage():
+            return False
+        return True
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = self.format(record)
+            self.prefect_logger.log(
+                record.levelno,
+                message,
+                extra={"_prefect_forwarded": True},
+            )
+        except Exception:  # pragma: no cover - logging safety
+            self.handleError(record)
+
+
 @task
 def run_time_sync_task(config: TimeSyncRunConfig) -> str:
     """Execute cli_emu_time for a single configuration."""
     logger = get_run_logger()
     logger.info("Starting cli_emu_time for %s", config.label)
     config.out_dir.mkdir(parents=True, exist_ok=True)
-    exit_code = cli_emu_time.main(config.as_cli_args())
+    handler = _PrefectLogHandler(logger)
+    cli_emu_time.register_extra_log_handler(handler)
+    try:
+        exit_code = cli_emu_time.main(config.as_cli_args())
+    finally:
+        cli_emu_time.unregister_extra_log_handler(handler)
+        root_logger = logging.getLogger()
+        if handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
+        handler.close()
     if exit_code != 0:
         raise RuntimeError(
             f"cli_emu_time failed for {config.label} with exit code {exit_code}"
