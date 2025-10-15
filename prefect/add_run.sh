@@ -1,1 +1,1 @@
-prefect deployment run "cli-emu-time-batch/emu-local" --params "$(cat /home/auto/CODE/utils/video-sync-nbu/prefect/params.json)"
+prefect deployment run "EMU-Time-Sync/emu-local" --params "$(cat /home/auto/CODE/utils/video-sync-nbu/prefect/params.json)"
