@@ -21,7 +21,8 @@ For each recording session, we expect to have 1 group of audios and multiple gro
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CamJson:
     timestamp: The timestamp extracted from the JSON file
     path: The file path to this camera's JSON file.
     start_realtime: The start real time (UTC) from json.
+    real_times: List of all real times (UTC) from json
     raw_serials: List of original chunk serial data
     raw_frame_ids: List of original frame ids
     fixed_serials: List of fixed chunk serial data
@@ -45,6 +47,7 @@ class CamJson:
     timestamp: Optional[datetime]
     path: Optional[Path]
     start_realtime: Optional[datetime]
+    real_times: Optional[List[datetime]]
     raw_serials: Optional[List[int]]
     raw_frame_ids: Optional[List[int]]
     fixed_serials: Optional[List[int]]
@@ -178,3 +181,95 @@ class AudioVideoSession:
     audiogroup: AudioGroup
     videogroups: List[VideoGroup]
     shared_cam_serials: Optional[List[str]]
+
+
+## =================================================== ##
+## ===== The following applies to EMU recordings ===== ##
+## =================================================== ##
+
+
+@dataclass(frozen=True)
+class DIGIEVTS:
+    """A digital events.
+
+    Attributes
+    ----------
+    raw: List[Dict[str, Any]], the raw digital events data from Nev. It has 3 keys:
+        - TimeStamps: List[int], the timestamps in ticks starting from timeOrigin
+        - InsertionReason: List[int], the insertion reasons (1 or 129)
+        - UnparsedData: List[int], the unparsed data
+    raw_df: pd.DataFrame, the raw digital events data in a pandas DataFrame
+    chunk_serial_df: Optional[pd.DataFrame], the chunk serial DataFrame
+    start_serial: Optional[int], the starting chunk serial number
+    end_serial: Optional[int], the ending chunk serial number
+    start_timestamp: Optional[int], the starting timestamp in ticks
+    end_timestamp: Optional[int], the ending timestamp in ticks
+    """
+
+    raw: Optional[List[Dict[str, Any]]]
+    raw_df: Optional[pd.DataFrame]
+    chunk_serial_df: Optional[pd.DataFrame]
+    start_serial: Optional[int]
+    end_serial: Optional[int]
+    start_timestamp: Optional[int]
+    end_timestamp: Optional[int]
+
+
+@dataclass(frozen=True)
+class NEV:
+    """A NEV file.
+
+    Attributes
+    ----------
+    path: Path to this NEV file
+    start_utc_time: the start UTC timestamp of the recording, same as timeOrigin in the NEV file header
+    sample_resolution: the time resolution of the NEV file in microseconds, same as SampleTimeResolution
+    duration: the duration of the recording in seconds
+    digital_events: DIGIEVTS
+    """
+
+    path: Path
+    start_utc_time: datetime
+    sample_resolution: float
+    duration: float
+    digital_events: DIGIEVTS
+
+
+@dataclass(frozen=True)
+class RoomAudio:
+    """An abstract representation of room audio.
+
+    Attributes
+    ----------
+    raw_array: Optional[float]
+    start_timestamp: Optional[int], the start timestamp in ticks
+    end_timestamp: Optional[int], the end timestamp in ticks
+    duration: Optional[float], the duration in seconds
+    """
+
+    raw_array: Optional[float]
+    start_timestamp: Optional[int]
+    end_timestamp: Optional[int]
+    duration: Optional[float]
+
+
+@dataclass(frozen=True)
+class StitchedNS5:
+    """An Stitched NS5 file.
+
+    Attributes
+    ----------
+    path: Path to this NS5 file
+    start_utc_time: the start UTC timestamp of the recording, same as timeOrigin in the NS5 file header
+    sample_resolution: the time resolution of the NS5 file in microseconds, same as SampleTimeResolution
+    duration: the duration of the recording in seconds
+    room_mic1: audio recorded in RoomMic1
+    room_mic2: audio recorded in RoomMic2
+    """
+
+    path: Path
+    start_utc_time: datetime
+    sample_resolution: float
+    duration: float
+    room_mic1: RoomAudio
+    room_mic2: RoomAudio

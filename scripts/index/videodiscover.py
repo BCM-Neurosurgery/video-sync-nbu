@@ -88,20 +88,50 @@ class VideoDiscoverer(_DirMixin):
             return 0.0, "", 0.0, 0
 
     def _build_videos_for_seg(
-        self, cams: Dict[str, Path], ts: Optional[datetime]
+        self,
+        seg_id: str,
+        cams: Dict[str, Path],
+        ts: Optional[datetime],
+        cam_jsons: Optional[Dict[str, CamJson]],
     ) -> List[Video]:
         videos: List[Video] = []
         for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
             dur, res, fps, frame_count = self._extract_video_meta(mp4_path)
+            cam_key = str(cam_serial)
+            companion = cam_jsons.get(cam_key) if cam_jsons else None
+            start_rt: Optional[datetime] = None
+            if companion and companion.start_realtime:
+                start_rt = companion.start_realtime
+            elif companion and companion.timestamp:
+                start_rt = companion.timestamp
+            elif ts:
+                start_rt = ts
+            else:
+                start_rt = datetime.min.replace(tzinfo=DEFAULT_TZ)
+            if companion is None:
+                companion = CamJson(
+                    cam_serial=cam_key,
+                    timestamp=ts,
+                    path=None,
+                    start_realtime=start_rt,
+                    raw_serials=None,
+                    raw_frame_ids=None,
+                    fixed_serials=None,
+                    fixed_frame_ids=None,
+                    fixed_reidx_frame_ids=None,
+                )
             videos.append(
                 Video(
                     path=mp4_path,
-                    cam_serial=str(cam_serial),
+                    segment_id=seg_id,
+                    cam_serial=cam_key,
                     timestamp=ts,
+                    start_realtime=start_rt,
                     duration=dur,
                     resolution=res,
                     frame_rate=fps,
                     frame_count=frame_count,
+                    companion_json=companion,
                 )
             )
         return videos
@@ -246,9 +276,9 @@ class VideoDiscoverer(_DirMixin):
                 if cam not in cams:  # keep first if duplicates
                     cams[cam] = vp
 
-        videos = self._build_videos_for_seg(cams, ts)
+        json_wrap, _, cam_jsons = self._build_json_wrapper(json_path, ts)
 
-        json_wrap, _, _ = self._build_json_wrapper(json_path, ts)
+        videos = self._build_videos_for_seg(segment_id, cams, ts, cam_jsons)
 
         return VideoGroup(
             group_id=segment_id,
@@ -332,13 +362,13 @@ class VideoDiscoverer(_DirMixin):
             ts = FilePatterns.parse_tail_datetime(seg_id, DEFAULT_TZ)
             cams = vids_by_seg.get(seg_id, {})
 
-            videos = self._build_videos_for_seg(cams, ts)
+            json_wrap, _, cam_jsons = self._build_json_wrapper(json_path, ts)
+
+            videos = self._build_videos_for_seg(seg_id, cams, ts, cam_jsons)
             if not videos:
                 self.log.warning(
                     "No MP4s found for segment %s (JSON: %s)", seg_id, json_path.name
                 )
-
-            json_wrap, _, _ = self._build_json_wrapper(json_path, ts)
 
             videogroups.append(
                 VideoGroup(
