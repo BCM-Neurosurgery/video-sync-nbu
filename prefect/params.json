@@ -1,0 +1,25 @@
+{
+    "run_label": "YFP-0082_ART",
+    "runs": [
+        {
+            "name": "YFP",
+            "patient_dir": "/mnt/stitched/EMU-18112/YFP/",
+            "video_dir": "/mnt/datalake/data/emu/YFPDatafile/VIDEO/",
+            "out_dir": "/mnt/labworlds/Provenza/auto/EMU_time_sync_output",
+            "cam_serials": [
+                "18486638",
+                "18486644",
+                "23505577",
+                "23512012",
+                "23512013",
+                "23512014",
+                "23512906",
+                "23512908"
+            ],
+            "keywords": ["convo"],
+            "room_mic": "roommic1",
+            "log_level": "DEBUG",
+            "overwrite": true
+        }
+    ]
+}

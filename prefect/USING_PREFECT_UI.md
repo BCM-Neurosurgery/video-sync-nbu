@@ -83,14 +83,14 @@ What this does: the worker polls the pool for new runs and executes them locally
 In the UI:
 
 - Navigate to Deployments → `time-sync-batch` → `emu-local` → **Run**.
-- Provide parameters mirroring your CLI usage. You can queue multiple jobs in order by placing multiple entries inside the `runs` list—the flow executes them sequentially, so each job begins only after the previous one finishes successfully.
+- Provide parameters mirroring your CLI usage. You can queue multiple jobs in order by placing multiple entries inside the `runs` list **or** by supplying a mapping where each key is a patient label—the flow executes them sequentially, so each job begins only after the previous one finishes successfully.
 
-Example that mirrors two CLI invocations of `cli_emu_time` (the second run waits for the first to finish):
+Example using a mapping so Prefect labels each task by patient (the second run waits for the first to finish):
 
 ```json
 {
-  "runs": [
-    {
+  "runs": {
+    "YFO": {
       "patient_dir": "/mnt/stitched/EMU-18112/YFO/",
       "video_dir": "/mnt/datalake/data/emu/YFODatafile/VIDEO/",
       "out_dir": "/home/auto/CODE/utils/video-sync-nbu/data/emu_serial_example_1/out",
@@ -100,7 +100,7 @@ Example that mirrors two CLI invocations of `cli_emu_time` (the second run waits
       "log_level": "DEBUG",
       "overwrite": true
     },
-    {
+    "YFK": {
       "patient_dir": "/home/auto/CODE/utils/video-sync-nbu/data/emu_serial_example_2/YFK",
       "video_dir": "/mnt/datalake/data/emu/YFKDatafile/VIDEO/",
       "out_dir": "/home/auto/CODE/utils/video-sync-nbu/data/emu_serial_example_2/out",
@@ -110,13 +110,13 @@ Example that mirrors two CLI invocations of `cli_emu_time` (the second run waits
       "log_level": "DEBUG",
       "overwrite": true
     }
-  ]
+  }
 }
 ```
 
-Note: all runs use `cli_emu_time`. Any additional CLI flags you support can be included by adding their snake_case versions to the run dictionaries (e.g., `extra_option`: `"value"`).
+When a mapping is used, the key (e.g. `"YFO"`) becomes the task name inside Prefect. You can also add an explicit `"name"` field to any run if you prefer to stay with a list structure. All runs use `cli_emu_time`; include any additional CLI flags by adding their snake_case versions to each run dictionary (e.g. `"extra_option": "value"`).
 
-What this does: submits a parametrized batch run to the worker. You’ll see logs stream in the worker terminal as each run proceeds in order.
+What this does: submits a parametrized batch run to the worker. You’ll see logs both in the worker terminal and in the Prefect UI for each run.
 
 ---
 
@@ -133,4 +133,4 @@ What this does: submits a parametrized batch run to the worker. You’ll see log
 - API errors on deploy: Verify `PREFECT_API_URL` points to `http://127.0.0.1:4200/api` and the server is running.
 - Import errors at runtime: Verify your Python env can import the flow module defined in `time_sync_deployment.yaml`.
 - Permission/path issues: Confirm `patient_dir`, `video_dir`, and `out_dir` exist and are readable/writable for your user.
-- `ValueError` about missing fields: ensure your JSON uses the exact structure above with a top-level `runs` list and each run specifying `patient_dir`, `video_dir`, and `out_dir`.
+- `ValueError` about missing fields: ensure your JSON uses the exact structure above with a top-level `runs` list or mapping and each run specifying `patient_dir`, `video_dir`, and `out_dir`.

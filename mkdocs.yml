@@ -21,12 +21,21 @@ nav:
   #     - Errors: reference/errors.md
   # - Explanations:
   #     - Architecture: explanations/architecture.md
+  - EMU Time Sync:
+    - Good examples: emu_time_sync/good_examples.md
+    - How much data without serial: emu_time_sync/how_much_data_without_serial.md
+    - Recording Events TimeStamp: emu_time_sync/recording_events_timestamp.md
+    - Understanding NEV timestamp: emu_time_sync/understanding_nev_timestamp.md
+    - NEV vs. Camera clock: emu_time_sync/nev_vs_camera_clock.md
+    # - Understanding NEV digital data: emu_time_sync/understanding_nev_digital_data.md
   - Understanding Audio:
-      - How to decode serial?: understanding_audio/decoding_serial.md
-      - What's the quality of serial?: understanding_audio/serial_quality.md
-      - First Fix - Gap Filling: understanding_audio/fill_gaps.md
-      - Is there data loss?: understanding_audio/data_loss.md
-      - How much data loss?: understanding_audio/how_much_data_loss.md
+    - How to decode serial?: understanding_audio/decoding_serial.md
+    - What's the quality of serial?: understanding_audio/serial_quality.md
+    - First Fix - Gap Filling: understanding_audio/fill_gaps.md
+    - Is there data loss?: understanding_audio/data_loss.md
+    - NBU lounge data loss: understanding_audio/nbu_lounge_audio_loss.md
+    - NBU sleep room data loss: understanding_audio/nbu_sleep_audio_loss.md
+    - Jamail data loss: understanding_audio/jamail_audio_loss.md
   # - Optimizations:
       # - Decoding large MP3s: optimizations/decoding_large_mp3.md
 
