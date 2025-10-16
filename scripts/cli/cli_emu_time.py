@@ -48,6 +48,22 @@ from scripts.parsers.ns5fileparser import Nsx
 from scripts.parsers.videofileparser import VideoFileParser
 
 LOGGER = logging.getLogger("cli_emu_time")
+_EXTRA_LOG_HANDLERS: List[logging.Handler] = []
+
+
+def register_extra_log_handler(handler: logging.Handler) -> None:
+    """Attach an additional logging handler (idempotent)."""
+    if handler not in _EXTRA_LOG_HANDLERS:
+        _EXTRA_LOG_HANDLERS.append(handler)
+
+
+def unregister_extra_log_handler(handler: logging.Handler) -> None:
+    """Detach a previously registered logging handler."""
+    try:
+        _EXTRA_LOG_HANDLERS.remove(handler)
+    except ValueError:
+        pass
+
 
 _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
@@ -1672,10 +1688,12 @@ def configure_logging(level: str, log_path: Optional[Path] = None) -> bool:
         except Exception as exc:  # pragma: no cover - defensive fallback
             file_handler_error = str(exc)
 
+    all_handlers = handlers + list(_EXTRA_LOG_HANDLERS)
+
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format="[%(levelname)s] %(message)s",
-        handlers=handlers,
+        handlers=all_handlers,
         force=True,
     )
 

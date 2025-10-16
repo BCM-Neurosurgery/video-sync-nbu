@@ -27,7 +27,8 @@ Sampling frequency of serials in camera JSONs
 
 ### Scripts
 
-[Script for NEV](../assets/how_much_data_without_serial/check_nev_serials.py)
+- [Sample NEV serial FPS](../assets/nev_vs_camera_clock/sample_serial_fps.py)
+- [Sample camera JSON FPS](../assets/nev_vs_camera_clock/sample_camera_json_fps.py)
 
 ### Results
 
@@ -126,4 +127,3 @@ Aggregate statistics across sampled JSONs:
 [INFO]   max_fps_overall     = 29.96571646 (calibration_20240918_141049.json)
 [INFO]   min_fps_overall     = 29.95659381 (YFSDatafile_20250716_202306.json)
 ```
-
