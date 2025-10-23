@@ -224,6 +224,7 @@ class VideoDiscoverer(_DirMixin):
                     timestamp=ts,
                     path=json_path,
                     start_realtime=start_realtime,
+                    real_times=jp.dic.get("real_times"),
                     raw_serials=raw_serials,
                     raw_frame_ids=raw_frame_ids,
                     fixed_serials=fixed_serials,
