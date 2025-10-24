@@ -204,19 +204,35 @@ class WavSerialDecoder:
         if self.n_channels != 1:
             raise ValueError(f"Expected mono WAV (1 channel), got {self.n_channels}")
 
-        if self.sampwidth == 2:
-            dtype = np.int16
-            data = np.frombuffer(raw, dtype=dtype)
-            norm = float(np.iinfo(dtype).max)
-        elif self.sampwidth == 1:
+        if self.sampwidth == 1:
             dtype = np.uint8
             data = np.frombuffer(raw, dtype=dtype).astype(np.int16) - 128
             norm = 127.0
-        else:
-            # Fallback: treat as int16
+        elif self.sampwidth == 2:
             dtype = np.int16
             data = np.frombuffer(raw, dtype=dtype)
             norm = float(np.iinfo(dtype).max)
+        elif self.sampwidth == 3:
+            # 24-bit little-endian PCM: pack 3 bytes into signed int32
+            raw_bytes = np.frombuffer(raw, dtype=np.uint8)
+            if raw_bytes.size % 3 != 0:
+                raise ValueError("24-bit WAV payload has incomplete frames.")
+            triples = raw_bytes.reshape(-1, 3)
+            ints = (
+                triples[:, 0].astype(np.int32)
+                | (triples[:, 1].astype(np.int32) << 8)
+                | (triples[:, 2].astype(np.int32) << 16)
+            )
+            sign_bit = 1 << 23
+            ints = np.where(ints & sign_bit, ints - (1 << 24), ints)
+            data = ints
+            norm = float(sign_bit - 1)
+        elif self.sampwidth == 4:
+            dtype = np.int32
+            data = np.frombuffer(raw, dtype=dtype)
+            norm = float(np.iinfo(dtype).max)
+        else:
+            raise ValueError(f"Unsupported sample width: {self.sampwidth} bytes")
 
         self.audio = (data.astype(np.float32) / norm).astype(np.float32)
 
