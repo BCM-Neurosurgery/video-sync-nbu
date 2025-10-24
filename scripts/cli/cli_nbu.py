@@ -288,22 +288,34 @@ def run_pipeline(
         logger.error("%s", e)
         return 3
 
-    failures = 0
-    for seg_id, cam_list in targets.items():
-        summary = process_segment(
-            video_in=video_dir,
-            audio_in=audio_dir,
+    try:
+        filtered_csv = prepare_serial_audio(
             audiogroup=ag,
-            seg_id=seg_id,
-            site=site,
             parent_out=out_dir,
-            cam_serials=cam_list,
+            site=site,
             skip_decode=skip_decode,
             do_split=do_split,
             split_chunk_seconds=split_chunk_seconds,
             split_overwrite=split_overwrite,
             split_clean=split_clean,
             split_outdir=split_outdir,
+        )
+    except (AudioDecodingError, GapFillError, FilteredError, FileNotFoundError) as e:
+        logger.error("Audio preparation failed: %s", e)
+        return 4
+    except Exception as e:
+        logger.error("Unexpected error preparing audio: %s", e)
+        return 4
+
+    failures = 0
+    for seg_id, cam_list in targets.items():
+        summary = process_segment(
+            video_in=video_dir,
+            audio_in=audio_dir,
+            seg_id=seg_id,
+            parent_out=out_dir,
+            cam_serials=cam_list,
+            filtered_csv=filtered_csv,
         )
         if summary["fail"]:
             failures += 1
@@ -316,177 +328,158 @@ def run_pipeline(
     return 0 if failures == 0 else 4
 
 
-def process_segment(
-    video_in: str,
-    audio_in: str,
+def prepare_serial_audio(
     audiogroup: AudioGroup,
-    seg_id: str,
-    site: str,
     parent_out: Path,
-    cam_serials: Iterable[str],
-    skip_decode: bool = False,
+    site: str,
     *,
+    skip_decode: bool = False,
     do_split: bool = False,
     split_chunk_seconds: int = 3600,
     split_overwrite: bool = False,
     split_clean: bool = False,
     split_outdir: Path | None = None,
+) -> Path:
+    """Decode/gapfill/filter the serial audio once per run and return filtered CSV."""
+    audio_decoded_dir = parent_out / "audio_decoded"
+    audio_decoded_dir.mkdir(parents=True, exist_ok=True)
+
+    with log_context(seg="-", cam="-"):
+        if skip_decode:
+            if do_split:
+                logger.info("--skip-decode is set; ignoring --split.")
+            decoded_raw_csv = audio_decoded_dir / "raw.csv"
+            prefiltered_csv = audio_decoded_dir / "raw-gapfilled-filtered.csv"
+
+            missing = []
+            if not decoded_raw_csv.exists():
+                missing.append(decoded_raw_csv)
+            if not prefiltered_csv.exists():
+                missing.append(prefiltered_csv)
+
+            if missing:
+                for path in missing:
+                    logger.error("--skip-decode set but missing %s", _name(path))
+                raise FileNotFoundError(
+                    "Required decoded audio artifacts missing while --skip-decode."
+                )
+
+            logger.info(
+                "Skip decode: using %s and %s",
+                _name(decoded_raw_csv),
+                _name(prefiltered_csv),
+            )
+            return prefiltered_csv
+
+        if do_split:
+            serial_mp3 = Path(audiogroup.serial_audio.path)
+            chunks_dir = split_outdir or (parent_out / "serial_audio_splitted")
+            chunks_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info(
+                "Splitting serial MP3 into %ds chunks at %s",
+                split_chunk_seconds,
+                _name(chunks_dir),
+            )
+            split_mp3_to_wav(
+                input_mp3=serial_mp3,
+                outdir=chunks_dir,
+                chunk_seconds=split_chunk_seconds,
+                start_number=1,
+                overwrite=split_overwrite,
+                clean=split_clean,
+                ffmpeg_bin="ffmpeg",
+                ffmpeg_loglevel="info",
+            )
+
+            manifest_path = chunks_dir / f"{serial_mp3.stem}_manifest.json"
+            if not manifest_path.exists():
+                logger.warning("Manifest not found: %s", _name(manifest_path))
+                manifest_path = None
+
+            split_csv_dir = parent_out / "split_decoded"
+            split_csv_dir.mkdir(parents=True, exist_ok=True)
+
+            decode_split_dir_to_csvs(
+                split_dir=chunks_dir,
+                outdir=split_csv_dir,
+                site=site,
+                threshold=0.5,
+                pattern=f"{serial_mp3.stem}-[0-9][0-9][0-9].wav",
+                manifest=manifest_path,
+            )
+
+            merged = merge_split_csvs(
+                split_dir=split_csv_dir,
+                outdir=audio_decoded_dir,
+                pattern="*.csv",
+                manifest=manifest_path,
+                output_name="raw.csv",
+                gzip_output=False,
+                dedupe=True,
+                tolerance_samples=0,
+                logger=logger,
+            )
+            decoded_raw_csv = merged
+            logger.info("Merged per-chunk CSVs → %s", _name(decoded_raw_csv))
+        else:
+            logger.info("Decoding serial…")
+            decoded_raw_csv, _, _, _ = decode_to_raw(
+                audiogroup.serial_audio.path, audio_decoded_dir, site=site
+            )
+            logger.info("Decoded audio serial → %s", _name(decoded_raw_csv))
+
+        try:
+            _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
+            logger.info("Analyzed %s → %s", _name(decoded_raw_csv), _name(raw_txt))
+        except SerialAnalysisError as e:
+            logger.error("Raw analysis failed: %s", e)
+
+        try:
+            gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
+            logger.info(
+                "Gap-filled %s → %s", _name(decoded_raw_csv), _name(gapfilled_csv)
+            )
+            try:
+                _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
+                logger.info(
+                    "Analyzed %s → %s", _name(gapfilled_csv), _name(gapfilled_txt)
+                )
+            except SerialAnalysisError as e:
+                logger.error("Gap-filled analysis failed: %s", e)
+        except GapFillError:
+            raise
+
+        try:
+            filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
+            logger.info("Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv))
+            try:
+                _, filtered_txt = analyze_csv_serials(path=filtered_csv)
+                logger.info(
+                    "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
+                )
+            except SerialAnalysisError as e:
+                logger.error("Filtered analysis failed: %s", e)
+        except FilteredError:
+            raise
+
+    return filtered_csv
+
+
+def process_segment(
+    video_in: str,
+    audio_in: str,
+    seg_id: str,
+    parent_out: Path,
+    cam_serials: Iterable[str],
+    filtered_csv: Path,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
-    audio_decoded_dir = parent_out / "audio_decoded"
     segment_out = parent_out / seg_id
     summary = {"segment": seg_id, "ok": [], "fail": []}
 
-    # We'll ensure filtered_csv is set in both paths
-    filtered_csv = None
-
-    # ---- Stage: decode/gapfill/filter (segment-scoped context) ----
     with log_context(seg=seg_id, cam="-"):
-        try:
-            if skip_decode:
-                if do_split:
-                    logger.info("--skip-decode is set; ignoring --split.")
-                decoded_raw_csv = audio_decoded_dir / "raw.csv"
-                prefiltered_csv = audio_decoded_dir / "raw-gapfilled-filtered.csv"
-
-                missing_any = False
-                if not decoded_raw_csv.exists():
-                    logger.error("--skip-decode set but missing %s", decoded_raw_csv)
-                    summary["fail"].append("decode-missing")
-                    missing_any = True
-                if not prefiltered_csv.exists():
-                    logger.error("--skip-decode set but missing %s", prefiltered_csv)
-                    summary["fail"].append("filtered-missing")
-                    missing_any = True
-                if missing_any:
-                    return summary
-
-                logger.info(
-                    "Skip decode: using %s and %s",
-                    _name(decoded_raw_csv),
-                    _name(prefiltered_csv),
-                )
-
-                filtered_csv = prefiltered_csv
-
-            else:
-                if do_split:
-                    # Split audio to <out>/serial_audio_splitted (or custom)
-                    serial_mp3 = Path(audiogroup.serial_audio.path)
-                    chunks_dir = split_outdir or (parent_out / "serial_audio_splitted")
-                    chunks_dir.mkdir(parents=True, exist_ok=True)
-
-                    logger.info(
-                        "Splitting serial MP3 into %ds chunks at %s",
-                        split_chunk_seconds,
-                        _name(chunks_dir),
-                    )
-                    split_mp3_to_wav(
-                        input_mp3=serial_mp3,
-                        outdir=chunks_dir,
-                        chunk_seconds=split_chunk_seconds,
-                        start_number=1,
-                        overwrite=split_overwrite,
-                        clean=split_clean,
-                        ffmpeg_bin="ffmpeg",
-                        ffmpeg_loglevel="info",
-                    )
-
-                    # Manifest is written by the splitter; use it automatically if present.
-                    manifest_path = chunks_dir / f"{serial_mp3.stem}_manifest.json"
-                    if not manifest_path.exists():
-                        logger.warning("Manifest not found: %s", _name(manifest_path))
-                        manifest_path = None
-
-                    # Batch decode chunks and merge
-                    split_csv_dir = parent_out / "split_decoded"
-                    split_csv_dir.mkdir(parents=True, exist_ok=True)
-
-                    decode_split_dir_to_csvs(
-                        split_dir=chunks_dir,
-                        outdir=split_csv_dir,
-                        site=site,
-                        threshold=0.5,
-                        pattern=f"{serial_mp3.stem}-[0-9][0-9][0-9].wav",
-                        manifest=manifest_path,
-                    )
-
-                    merged = merge_split_csvs(
-                        split_dir=split_csv_dir,
-                        outdir=audio_decoded_dir,
-                        pattern="*.csv",
-                        manifest=manifest_path,
-                        output_name="raw.csv",
-                        gzip_output=False,
-                        dedupe=True,
-                        tolerance_samples=0,
-                        logger=logger,
-                    )
-                    decoded_raw_csv = merged
-                    logger.info("Merged per-chunk CSVs → %s", _name(decoded_raw_csv))
-                else:
-                    # Single-file decode
-                    logger.info("Decoding serial…")
-                    decoded_raw_csv, _, _, _ = decode_to_raw(
-                        audiogroup.serial_audio.path, audio_decoded_dir, site=site
-                    )
-                    logger.info("Decoded audio serial → %s", _name(decoded_raw_csv))
-
-                try:
-                    _, raw_txt = analyze_csv_serials(path=decoded_raw_csv)
-                    logger.info(
-                        "Analyzed %s → %s", _name(decoded_raw_csv), _name(raw_txt)
-                    )
-                except SerialAnalysisError as e:
-                    logger.error("Raw analysis failed: %s", e)
-                    summary["fail"].append("raw-analysis")
-
-                # Gapfill
-                try:
-                    gapfilled_csv = gapfill_csv_file(input_csv=decoded_raw_csv)
-                    logger.info(
-                        "Gap-filled %s → %s",
-                        _name(decoded_raw_csv),
-                        _name(gapfilled_csv),
-                    )
-                    try:
-                        _, gapfilled_txt = analyze_csv_serials(path=gapfilled_csv)
-                        logger.info(
-                            "Analyzed %s → %s",
-                            _name(gapfilled_csv),
-                            _name(gapfilled_txt),
-                        )
-                    except SerialAnalysisError as e:
-                        logger.error("Gap-filled analysis failed: %s", e)
-                        summary["fail"].append("gapfilled-analysis")
-                except GapFillError as e:
-                    logger.error("Gap-fill failed: %s", e)
-                    summary["fail"].append("gapfill")
-                    return summary
-
-                # ---- Stage: filter + analyze ----
-                try:
-                    filtered_csv = filter_audio_file(input_csv=gapfilled_csv)
-                    logger.info(
-                        "Filtered %s → %s", _name(gapfilled_csv), _name(filtered_csv)
-                    )
-                    try:
-                        _, filtered_txt = analyze_csv_serials(path=filtered_csv)
-                        logger.info(
-                            "Analyzed %s → %s", _name(filtered_csv), _name(filtered_txt)
-                        )
-                    except SerialAnalysisError as e:
-                        logger.error("Filtered analysis failed: %s", e)
-                        summary["fail"].append("filtered-analysis")
-                except FilteredError as e:
-                    logger.error("Filter failed: %s", e)
-                    summary["fail"].append("filter")
-                    return summary
-
-        except AudioDecodingError as e:
-            logger.error("Decode failed: %s", e)
-            summary["fail"].append("decode")
-            return summary
+        logger.info("Reusing filtered serial CSV %s", _name(filtered_csv))
 
     # ---- Per camera workflow (camera-scoped context) ----
     for cam in cam_serials:
@@ -616,9 +609,15 @@ def process_segment(
                     try:
                         analyze_anchors_file(anchors_json=filtered_anchors)
                         clog.info("anchors analyzed")
-                    except AnchorError as e:
+                    except (AnchorError, ValueError) as e:
                         clog.error("anchors analyze failed: %s", e)
-                        summary["fail"].append(f"{cam}:anchors-analyze")
+                        reason = (
+                            "anchors-empty"
+                            if isinstance(e, ValueError)
+                            else "anchors-analyze"
+                        )
+                        summary["fail"].append(f"{cam}:{reason}")
+                        continue
                 except AnchorError as e:
                     clog.error("anchors save failed: %s", e)
                     summary["fail"].append(f"{cam}:anchors-save")
@@ -728,9 +727,15 @@ def process_segment(
                     try:
                         analyze_anchors_file(anchors_json=padded_anchors)
                         clog.info("padded-anchors analyzed")
-                    except AnchorError as e:
+                    except (AnchorError, ValueError) as e:
                         clog.error("padded-anchors analyze failed: %s", e)
-                        summary["fail"].append(f"{cam}:padded-anchors-analyze")
+                        reason = (
+                            "padded-anchors-empty"
+                            if isinstance(e, ValueError)
+                            else "padded-anchors-analyze"
+                        )
+                        summary["fail"].append(f"{cam}:{reason}")
+                        continue
                 except AnchorError as e:
                     clog.error("padded-anchors save failed: %s", e)
                     summary["fail"].append(f"{cam}:padded-anchors-save")
