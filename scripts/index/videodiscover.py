@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+from dataclasses import replace
 from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from scripts.index.common import (
 )
 from scripts.parsers.videofileparser import VideoFileParser
 from scripts.parsers.jsonfileparser import JsonParser
+from scripts.fix.jsonserialfixer import JsonSerialFixer
 from scripts.models import (
     Video,
     CamJson,
@@ -232,6 +234,11 @@ class VideoDiscoverer(_DirMixin):
                     fixed_reidx_frame_ids=fixed_reidx_frame_ids,
                 )
 
+            cam_jsons = self._apply_raw_serial_fallbacks(
+                cam_jsons,
+                json_name=json_path.name,
+            )
+
             return cam_serials_all, cam_jsons
 
         except Exception as e:
@@ -249,6 +256,90 @@ class VideoDiscoverer(_DirMixin):
             cam_jsons=cam_jsons,
         )
         return json_wrap, cam_serials_from_json, cam_jsons
+
+    # ---- data cleanup helpers ---------------------------------------------
+
+    def _apply_raw_serial_fallbacks(
+        self,
+        cam_jsons: Dict[str, CamJson],
+        *,
+        json_name: str,
+    ) -> Dict[str, CamJson]:
+        """Replace all-(-1) raw serial lists with another camera's data."""
+        if not cam_jsons:
+            return cam_jsons
+
+        exemplar_by_length: dict[int, tuple[list[int], Optional[list[int]]]] = {}
+        for cam_json in cam_jsons.values():
+            raw = cam_json.raw_serials
+            if raw and not self._raw_serials_all_placeholder(raw):
+                fixed_copy = (
+                    list(cam_json.fixed_serials) if cam_json.fixed_serials else None
+                )
+                exemplar_by_length.setdefault(
+                    len(raw),
+                    (list(raw), fixed_copy or self._compute_fixed_serials(raw)),
+                )
+
+        if not exemplar_by_length:
+            return cam_jsons
+
+        updated = dict(cam_jsons)
+        for cam_serial, cam_json in cam_jsons.items():
+            raw = cam_json.raw_serials
+            if not raw or not self._raw_serials_all_placeholder(raw):
+                continue
+
+            replacement = exemplar_by_length.get(len(raw))
+            if not replacement:
+                continue
+
+            fallback_raw, fallback_fixed = replacement
+            if fallback_fixed is None:
+                fallback_fixed = self._compute_fixed_serials(fallback_raw)
+
+            self.log.warning(
+                "JSON %s camera %s raw_serials all -1; using fallback from another camera",
+                json_name,
+                cam_serial,
+            )
+            updated[cam_serial] = replace(
+                cam_json,
+                raw_serials=list(fallback_raw),
+                fixed_serials=list(fallback_fixed) if fallback_fixed else None,
+            )
+
+        return updated
+
+    def _compute_fixed_serials(self, raw: List[int]) -> Optional[list[int]]:
+        """Run JsonSerialFixer on the provided raw serials."""
+        if not raw:
+            return None
+        try:
+            fixed = JsonSerialFixer().fix(raw)
+        except Exception as exc:
+            self.log.warning(
+                "Failed to compute fixed serials for fallback raw_serials (len=%s): %s",
+                len(raw),
+                exc,
+            )
+            return None
+        return list(fixed) if fixed else None
+
+    @staticmethod
+    def _raw_serials_all_placeholder(raw: List[int]) -> bool:
+        """Return True if every entry is effectively missing (-1/None)."""
+        if not raw:
+            return False
+        for value in raw:
+            if value is None:
+                continue
+            try:
+                if int(value) != -1:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
     # ---- public: fast single-segment path (no cam filter) -----------------
 
