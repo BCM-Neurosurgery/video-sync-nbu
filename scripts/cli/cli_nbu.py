@@ -123,6 +123,8 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 import logging
+import shutil
+import subprocess
 from typing import Iterable
 
 from scripts.decode.wavfileparser import decode_to_raw, decode_split_dir_to_csvs
@@ -172,6 +174,7 @@ from scripts.log.logutils import (
 logger = logging.getLogger("cli")
 
 SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
+UPSIDE_DOWN_CAMERAS: set[str] = {"24253458"}
 
 
 def list_segments(video_dir: Path) -> list[str]:
@@ -191,6 +194,59 @@ def list_cameras_for_segment(video_dir: Path, segment_id: str) -> list[str]:
             cams.append(cam)
     cams.sort()
     return cams
+
+
+def _flip_video_if_needed(
+    cam_serial: str, synced_path: Path, log: logging.Logger
+) -> None:
+    """Flip cameras that record upside down by re-encoding with vflip+hflip."""
+    if cam_serial not in UPSIDE_DOWN_CAMERAS:
+        return
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin is None:
+        raise RuntimeError(
+            "ffmpeg not found on PATH; required to flip upside-down video."
+        )
+
+    tmp_path = synced_path.with_name(f"{synced_path.stem}.flipped{synced_path.suffix}")
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    log.info("Flipping upside-down camera %s → %s", cam_serial, synced_path.name)
+
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(synced_path),
+        "-vf",
+        "vflip,hflip",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "copy",
+        str(tmp_path),
+    ]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        raise RuntimeError(
+            f"ffmpeg flip failed for {synced_path.name}: {stderr or 'unknown error'}"
+        )
+
+    tmp_path.replace(synced_path)
+    log.info("Applied flip for upside-down camera %s", cam_serial)
 
 
 def build_targets(
@@ -258,6 +314,7 @@ def run_pipeline(
     split_overwrite: bool = False,
     split_clean: bool = False,
     split_outdir: Path | None = None,
+    overwrite_clips: bool = False,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -316,6 +373,7 @@ def run_pipeline(
             parent_out=out_dir,
             cam_serials=cam_list,
             filtered_csv=filtered_csv,
+            overwrite_clips=overwrite_clips,
         )
         if summary["fail"]:
             failures += 1
@@ -473,6 +531,8 @@ def process_segment(
     parent_out: Path,
     cam_serials: Iterable[str],
     filtered_csv: Path,
+    *,
+    overwrite_clips: bool,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
     segment_out = parent_out / seg_id
@@ -655,6 +715,7 @@ def process_segment(
                         out_dir=cam_out / "audio_clipped",
                         sr=44100,
                         margin_sec=5,
+                        overwrite=overwrite_clips,
                     )
                     clog.info(
                         "Clipped Audio, localized clipped CSV → %s", _name(local_csv)
@@ -743,18 +804,25 @@ def process_segment(
 
                 # Final sync
                 try:
-                    sync_one_video(
+                    synced_video_path = sync_one_video(
                         audio_dir=cam_out / "audio_padded",
                         video=vid,
                         anchors_json=padded_anchors,
                         out_audio_dir=cam_out / "synced_audio",
                         out_video_dir=cam_out / "synced_video",
                     )
-                    clog.info("synced ✔")
-                    summary["ok"].append(cam)
                 except SyncError as e:
                     clog.error("sync failed: %s", e)
                     summary["fail"].append(f"{cam}:sync")
+                else:
+                    try:
+                        _flip_video_if_needed(cam, synced_video_path, clog)
+                    except RuntimeError as e:
+                        clog.error("post-sync flip failed: %s", e)
+                        summary["fail"].append(f"{cam}:flip")
+                        continue
+                    clog.info("synced ✔")
+                    summary["ok"].append(cam)
 
             finally:
                 # Detach per-camera file handler to avoid handler accumulation
@@ -849,6 +917,11 @@ if __name__ == "__main__":
         type=Path,
         help="Where to place chunks when splitting (default: <out>/serial_audio_splitted).",
     )
+    parser.add_argument(
+        "--overwrite-clips",
+        action="store_true",
+        help="Allow ffmpeg to overwrite existing clipped audio files.",
+    )
 
     args = parser.parse_args()
 
@@ -868,5 +941,6 @@ if __name__ == "__main__":
         split_overwrite=args.split_overwrite,
         split_clean=args.split_clean,
         split_outdir=args.split_outdir,
+        overwrite_clips=args.overwrite_clips,
     )
     raise SystemExit(rc)
