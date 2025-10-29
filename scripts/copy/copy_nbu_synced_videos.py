@@ -33,6 +33,19 @@ FILENAME_PATTERN = re.compile(
 )
 
 
+def files_match(src: Path, dest: Path) -> bool:
+    """Return True when `src` and `dest` share size and modification time metadata."""
+    try:
+        src_stat = src.stat()
+        dest_stat = dest.stat()
+    except FileNotFoundError:
+        return False
+    return (
+        src_stat.st_size == dest_stat.st_size
+        and src_stat.st_mtime_ns == dest_stat.st_mtime_ns
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Copy NBU synced video clips matching the naming convention to another directory."
@@ -75,6 +88,20 @@ def copy_clips(
     copied: List[Path] = []
     for clip in clips:
         target = destination / clip.name
+        if target.exists() and files_match(clip, target):
+            if dry_run:
+                logging.info(
+                    "[DRY RUN] Skipping %s (already present with matching size and mtime)",
+                    target,
+                )
+            else:
+                logging.info(
+                    "Skipping copy for %s (already present with matching size and mtime)",
+                    target,
+                )
+            continue
+        if target.exists():
+            logging.info("Overwriting existing file %s", target)
         if dry_run:
             logging.info("[DRY RUN] Would copy %s -> %s", clip, target)
             copied.append(target)
