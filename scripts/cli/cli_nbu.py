@@ -123,6 +123,7 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 import logging
+import re
 import shutil
 import subprocess
 from typing import Iterable
@@ -178,8 +179,23 @@ UPSIDE_DOWN_CAMERAS: set[str] = {"24253458"}
 
 
 def list_segments(video_dir: Path) -> list[str]:
-    """Discover segment IDs from *.json basenames in video_dir."""
-    return sorted({p.stem for p in Path(video_dir).glob("*.json")})
+    """
+    Discover segment IDs from *.json basenames, returning them chronologically.
+    Segment IDs containing YYYYMMDD_HHMMSS parts are sorted by that timestamp;
+    any others fall back to a lexicographic order at the end.
+    """
+    segment_ids = {p.stem for p in Path(video_dir).glob("*.json")}
+
+    def _sort_key(seg: str) -> tuple:
+        match = re.search(r"(\d{8})_(\d{6})", seg)
+        if match:
+            try:
+                return (0, int(match.group(1)), int(match.group(2)), seg)
+            except ValueError:
+                pass
+        return (1, seg)
+
+    return sorted(segment_ids, key=_sort_key)
 
 
 def list_cameras_for_segment(video_dir: Path, segment_id: str) -> list[str]:
