@@ -3,9 +3,9 @@
 Copy NBU synced video clips that match the expected naming convention into a target directory.
 
 Expected filename format:
-    <patient>_<YYYYMMDD>_<HHMMSS>.serial<8 digits>_clip.mp4
+    <patient>_<YYYYMMDD>_<HHMMSS>.serial<8 digits>_synced.mp4
 Example:
-    AA004_20250904_113323.serial24253445_clip.mp4
+    AA004_20250904_113323.serial24253445_synced.mp4
 """
 
 from __future__ import annotations
