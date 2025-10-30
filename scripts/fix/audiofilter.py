@@ -16,7 +16,9 @@ class AudioFilter:
     Strategy
     --------
     Anchor-aware monotone filter on the 'serial' column:
-      • Keep the first row; set ANCHOR = LAST_KEPT = serial[0].
+      • Keep the earliest row that has a forward neighbour within MAX_FWD_DELTA
+        (or any subsequent row if no such neighbour exists); set ANCHOR = LAST_KEPT
+        to that serial.
       • For each subsequent value 'cur':
           - Drop if cur <= ANCHOR            (handles back-jumps & duplicates)
           - Drop if MAX_FWD_DELTA is not None and (cur - LAST_KEPT) > MAX_FWD_DELTA
@@ -95,12 +97,30 @@ class AudioFilter:
         if n <= 1:
             return df.copy()
 
-        keep_idx = [0]  # always keep the first row
-        anchor = int(s[0])  # last trusted increasing value
-        last_kept = int(s[0])  # last value we actually appended
         max_delta = getattr(AudioFilter, "MAX_FWD_DELTA", None)
 
-        for i in range(1, n):
+        # Choose the earliest anchor that has a plausible forward neighbour.
+        start_idx = 0
+        if max_delta is not None and n > 1:
+            candidate = 0
+            while candidate < n - 1:
+                anchor_val = int(s[candidate])
+                j = candidate + 1
+                while j < n and int(s[j]) <= anchor_val:
+                    j += 1
+                if j == n:
+                    break  # no strictly increasing value ahead
+                forward_step = int(s[j]) - anchor_val
+                if forward_step <= max_delta:
+                    break  # candidate has a reasonable successor
+                candidate += 1
+            start_idx = candidate
+
+        keep_idx = [start_idx]
+        anchor = int(s[start_idx])  # last trusted increasing value
+        last_kept = int(s[start_idx])  # last value we actually appended
+
+        for i in range(start_idx + 1, n):
             cur = int(s[i])
 
             # Reject values at or below the anchor (handles 1005 → 98, 99, ...)
