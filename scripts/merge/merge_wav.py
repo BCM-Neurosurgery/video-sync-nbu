@@ -87,7 +87,7 @@ def merge_channel_wavs(
         raise ValueError(f"No files provided for channel {channel}.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{channel}_merged.wav"
+    output_path = output_dir / f"merged-{channel}.wav"
 
     params_reference = None
     with wave.open(str(output_path), "wb") as writer:
