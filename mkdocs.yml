@@ -12,30 +12,31 @@ plugins:
   - section-index
 nav:
   - Home: index.md
-  # - Tutorials:
-  #     - Quick Start: tutorials/quickstart.md
-  # - How-to:
-  #     - Troubleshooting: how-to/troubleshooting.md
-  # - Reference:
-  #     - Schemas & Layouts: reference/schemas/layouts.md
-  #     - Errors: reference/errors.md
-  # - Explanations:
-  #     - Architecture: explanations/architecture.md
-  - EMU Time Sync:
-    - Good examples: emu_time_sync/good_examples.md
-    - How much data without serial: emu_time_sync/how_much_data_without_serial.md
-    - Recording Events TimeStamp: emu_time_sync/recording_events_timestamp.md
-    - Understanding NEV timestamp: emu_time_sync/understanding_nev_timestamp.md
-    - NEV vs. Camera clock: emu_time_sync/nev_vs_camera_clock.md
-    # - Understanding NEV digital data: emu_time_sync/understanding_nev_digital_data.md
-  - Understanding Audio:
-    - How to decode serial?: understanding_audio/decoding_serial.md
-    - What's the quality of serial?: understanding_audio/serial_quality.md
-    - First Fix - Gap Filling: understanding_audio/fill_gaps.md
-    - Is there data loss?: understanding_audio/data_loss.md
-    - NBU lounge data loss: understanding_audio/nbu_lounge_audio_loss.md
-    - NBU sleep room data loss: understanding_audio/nbu_sleep_audio_loss.md
-    - Jamail data loss: understanding_audio/jamail_audio_loss.md
+  - Which CLI should I use?: tutorials/cli-overview.md
+  - NBU A/V Sync:
+    - Getting Started:
+      - Installation: nbu/installation.md
+      - Input & Output Layouts: nbu/io-layouts.md
+      - Quick Start (Elias example): nbu/quickstart.md
+      - Recipes (common runs): nbu/recipes.md
+    - Understanding Audio:
+      - How to decode serial?: nbu/understanding_audio/decoding_serial.md
+      - What's the quality of serial?: nbu/understanding_audio/serial_quality.md
+      - First Fix - Gap Filling: nbu/understanding_audio/fill_gaps.md
+      - Is there data loss?: nbu/understanding_audio/data_loss.md
+      - NBU lounge data loss: nbu/understanding_audio/nbu_lounge_audio_loss.md
+      - NBU sleep room data loss: nbu/understanding_audio/nbu_sleep_audio_loss.md
+      - Jamail data loss: nbu/understanding_audio/jamail_audio_loss.md
+  - EMU A/V Sync:
+    - Getting Started:
+      - Run via UI: emu/ui.md
+    - Guides:
+      - Good examples: emu/good_examples.md
+      - How much data without serial: emu/how_much_data_without_serial.md
+      - Recording Events TimeStamp: emu/recording_events_timestamp.md
+      - Understanding NEV timestamp: emu/understanding_nev_timestamp.md
+      - NEV vs. Camera clock: emu/nev_vs_camera_clock.md
+    # - Understanding NEV digital data: emu/understanding_nev_digital_data.md
   # - Optimizations:
       # - Decoding large MP3s: optimizations/decoding_large_mp3.md
 
