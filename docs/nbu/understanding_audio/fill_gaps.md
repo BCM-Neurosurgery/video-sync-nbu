@@ -6,10 +6,10 @@ From the [previous page](serial_quality.md), we observed that although there are
 
 ## Files in this page
 
-- Raw 1-Hour Serial: [`TRBD002_08062025-03-001.csv`](../assets/fill_gaps/TRBD002_08062025-03-001.csv)
-- Raw 1-Hour Serial Analysis: [`TRBD002_08062025-03-001.txt`](../assets/fill_gaps/TRBD002_08062025-03-001.txt)
-- Gap-filled Serial: [`TRBD002_08062025-03-001-gapfilled.csv`](../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.csv)
-- Gap-filled Serial Analysis: [`TRBD002_08062025-03-001-gapfilled.txt`](../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.txt)
+- Raw 1-Hour Serial: [`TRBD002_08062025-03-001.csv`](../../assets/fill_gaps/TRBD002_08062025-03-001.csv)
+- Raw 1-Hour Serial Analysis: [`TRBD002_08062025-03-001.txt`](../../assets/fill_gaps/TRBD002_08062025-03-001.txt)
+- Gap-filled Serial: [`TRBD002_08062025-03-001-gapfilled.csv`](../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.csv)
+- Gap-filled Serial Analysis: [`TRBD002_08062025-03-001-gapfilled.txt`](../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.txt)
 
 ---
 

@@ -7,7 +7,7 @@ stays pristine.
 ## What you need
 
 - Access to Elias and the example path: `/mnt/datalake/synced_videos/Example_data/`.
-- Project installed and Conda env active (see Installation).
+- Project installed and Conda env active (see [Installation](installation.md)).
 - FFmpeg on `PATH`.
 
 ## Example input layout

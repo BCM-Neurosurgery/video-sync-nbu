@@ -7,17 +7,17 @@ After applying heuristic gap filling to the decoded serials (without changing th
 All examples derive from `TRBD002_08062025-03.mp3`. We use segment `TRBD002_20250806_104707` for camera `23512909` to mimic a real sync workflow. Files (stored on Elias):
 
 - Camera JSON (chunk serials + frame IDs):
-    - [camera JSON](../assets/data_loss/TRBD002_20250806_104707.23512909.json)
+    - [camera JSON](../../assets/data_loss/TRBD002_20250806_104707.23512909.json)
 
 - Sequence analyses of that JSON:
-    - [fixed chunk serials report](../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_chunk_serials.txt)
-    - [fixed frame IDs report](../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_frame_ids.txt)
+    - [fixed chunk serials report](../../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_chunk_serials.txt)
+    - [fixed frame IDs report](../../assets/data_loss/TRBD002_20250806_104707.23512909.fixed_frame_ids.txt)
 - Decoded audio-side serials (gap-filled) clipped to the same 10‑min window:
-    - [gap-filled CSV](../assets/data_loss/raw-gapfilled.32948939-32966938.csv)
-    - [CSV monotonicity report](../assets/data_loss/raw-gapfilled.32948939-32966938.txt)
+    - [gap-filled CSV](../../assets/data_loss/raw-gapfilled.32948939-32966938.csv)
+    - [CSV monotonicity report](../../assets/data_loss/raw-gapfilled.32948939-32966938.txt)
 - Matched anchors (audio serial ↔ video serial/frame):
-    - [anchors JSON](../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json)
-    - [anchors analysis](../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt)
+    - [anchors JSON](../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json)
+    - [anchors analysis](../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt)
 
 ## Video frame ID and serial checks
 
@@ -67,7 +67,7 @@ Same result: video-side serials are perfectly monotonic.
 
 ## Anchor analysis (audio ↔ video)
 
-Now we match audio serials to video serials/frame IDs using `scripts.doc_helper.collect_anchors`, producing the [anchors JSON](../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json), then run sequence analysis to get the [anchors report](../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt).
+Now we match audio serials to video serials/frame IDs using `scripts.doc_helper.collect_anchors`, producing the [anchors JSON](../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.json), then run sequence analysis to get the [anchors report](../../assets/data_loss/TRBD002_20250806_104707.23512909.23512909.anchors.txt).
 
 ```txt
 === FRAME-ID ANALYSIS (FIXED frame_id_fixed) ===
@@ -187,7 +187,7 @@ After `32960860`, the sequence regresses (`32960844`, `32960838`, `32960832`) be
 
 ## Quantifying audio loss
 
-To quantify audio loss, the idea is to find all those "unmatched" locations within the decode CSV, calculate the actual time difference within the audio, the time difference it should be if there were not serial gaps, differencing those 2 to get the estimated time loss, and accumulate them. To provide a more accurate estimate that resembles the frequency of the realistic serial stream, instead of using 1470 (44100hz / 30fps) in calculation, we will actually use the local median, which is around 1510 samples (which means in reality the audio gets serials in roughly 44100 / 1510 = 29.21 fps). The algorithm and implementation details are all within `scripts.analysis.audio_loss_analysis`, the report for this particular 10-min example is at [`audio loss report`](../assets/data_loss/raw-gapfilled.32948939-32966938.audio_loss.json). 
+To quantify audio loss, the idea is to find all those "unmatched" locations within the decode CSV, calculate the actual time difference within the audio, the time difference it should be if there were not serial gaps, differencing those 2 to get the estimated time loss, and accumulate them. To provide a more accurate estimate that resembles the frequency of the realistic serial stream, instead of using 1470 (44100hz / 30fps) in calculation, we will actually use the local median, which is around 1510 samples (which means in reality the audio gets serials in roughly 44100 / 1510 = 29.21 fps). The algorithm and implementation details are all within `scripts.analysis.audio_loss_analysis`, the report for this particular 10-min example is at [`audio loss report`](../../assets/data_loss/raw-gapfilled.32948939-32966938.audio_loss.json). 
 
 An example:
 

@@ -1,7 +1,7 @@
-# Installation
+# Installation (NBU)
 
-Set up the video-sync toolkit locally so you can run the CLI pipelines and view
-the docs.
+Set up the video-sync toolkit for the NBU A/V sync CLI (Jamail/Lounge/Sleep) and
+preview the docs locally.
 
 ## Prerequisites
 
@@ -34,15 +34,13 @@ ffmpeg -version
 
 ## Verify the CLI works
 
-Run the two main entry points to ensure imports resolve:
+Run the NBU entry point to ensure imports resolve:
 
 ```bash
 python -m scripts.cli.cli_nbu --help
-python -m scripts.cli.cli_emu_time --help
 ```
 
-If you use Prefect for EMU sync, also check `prefect version` and see the
-[Prefect UI guide](../prefect/ui.md) for UI setup.
+For EMU workflows, see the *Which CLI should I use?* page and the EMU section.
 
 ## (Optional) Preview this documentation site
 

@@ -16,8 +16,8 @@ Six of seven sessions are gap-free; the single non-zero entry is a 2.25-second d
 
 ## 2. Artifacts & reports
 
-- Overall config + rollup: [overall report](../assets/jamail_audio_loss/audio_loss_overall.json)
-- Per-recording CSV summary: [summary report](../assets/jamail_audio_loss/audio_loss_summary.csv)
+- Overall config + rollup: [overall report](../../assets/jamail_audio_loss/audio_loss_overall.json)
+- Per-recording CSV summary: [summary report](../../assets/jamail_audio_loss/audio_loss_summary.csv)
 
 ## 3. Configuration (for reproducibility)
 

@@ -16,8 +16,8 @@ Most recordings show near‑zero structural loss; the overall 1.9% is driven alm
 
 ## 2. Artifacts & reports
 
-- Overall config + rollup: [overall report](../assets/how_much_data_loss/audio_loss_overall.json)
-- Per‑recording CSV summary: [summary report](../assets/how_much_data_loss/audio_loss_summary.csv)
+- Overall config + rollup: [overall report](../../assets/how_much_data_loss/audio_loss_overall.json)
+- Per‑recording CSV summary: [summary report](../../assets/how_much_data_loss/audio_loss_summary.csv)
 
 ## 3. Configuration (for reproducibility)
 

@@ -16,8 +16,8 @@ Two outlier sessions dominate the loss figure; the remainder are effectively cle
 
 ## 2. Artifacts & reports
 
-- Overall config + rollup: [overall report](../assets/nbu_sleep_audio_loss/audio_loss_overall.json)
-- Per-recording CSV summary: [summary report](../assets/nbu_sleep_audio_loss/audio_loss_summary.csv)
+- Overall config + rollup: [overall report](../../assets/nbu_sleep_audio_loss/audio_loss_overall.json)
+- Per-recording CSV summary: [summary report](../../assets/nbu_sleep_audio_loss/audio_loss_summary.csv)
 
 ## 3. Configuration (for reproducibility)
 

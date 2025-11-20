@@ -2,11 +2,11 @@
 
 After decoding serials from the serial audio, a natural question is: what’s the data quality? In a perfect scenario, we expect a monotonic sequence—but is that the case? To show an example representative of the general data quality, we use the **first 1‑hour slice of `TRBD002_08062025-03.mp3`** and include the decoded CSV and its text analysis report so readers can reproduce the findings.
 
-> Files for this example are checked into the repo under: `docs/assets/serial_quality/`
+> Files for this example are checked into the repo under: `../../assets/serial_quality/`
 
-- CSV: [`assets/serial_quality/TRBD002_08062025-03-001.csv`](../assets/serial_quality/TRBD002_08062025-03-001.csv)
+- CSV: [`assets/serial_quality/TRBD002_08062025-03-001.csv`](../../assets/serial_quality/TRBD002_08062025-03-001.csv)
 
-- Text report: [`assets/serial_quality/TRBD002_08062025-03-001.txt`](../assets/serial_quality/TRBD002_08062025-03-001.txt)
+- Text report: [`assets/serial_quality/TRBD002_08062025-03-001.txt`](../../assets/serial_quality/TRBD002_08062025-03-001.txt)
 
 
 ## CSV schema

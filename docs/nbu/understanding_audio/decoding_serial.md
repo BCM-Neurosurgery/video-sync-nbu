@@ -52,51 +52,51 @@ Per-window flips (if enabled by the site preset) are only to ensure each sampled
 ## Visual tour: from raw wave to 35-bit IDs
 
 > The figures below are produced by `scripts/tools/make_serial_plots.py` and saved under  
-> `docs/assets/serial/`.
+> `../../assets/serial/`.
 
 ### 1) Raw serial audio (overview)
 Short “bursty” plateaus carry the embedded bits.
 
-![Raw serial audio (overview)](../assets/serial/step01_raw.png)
+![Raw serial audio (overview)](../../assets/serial/step01_raw.png)
 
 ### 2) From wave to binary
 Normalize to `[0,1]` and pick a threshold (default `0.5`):
 
-![Normalized to [0,1] with threshold](../assets/serial/step02_normalized.png)
+![Normalized to [0,1] with threshold](../../assets/serial/step02_normalized.png)
 
 Then binarize to get the decoder’s 0/1 stream (original, pre-flip):
 
-![Binarized stream (original, pre-flip)](../assets/serial/step03_binary_preflip.png)
+![Binarized stream (original, pre-flip)](../../assets/serial/step03_binary_preflip.png)
 
 ### 3) Global flip (why & effect)
 We reverse the **entire** 0/1 stream so that the **first `0`** we see while scanning forward corresponds to a **start-of-block** (equivalently: scanning backward on the original and firing on 1→0 drops).
 
-![Binarized scan stream](../assets/serial/step04_binary_scanstream.png)
+![Binarized scan stream](../../assets/serial/step04_binary_scanstream.png)
 
 ### 4) Window selection on the scanning stream
 Take windows of length **`W`** (site-specific; for **nbu_lounge** we use **231**) and hop by **`stride ≈ 1100`**.
 
-![Window scan on scan-stream](../assets/serial/step05_scanstream_windows.png)
+![Window scan on scan-stream](../../assets/serial/step05_scanstream_windows.png)
 
 ### 5) Same windows mapped back to original time
 For intuition, the same windows (starts/ends) shown on the original (pre-flip) axis:
 
-![Windows on original axis](../assets/serial/step06_original_windows.png)
+![Windows on original axis](../../assets/serial/step06_original_windows.png)
 
 ### 6) Zoom one decoded block (original time)
 Zoom around a specific chronological block (by index), shading the exact sampling window:
 
-![Zoom raw (original time)](../assets/serial/step07_zoom_raw.png)
+![Zoom raw (original time)](../../assets/serial/step07_zoom_raw.png)
 
 Zoomed binary view of the same region:
 
-![Zoom binary (original time)](../assets/serial/step08_zoom_binary.png)
+![Zoom binary (original time)](../../assets/serial/step08_zoom_binary.png)
 
 ### 7) Inside the window: anchors, taps, and bit order
 The actual window used for sampling (after optional per-window flip to guarantee MSB→LSB).  
 We annotate **5 groups** (anchors) × **7 taps** each (dots), labeling **G1 (MSB)** through **G5 (LSB)** and listing the computed 7-bit byte values plus the concatenated **35-bit ID**. The bits are sampled based on empirical anchor points and offsets (counting backwards). Across NBU sleep room, NBU lounge, and Jamail, we use `anchors=[6, 53, 100, 147, 194]` and `offsets=[4, 9, 14, 19, 23, 28, 33, 37]` but we only sample the first 7 bits.
 
-![Window with anchors/taps and bit annotations](../assets/serial/step09_window_taps.png)
+![Window with anchors/taps and bit annotations](../../assets/serial/step09_window_taps.png)
 
 ---
 
@@ -130,7 +130,7 @@ The decoder explicitly orders taps MSB→LSB.
 ## Appendix: expected images (fresh run)
 
 ```
-docs/assets/serial/
+../../assets/serial/
   step01_raw.png
   step02_normalized.png
   step03_binary_preflip.png

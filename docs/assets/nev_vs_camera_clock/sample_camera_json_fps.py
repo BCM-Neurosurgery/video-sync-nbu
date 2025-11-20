@@ -3,7 +3,7 @@
 
 The script walks a patient data tree, picks a random subset of camera JSON
 files, computes FPS from the ``real_times`` field, and publishes an aggregate
-summary for reporting purposes (see docs/emu_time_sync/nev_vs_camera_clock.md).
+summary for reporting purposes (see docs/emu/nev_vs_camera_clock.md).
 
 Example::
 
