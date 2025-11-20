@@ -16,9 +16,9 @@ class AudioFilter:
     Strategy
     --------
     Anchor-aware monotone filter on the 'serial' column:
-      • Keep the earliest row that has a forward neighbour within MAX_FWD_DELTA
-        (or any subsequent row if no such neighbour exists); set ANCHOR = LAST_KEPT
-        to that serial.
+      • Locate the earliest run of at least MIN_RUN_LENGTH rows whose serials are
+        strictly increasing and, when MAX_FWD_DELTA is set, never jump forward by
+        more than that amount. The first row of that run becomes the initial anchor.
       • For each subsequent value 'cur':
           - Drop if cur <= ANCHOR            (handles back-jumps & duplicates)
           - Drop if MAX_FWD_DELTA is not None and (cur - LAST_KEPT) > MAX_FWD_DELTA
@@ -33,6 +33,8 @@ class AudioFilter:
     # Allowed forward step between kept rows; set to None to allow any forward jump.
     # by observation, the forward jump is ~64
     MAX_FWD_DELTA: Optional[int] = 200
+    # Minimum length of a strictly increasing, delta-bounded run to consider it a valid start.
+    MIN_RUN_LENGTH: int = 3
 
     def filter_csv(self, csv: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
         """
@@ -98,23 +100,8 @@ class AudioFilter:
             return df.copy()
 
         max_delta = getattr(AudioFilter, "MAX_FWD_DELTA", None)
-
-        # Choose the earliest anchor that has a plausible forward neighbour.
-        start_idx = 0
-        if max_delta is not None and n > 1:
-            candidate = 0
-            while candidate < n - 1:
-                anchor_val = int(s[candidate])
-                j = candidate + 1
-                while j < n and int(s[j]) <= anchor_val:
-                    j += 1
-                if j == n:
-                    break  # no strictly increasing value ahead
-                forward_step = int(s[j]) - anchor_val
-                if forward_step <= max_delta:
-                    break  # candidate has a reasonable successor
-                candidate += 1
-            start_idx = candidate
+        min_run = getattr(AudioFilter, "MIN_RUN_LENGTH", 3)
+        start_idx = AudioFilter._select_anchor_index(s.tolist(), max_delta, min_run)
 
         keep_idx = [start_idx]
         anchor = int(s[start_idx])  # last trusted increasing value
@@ -139,6 +126,45 @@ class AudioFilter:
         out = df.iloc[keep_idx].copy()
         out.reset_index(drop=True, inplace=True)
         return out
+
+    @staticmethod
+    def _select_anchor_index(
+        values: list[int], max_delta: Optional[int], min_run: int
+    ) -> int:
+        """
+        Identify the starting index of the first sufficiently long monotone run.
+
+        Returns the earliest segment whose consecutive differences are positive
+        (and within max_delta when specified) and whose length is at least min_run.
+        Falls back to the longest segment if no run reaches min_run.
+        """
+        values = [int(v) for v in values]
+        n = len(values)
+        if n <= 1:
+            return 0
+
+        best_start = 0
+        best_len = 1
+        seg_start = 0
+
+        for idx in range(1, n):
+            diff = int(values[idx]) - int(values[idx - 1])
+            if diff <= 0 or (max_delta is not None and diff > max_delta):
+                seg_len = idx - seg_start
+                if seg_len >= min_run:
+                    return seg_start
+                if seg_len > best_len:
+                    best_start = seg_start
+                    best_len = seg_len
+                seg_start = idx
+
+        # tail segment
+        final_len = n - seg_start
+        if final_len >= min_run:
+            return seg_start
+        if final_len > best_len:
+            return seg_start
+        return best_start
 
 
 def filter_audio_file(
