@@ -11,4 +11,8 @@ datajoint==0.14.6
 python-dotenv==1.1.1
 prefect==3.4.23
 PyYAML==6.0.2
+mkdocs==1.6.1
+mkdocs-material==9.7.0
+mkdocs-mermaid2-plugin==1.2.3
+mkdocs-section-index==0.3.10
 git+https://github.com/BCM-Neurosurgery/Blackrock-Python-Utilities.git@main
