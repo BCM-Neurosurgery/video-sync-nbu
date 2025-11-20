@@ -14,7 +14,7 @@ Usage example::
         --seed 42
 
 The output includes per-file FPS values and an averaged summary that can be
-referenced from docs/emu_time_sync/nev_vs_camera_clock.md.
+referenced from docs/emu/nev_vs_camera_clock.md.
 """
 
 from __future__ import annotations

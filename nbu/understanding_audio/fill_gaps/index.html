@@ -9,20 +9,22 @@
       
       
       
+        <link rel="prev" href="../serial_quality/">
       
-        <link rel="next" href="tutorials/cli-overview/">
+      
+        <link rel="next" href="../data_loss/">
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
     
     
       
-        <title>Video Sync Docs</title>
+        <title>First Fix - Gap Filling - Video Sync Docs</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
       
       
 
@@ -41,7 +43,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -60,7 +62,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#video-sync-pipeline" class="md-skip">
+        <a href="#first-fix-gap-filling" class="md-skip">
           Skip to content
         </a>
       
@@ -76,7 +78,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+    <a href="../../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -96,7 +98,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              First Fix - Gap Filling
             
           </span>
         </div>
@@ -174,7 +176,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+    <a href="../../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -189,19 +191,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -212,7 +205,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -224,7 +216,7 @@
   
   
     <li class="md-nav__item">
-      <a href="tutorials/cli-overview/" class="md-nav__link">
+      <a href="../../../tutorials/cli-overview/" class="md-nav__link">
         
   
   
@@ -243,8 +235,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -255,11 +249,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -275,7 +269,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             NBU A/V Sync
@@ -329,7 +323,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/installation/" class="md-nav__link">
+      <a href="../../installation/" class="md-nav__link">
         
   
   
@@ -352,7 +346,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/io-layouts/" class="md-nav__link">
+      <a href="../../io-layouts/" class="md-nav__link">
         
   
   
@@ -375,7 +369,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/quickstart/" class="md-nav__link">
+      <a href="../../quickstart/" class="md-nav__link">
         
   
   
@@ -398,7 +392,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/recipes/" class="md-nav__link">
+      <a href="../../recipes/" class="md-nav__link">
         
   
   
@@ -426,6 +420,8 @@
                 
   
   
+    
+  
   
   
     
@@ -435,11 +431,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
         
           
           <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
@@ -455,7 +451,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Understanding Audio
@@ -469,7 +465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/decoding_serial/" class="md-nav__link">
+      <a href="../decoding_serial/" class="md-nav__link">
         
   
   
@@ -492,7 +488,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/serial_quality/" class="md-nav__link">
+      <a href="../serial_quality/" class="md-nav__link">
         
   
   
@@ -512,10 +508,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="nbu/understanding_audio/fill_gaps/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    First Fix - Gap Filling
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -526,6 +544,89 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-in-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Files in this page
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#intuition-midpoint-passes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intuition: midpoint passes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
+    <span class="md-ellipsis">
+      High‑level algorithm (pseudocode)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Limitations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -538,7 +639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/data_loss/" class="md-nav__link">
+      <a href="../data_loss/" class="md-nav__link">
         
   
   
@@ -561,7 +662,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/nbu_lounge_audio_loss/" class="md-nav__link">
+      <a href="../nbu_lounge_audio_loss/" class="md-nav__link">
         
   
   
@@ -584,7 +685,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/nbu_sleep_audio_loss/" class="md-nav__link">
+      <a href="../nbu_sleep_audio_loss/" class="md-nav__link">
         
   
   
@@ -607,7 +708,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/jamail_audio_loss/" class="md-nav__link">
+      <a href="../jamail_audio_loss/" class="md-nav__link">
         
   
   
@@ -728,7 +829,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/ui/" class="md-nav__link">
+      <a href="../../../emu/ui/" class="md-nav__link">
         
   
   
@@ -799,7 +900,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/good_examples/" class="md-nav__link">
+      <a href="../../../emu/good_examples/" class="md-nav__link">
         
   
   
@@ -822,7 +923,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/how_much_data_without_serial/" class="md-nav__link">
+      <a href="../../../emu/how_much_data_without_serial/" class="md-nav__link">
         
   
   
@@ -845,7 +946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/recording_events_timestamp/" class="md-nav__link">
+      <a href="../../../emu/recording_events_timestamp/" class="md-nav__link">
         
   
   
@@ -868,7 +969,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/understanding_nev_timestamp/" class="md-nav__link">
+      <a href="../../../emu/understanding_nev_timestamp/" class="md-nav__link">
         
   
   
@@ -891,7 +992,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/nev_vs_camera_clock/" class="md-nav__link">
+      <a href="../../../emu/nev_vs_camera_clock/" class="md-nav__link">
         
   
   
@@ -942,6 +1043,77 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-in-this-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Files in this page
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#intuition-midpoint-passes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intuition: midpoint passes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#highlevel-algorithm-pseudocode" class="md-nav__link">
+    <span class="md-ellipsis">
+      High‑level algorithm (pseudocode)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Limitations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -956,14 +1128,131 @@
 
 
 
-<h1 id="video-sync-pipeline">Video Sync Pipeline</h1>
-<p>This site covers two A/V sync CLIs:</p>
+<h1 id="first-fix-gap-filling">First Fix — Gap Filling</h1>
+<p>From the <a href="../serial_quality/">previous page</a>, we observed that although there are many discontinuities: drops (negative deltas), forward jumps (delta &gt; 1), and adjacent duplicates (delta = 0), intuitively, we can "repair" the sequence using a "gap-filling" algorithm.</p>
+<hr />
+<h2 id="files-in-this-page">Files in this page</h2>
 <ul>
-<li><strong>NBU A/V Sync (<code>cli_nbu</code>)</strong> — Jamail/NBU recordings with serial-bearing audio.</li>
-<li><strong>EMU A/V Sync (<code>cli_emu_time</code>)</strong> — EMU tasks using NS5/NEV audio plus camera MP4/JSON.</li>
+<li>Raw 1-Hour Serial: <a href="../../../assets/fill_gaps/TRBD002_08062025-03-001.csv"><code>TRBD002_08062025-03-001.csv</code></a></li>
+<li>Raw 1-Hour Serial Analysis: <a href="../../../assets/fill_gaps/TRBD002_08062025-03-001.txt"><code>TRBD002_08062025-03-001.txt</code></a></li>
+<li>Gap-filled Serial: <a href="../../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.csv"><code>TRBD002_08062025-03-001-gapfilled.csv</code></a></li>
+<li>Gap-filled Serial Analysis: <a href="../../../assets/fill_gaps/TRBD002_08062025-03-001-gapfilled.txt"><code>TRBD002_08062025-03-001-gapfilled.txt</code></a></li>
 </ul>
-<p>Start with <strong>Getting Started → Which CLI should I use?</strong> to pick the right path,
-then follow the corresponding quick start and I/O layouts.</p>
+<hr />
+<h2 id="motivation">Motivation</h2>
+<ul>
+<li>The serial counter should increment by 1 for each frame (~30 fps), so consecutive values should form a near‑monotonic sequence.</li>
+<li>Many defects can be corrected without deleting or reordering rows by inferring the missing values between anchors that are likely correct.</li>
+</ul>
+<p>Goal: produce a cleaned serial column with fewer discontinuities, preserving row count and original sample ranges.</p>
+<hr />
+<h2 id="intuition-midpoint-passes">Intuition: midpoint passes</h2>
+<p>Rather than guessing each point independently, we run a small number of midpoint passes at different window sizes. Each pass “looks across” a fixed gap size g and nudges the center point(s) toward what the sequence should be if it were monotonic. For example, with <code>[1,2,3,3,5,6,7]</code>, slide a window of length 3; if the middle value <code>s[i]</code> is not between <code>s[i-1]</code> and <code>s[i+1]</code>, set it accordingly, yielding <code>[1,2,3,4,5,6,7]</code>.</p>
+<p>Key ideas:</p>
+<ul>
+<li>Work only on the serial values; never drop or reorder rows.</li>
+<li>Use multiple gap sizes (e.g., 10, 100, 1000) so local inconsistencies get corrected at the appropriate scale.</li>
+<li>Keep it stable and fast: each pass is O(n) and purely functional w.r.t. row layout.</li>
+</ul>
+<p>By stacking a few such passes, we can straighten out small step defects while leaving large‑scale structure intact.</p>
+<hr />
+<h2 id="highlevel-algorithm-pseudocode">High‑level algorithm (pseudocode)</h2>
+<p>Input/Output contract:
+- Input: CSV or DataFrame with exactly 3 columns: <code>serial,start_sample,end_sample</code>.
+- Output: same schema; only <code>serial</code> values may change; length/order preserved.</p>
+<p>Parameters:
+- gaps: list of window sizes. If not provided, choose powers of 10 strictly less than the number of rows: [10, 100, 1000, …]. For n ≤ 10, no passes are applied.</p>
+<pre><code class="language-text">function gap_fill(series, gaps=None):
+    s = to_int_list(series)
+    if len(s) &lt; 3:
+        return s
+
+    G = sanitize_or_autoselect_gaps(gaps, n=len(s))   # e.g., [10, 100, 1000]
+    for g in G:
+        # A single midpoint pass at window size g
+        # (implementation detail lives in SerialFixer.apply_gap_passes_fast)
+        s = midpoint_pass(s, g)
+
+    return s
+
+function midpoint_pass(s, g):
+    # Conceptually: encourage monotone +1 progression across spans of size g.
+    # One simple mental model:
+    #   - compare s[i] and s[i+g]
+    #   - estimate what the midpoint(s) should be if the run from i..i+g were smooth
+    #   - adjust interior values slightly toward that estimate
+    # Actual implementation is optimized for speed and integer stability.
+    return adjusted_copy_of(s)
+</code></pre>
+<hr />
+<h2 id="results">Results</h2>
+<p>Analyzing with <code>scripts.fix.audiogapfiller</code> on the gap‑filled CSV, the first few rows look like:</p>
+<pre><code class="language-csv">serial,start_sample,end_sample
+32896102,226,457
+32896103,1735,1966
+32896104,3245,3476
+32896105,4755,4986
+32896106,6264,6495
+32896107,7773,8004
+32896108,9283,9514
+32896109,10792,11023
+32896110,12302,12533
+</code></pre>
+<p>Compared to before:</p>
+<pre><code class="language-csv">serial,start_sample,end_sample
+32896102,226,457
+32896096,1735,1966
+32896104,3245,3476
+32896104,4755,4986
+32896106,6264,6495
+32896104,7773,8004
+32896108,9283,9514
+32896108,10792,11023
+32896110,12302,12533
+</code></pre>
+<p>The analysis shows a significantly improved sequence:</p>
+<pre><code class="language-text">Values=105223  Steps=105222  ok=104404 (99.22%)
+Counts: drop=320, duplicate=79, forward_jump=419, ok=104404
+Adjacent duplicate events: 79
+</code></pre>
+<p>Compared to before:</p>
+<pre><code class="language-text">Values=105223  Steps=105222  ok=0 (0.00%)
+Counts: drop=31613, duplicate=24671, forward_jump=48938
+Adjacent duplicate events: 24671
+</code></pre>
+<p>It’s a significant improvement!!</p>
+<hr />
+<h2 id="limitations">Limitations</h2>
+<p>Gap filling does not remove all drops, forward-jumps, and duplicates. An example of a remaining drop can be</p>
+<pre><code class="language-csv">...
+32953058,76591478,76591709
+32953059,76592987,76593218
+32953060,76594496,76594727
+32953348,76596471,76596702
+32953120,76597982,76598213
+32953122,76599491,76599722
+32953123,76601001,76601232
+...
+</code></pre>
+<p>Serial gets bumped from 32953060 to 32953348 before it drops back to 32953120. </p>
+<p>Another example of a duplicate and a large forward-jump after gap-filling can be</p>
+<pre><code class="language-csv">...
+32897351,1708541,1708772
+32897352,1710051,1710282
+32897352,1711561,1711792
+17179869184,1712867,1713098
+34359738367,1713967,1714198
+32897414,1715223,1715454
+32897415,1716733,1716964
+32897416,1718242,1718473
+...
+</code></pre>
+<p>These are cases that can’t be corrected by gap filling alone because they exceed the local window constraints.</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li>This pass does not remove rows or reorder time; it only adjusts <code>serial</code> values.</li>
+<li>It’s designed to fix local inconsistencies efficiently; pathological corruption may require additional passes (e.g., duplicate removal, drop correction) or more advanced reconstruction.</li>
+</ul>
 
 
 
@@ -1012,10 +1301,10 @@ then follow the corresponding quick start and I/O layouts.</p>
     
     
       
-      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.sections", "content.code.copy"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
     
   </body>

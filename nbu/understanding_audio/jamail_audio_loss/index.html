@@ -9,20 +9,22 @@
       
       
       
+        <link rel="prev" href="../nbu_sleep_audio_loss/">
       
-        <link rel="next" href="tutorials/cli-overview/">
+      
+        <link rel="next" href="../../../emu/ui/">
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.18">
     
     
       
-        <title>Video Sync Docs</title>
+        <title>Jamail data loss - Video Sync Docs</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
       
       
 
@@ -41,7 +43,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -60,7 +62,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#video-sync-pipeline" class="md-skip">
+        <a href="#quantifying-jamail-clinic-data-loss" class="md-skip">
           Skip to content
         </a>
       
@@ -76,7 +78,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+    <a href="../../.." title="Video Sync Docs" class="md-header__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -96,7 +98,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Jamail data loss
             
           </span>
         </div>
@@ -174,7 +176,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
+    <a href="../../.." title="Video Sync Docs" class="md-nav__button md-logo" aria-label="Video Sync Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -189,19 +191,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -212,7 +205,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -224,7 +216,7 @@
   
   
     <li class="md-nav__item">
-      <a href="tutorials/cli-overview/" class="md-nav__link">
+      <a href="../../../tutorials/cli-overview/" class="md-nav__link">
         
   
   
@@ -243,8 +235,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -255,11 +249,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -275,7 +269,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             NBU A/V Sync
@@ -329,7 +323,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/installation/" class="md-nav__link">
+      <a href="../../installation/" class="md-nav__link">
         
   
   
@@ -352,7 +346,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/io-layouts/" class="md-nav__link">
+      <a href="../../io-layouts/" class="md-nav__link">
         
   
   
@@ -375,7 +369,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/quickstart/" class="md-nav__link">
+      <a href="../../quickstart/" class="md-nav__link">
         
   
   
@@ -398,7 +392,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/recipes/" class="md-nav__link">
+      <a href="../../recipes/" class="md-nav__link">
         
   
   
@@ -426,6 +420,8 @@
                 
   
   
+    
+  
   
   
     
@@ -435,11 +431,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
         
           
           <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
@@ -455,7 +451,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             Understanding Audio
@@ -469,7 +465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/decoding_serial/" class="md-nav__link">
+      <a href="../decoding_serial/" class="md-nav__link">
         
   
   
@@ -492,7 +488,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/serial_quality/" class="md-nav__link">
+      <a href="../serial_quality/" class="md-nav__link">
         
   
   
@@ -515,7 +511,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/fill_gaps/" class="md-nav__link">
+      <a href="../fill_gaps/" class="md-nav__link">
         
   
   
@@ -538,7 +534,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/data_loss/" class="md-nav__link">
+      <a href="../data_loss/" class="md-nav__link">
         
   
   
@@ -561,7 +557,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/nbu_lounge_audio_loss/" class="md-nav__link">
+      <a href="../nbu_lounge_audio_loss/" class="md-nav__link">
         
   
   
@@ -584,7 +580,7 @@
   
   
     <li class="md-nav__item">
-      <a href="nbu/understanding_audio/nbu_sleep_audio_loss/" class="md-nav__link">
+      <a href="../nbu_sleep_audio_loss/" class="md-nav__link">
         
   
   
@@ -604,10 +600,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="nbu/understanding_audio/jamail_audio_loss/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Jamail data loss
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -618,6 +636,80 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive snapshot
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-artifacts-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Artifacts &amp; reports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Configuration (for reproducibility)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-per-recording-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Per-recording breakdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -728,7 +820,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/ui/" class="md-nav__link">
+      <a href="../../../emu/ui/" class="md-nav__link">
         
   
   
@@ -799,7 +891,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/good_examples/" class="md-nav__link">
+      <a href="../../../emu/good_examples/" class="md-nav__link">
         
   
   
@@ -822,7 +914,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/how_much_data_without_serial/" class="md-nav__link">
+      <a href="../../../emu/how_much_data_without_serial/" class="md-nav__link">
         
   
   
@@ -845,7 +937,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/recording_events_timestamp/" class="md-nav__link">
+      <a href="../../../emu/recording_events_timestamp/" class="md-nav__link">
         
   
   
@@ -868,7 +960,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/understanding_nev_timestamp/" class="md-nav__link">
+      <a href="../../../emu/understanding_nev_timestamp/" class="md-nav__link">
         
   
   
@@ -891,7 +983,7 @@
   
   
     <li class="md-nav__item">
-      <a href="emu/nev_vs_camera_clock/" class="md-nav__link">
+      <a href="../../../emu/nev_vs_camera_clock/" class="md-nav__link">
         
   
   
@@ -942,6 +1034,68 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive snapshot
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-artifacts-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Artifacts &amp; reports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-configuration-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Configuration (for reproducibility)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-per-recording-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Per-recording breakdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Interpretation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-reproduce-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Reproduce locally
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -956,14 +1110,153 @@
 
 
 
-<h1 id="video-sync-pipeline">Video Sync Pipeline</h1>
-<p>This site covers two A/V sync CLIs:</p>
+<h1 id="quantifying-jamail-clinic-data-loss">Quantifying Jamail Clinic Data Loss</h1>
+<p>This note documents the Jamail clinic serial-aligned audio integrity sweep. The batch output in <code>/mnt/labworlds/Provenza/auto/jamail_audio_loss</code> follows the same <code>quantify_audio_loss</code> helper flow used for the lounge and sleep reviews, but with <code>decoder_site=jamail</code>.</p>
+<h2 id="1-executive-snapshot">1. Executive snapshot</h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Recordings analyzed</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Total analyzed duration</td>
+<td>40,691.20 s (≈11.3 h)</td>
+</tr>
+<tr>
+<td>Estimated missing time</td>
+<td>2.25 s (≈0.0006 h)</td>
+</tr>
+<tr>
+<td>Weighted loss (%)</td>
+<td>0.006%</td>
+</tr>
+<tr>
+<td>Files with material loss (&gt;0.5%)</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>Six of seven sessions are gap-free; the single non-zero entry is a 2.25-second discontinuity.</p>
+<h2 id="2-artifacts-reports">2. Artifacts &amp; reports</h2>
 <ul>
-<li><strong>NBU A/V Sync (<code>cli_nbu</code>)</strong> — Jamail/NBU recordings with serial-bearing audio.</li>
-<li><strong>EMU A/V Sync (<code>cli_emu_time</code>)</strong> — EMU tasks using NS5/NEV audio plus camera MP4/JSON.</li>
+<li>Overall config + rollup: <a href="../../../assets/jamail_audio_loss/audio_loss_overall.json">overall report</a></li>
+<li>Per-recording CSV summary: <a href="../../../assets/jamail_audio_loss/audio_loss_summary.csv">summary report</a></li>
 </ul>
-<p>Start with <strong>Getting Started → Which CLI should I use?</strong> to pick the right path,
-then follow the corresponding quick start and I/O layouts.</p>
+<h2 id="3-configuration-for-reproducibility">3. Configuration (for reproducibility)</h2>
+<p>Key parameters from the overall JSON:</p>
+<pre><code class="language-json">{
+  &quot;fs_hz&quot;: 44100,
+  &quot;prefilter&quot;: true,
+  &quot;max_fwd_delta&quot;: 200,
+  &quot;local_window&quot;: 3,
+  &quot;decoder_site&quot;: &quot;jamail&quot;,
+  &quot;room&quot;: &quot;clinic&quot;,
+  &quot;patients&quot;: [&quot;TRBD001&quot;, &quot;TRBD002&quot;],
+  &quot;discovered&quot;: 7,
+  &quot;analyzed&quot;: 7,
+  &quot;totals&quot;: {
+    &quot;n_audios&quot;: 7,
+    &quot;sum_analyzed_seconds&quot;: 40691.198,
+    &quot;sum_missing_seconds&quot;: 2.246,
+    &quot;weighted_loss_pct&quot;: 0.006
+  }
+}
+</code></pre>
+<p>Weighted loss (%) is <code>100 * sum_missing / sum_analyzed</code>.</p>
+<h2 id="4-per-recording-breakdown">4. Per-recording breakdown</h2>
+<table>
+<thead>
+<tr>
+<th>Patient</th>
+<th>Date</th>
+<th style="text-align: right;">Duration (s)</th>
+<th style="text-align: right;">Duration (h)</th>
+<th style="text-align: right;">Missing (s)</th>
+<th style="text-align: right;">Loss %</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TRBD001</td>
+<td>2025-04-15</td>
+<td style="text-align: right;">6,275.96</td>
+<td style="text-align: right;">1.74</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-02</td>
+<td style="text-align: right;">5,614.42</td>
+<td style="text-align: right;">1.56</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-13</td>
+<td style="text-align: right;">6,353.20</td>
+<td style="text-align: right;">1.76</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD001</td>
+<td>2025-06-16</td>
+<td style="text-align: right;">3,687.29</td>
+<td style="text-align: right;">1.02</td>
+<td style="text-align: right;">2.246</td>
+<td style="text-align: right;"><strong>0.06</strong></td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-07</td>
+<td style="text-align: right;">5,358.08</td>
+<td style="text-align: right;">1.49</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-07-22</td>
+<td style="text-align: right;">7,010.41</td>
+<td style="text-align: right;">1.95</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>TRBD002</td>
+<td>2025-08-05</td>
+<td style="text-align: right;">6,391.84</td>
+<td style="text-align: right;">1.78</td>
+<td style="text-align: right;">0.000</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-interpretation">5. Interpretation</h2>
+<ul>
+<li>Jamail clinic audio shows effectively zero structural loss: 2.25 seconds missing across 11.3 hours.</li>
+<li>The only discontinuity (TRBD001 on 2025-06-16) is small and isolated; all other sessions are perfect.</li>
+<li>Given the extremely low weighted loss, Jamail clinic audio can be treated as clean unless future runs surface new gaps.</li>
+</ul>
+<h2 id="6-reproduce-locally">6. Reproduce locally</h2>
+<pre><code class="language-bash">python -m scripts.doc_helper.quantify_audio_loss \
+  --root /mnt/datalake/data/TRBD-53761 \
+  --out-dir /mnt/labworlds/Provenza/auto/jamail_audio_loss \
+  --site jamail \
+  --room clinic
+</code></pre>
+<p>Outputs will mirror the JSON + CSV linked above.</p>
+<hr />
+<p>Concise takeaway: Jamail clinic sessions are essentially gap-free; only a single 2.25-second jump was observed across the entire review.</p>
 
 
 
@@ -1012,10 +1305,10 @@ then follow the corresponding quick start and I/O layouts.</p>
     
     
       
-      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.sections", "content.code.copy"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.sections", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
     
   </body>
