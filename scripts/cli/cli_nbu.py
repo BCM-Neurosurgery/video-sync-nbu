@@ -331,6 +331,7 @@ def run_pipeline(
     split_clean: bool = False,
     split_outdir: Path | None = None,
     overwrite_clips: bool = False,
+    resume_from_segment: str | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -361,6 +362,31 @@ def run_pipeline(
         logger.error("%s", e)
         return 3
 
+    ordered_targets = list(targets.items())
+    if resume_from_segment:
+        start_index = next(
+            (
+                idx
+                for idx, (segment_id, _cams) in enumerate(ordered_targets)
+                if segment_id == resume_from_segment
+            ),
+            None,
+        )
+        if start_index is None:
+            logger.error(
+                "Resume segment %s not found after applying --segment/--camera filters.",
+                resume_from_segment,
+            )
+            return 3
+
+        for skipped_seg, _ in ordered_targets[:start_index]:
+            logger.info(
+                "Skipping segment %s (before resume target %s)",
+                skipped_seg,
+                resume_from_segment,
+            )
+        ordered_targets = ordered_targets[start_index:]
+
     try:
         filtered_csv = prepare_serial_audio(
             audiogroup=ag,
@@ -381,7 +407,7 @@ def run_pipeline(
         return 4
 
     failures = 0
-    for seg_id, cam_list in targets.items():
+    for seg_id, cam_list in ordered_targets:
         summary = process_segment(
             video_in=video_dir,
             audio_in=audio_dir,
@@ -938,6 +964,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Allow ffmpeg to overwrite existing clipped audio files.",
     )
+    parser.add_argument(
+        "--resume-from-segment",
+        dest="resume_from_segment",
+        help="Skip earlier segments and resume processing from this segment ID.",
+    )
 
     args = parser.parse_args()
 
@@ -958,5 +989,6 @@ if __name__ == "__main__":
         split_clean=args.split_clean,
         split_outdir=args.split_outdir,
         overwrite_clips=args.overwrite_clips,
+        resume_from_segment=args.resume_from_segment,
     )
     raise SystemExit(rc)
