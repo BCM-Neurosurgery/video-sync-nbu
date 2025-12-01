@@ -91,6 +91,7 @@ def clip_program_audio(
             if out_fs is None
             else f"{base},aresample=sample_rate={out_fs}:resampler=soxr"
         )
+        logger.info("Trimming %s → %s", in_path.name, out_path.name)
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -106,9 +107,9 @@ def clip_program_audio(
             "pcm_s16le",
             str(out_path),
         ]
-        proc = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
+        with (out_dir / f"{out_path.stem}.ffmpeg.log").open("w") as ferr:
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
+        logger.info("Trim finished %s → %s", in_path.name, out_path.name)
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg trim failed for '{in_path}':\n{proc.stderr}")
 
