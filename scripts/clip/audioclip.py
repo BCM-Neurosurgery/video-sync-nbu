@@ -156,11 +156,13 @@ def _ffmpeg_clip(
         "pcm_s16le",
         str(out_path),
     ]
-    proc = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg trim failed for '{in_path.name}':\n{proc.stderr}")
+        raise RuntimeError(
+            f"ffmpeg trim failed for '{in_path.name}'. See log: {log_path}"
+        )
 
 
 # -----------------------------------------------------------------------------

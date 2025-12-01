@@ -254,11 +254,12 @@ def _flip_video_if_needed(
         str(tmp_path),
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    log_path = synced_path.with_suffix(f"{synced_path.suffix}.flip.log")
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if proc.returncode != 0:
-        stderr = proc.stderr.strip()
         raise RuntimeError(
-            f"ffmpeg flip failed for {synced_path.name}: {stderr or 'unknown error'}"
+            f"ffmpeg flip failed for {synced_path.name}. See log: {log_path}"
         )
 
     tmp_path.replace(synced_path)

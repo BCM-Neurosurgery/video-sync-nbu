@@ -80,9 +80,13 @@ def clip_with_ffmpeg(
         "pcm_s16le",
         str(wav_out),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    log_path = wav_out.with_suffix(f"{wav_out.suffix}.ffmpeg.log")
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed:\n{proc.stderr}")
+        raise RuntimeError(
+            f"ffmpeg failed when clipping {mp3_path.name}. See log: {log_path}"
+        )
 
 
 def get_mp3_duration_ms(mp3_path: Path) -> int:

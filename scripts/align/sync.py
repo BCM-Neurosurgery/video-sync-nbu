@@ -84,7 +84,9 @@ def clip_program_audio(
     end_sec = window.end / float(serial_fs)
 
     def _run_trim(in_path: Path, out_path: Path) -> None:
+        log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         base = f"atrim=start={start_sec:.9f}:end={end_sec:.9f},asetpts=PTS-STARTPTS"
         filt = (
             base
@@ -107,11 +109,15 @@ def clip_program_audio(
             "pcm_s16le",
             str(out_path),
         ]
-        with (out_dir / f"{out_path.stem}.ffmpeg.log").open("w") as ferr:
-            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
-        logger.info("Trim finished %s → %s", in_path.name, out_path.name)
+        with log_path.open("w") as ferr:
+            proc = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True
+            )
         if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg trim failed for '{in_path}':\n{proc.stderr}")
+            raise RuntimeError(
+                f"ffmpeg trim failed for '{in_path}'. See log: {log_path}"
+            )
+        logger.info("Trim finished %s → %s", in_path.name, out_path.name)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_a1 = out_dir / f"{tag}.A1.wav"
@@ -205,12 +211,14 @@ def mux_video_audio(
         out_path.name,
     )
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if proc.returncode != 0:
         raise RuntimeError(
-            "ffmpeg failed during mux:\n"
+            "ffmpeg failed during mux.\n"
             f"Command: {' '.join(cmd)}\n"
-            f"stderr:\n{proc.stderr}"
+            f"See log: {log_path}"
         )
 
     return out_path
@@ -331,12 +339,14 @@ def clip_video_by_frames(
         out_path.name,
     )
     logger.debug("FFmpeg (video-trim) cmd: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if proc.returncode != 0:
         raise RuntimeError(
-            "ffmpeg failed during video frame-trim:\n"
+            "ffmpeg failed during video frame-trim.\n"
             f"Command: {' '.join(cmd)}\n"
-            f"stderr:\n{proc.stderr}"
+            f"See log: {log_path}"
         )
     return out_path
 

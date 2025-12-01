@@ -1065,11 +1065,12 @@ def concat_videos(
         "copy",
         str(out_path),
     ]
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    copy_log = work_dir / "ffmpeg_concat_copy.log"
+    with copy_log.open("w") as ferr:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if result.returncode == 0:
         return out_path
+    LOGGER.debug("Stream-copy concat failed; see %s", copy_log)
 
     # Fallback: re-encode WITHOUT fps filter (still preserves frame count).
     cmd = [
@@ -1097,11 +1098,13 @@ def concat_videos(
         "-an",
         str(out_path),
     ]
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    reencode_log = work_dir / "ffmpeg_concat_reencode.log"
+    with reencode_log.open("w") as ferr:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg concat failed: {result.stderr.strip()}")
+        raise RuntimeError(
+            f"ffmpeg concat failed during re-encode. See log: {reencode_log}"
+        )
     return out_path
 
 
@@ -1190,10 +1193,12 @@ def mux_audio(
         str(out_path),
     ]
 
+    log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
+    ferr = log_path.open("w")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=ferr,
         text=True,
         encoding="utf-8",
     )
@@ -1226,9 +1231,12 @@ def mux_audio(
             LOGGER.info("Muxing %s: 100%% (%d frames)", video_path.name, frame_count)
             break
 
-    _, stderr_output = proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg mux failed: {stderr_output.strip()}")
+    if proc.stdout is not None:
+        proc.stdout.close()
+    return_code = proc.wait()
+    ferr.close()
+    if return_code != 0:
+        raise RuntimeError(f"ffmpeg mux failed. See log: {log_path}")
     return out_path, target_fps
 
 
