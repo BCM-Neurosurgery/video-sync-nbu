@@ -89,9 +89,11 @@ class JsonParser:
 
     def get_fixed_frame_ids_list(self, cam_serial):
         frameids = self.get_frame_ids_list(cam_serial)
-        fixer = FrameIDFixer()
-        fixed = fixer.fix(frameids)
-        return fixed
+        gap_fixer = JsonSerialFixer()
+        gap_fixed = gap_fixer.fix(frameids)
+        wrap_fixer = FrameIDFixer()
+        wrap_fixed = wrap_fixer.fix(gap_fixed)
+        return wrap_fixed
 
     def get_fixed_reindexed_frame_ids_list(self, cam_serial):
         """Return fixed frame_ids reindexed to start at 0 (contiguous).
