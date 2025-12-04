@@ -134,6 +134,7 @@ from scripts.analysis.anchor_analysis import analyze_anchors_file
 from scripts.analysis.video_analysis import analyze_video
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
+from scripts.filter.timerangefilter import filter_by_time_range, TimeRangeFilterError
 from scripts.align.collect_anchors import save_anchors_for_camera
 from scripts.clip.audiocsvclipper import clip_with_anchors
 from scripts.clip.audioclip import clip_from_csv
@@ -331,6 +332,8 @@ def run_pipeline(
     split_clean: bool = False,
     split_outdir: Path | None = None,
     overwrite_clips: bool = False,
+    time_start: str | None = None,
+    time_end: str | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -379,6 +382,51 @@ def run_pipeline(
     except Exception as e:
         logger.error("Unexpected error preparing audio: %s", e)
         return 4
+
+    # Time-range filter if entered by user
+    affected_segments_dict = None
+    if time_start and time_end:
+        logger.info("Applying time-range filter: %s to %s", time_start, time_end)
+        try:
+            filtered_csv, affected_segments_dict = filter_by_time_range(
+                serial_csv=filtered_csv,
+                video_dir=video_dir,
+                time_start=time_start,
+                time_end=time_end,
+            )
+            logger.info("Time-range filter applied successfully")
+            
+            # Update targets to only include affected segments/cameras
+            if affected_segments_dict:
+                new_targets = {}
+                for seg_id, cam_list in targets.items():
+                    if seg_id in affected_segments_dict:
+                        # Filter cameras to only those with data in time range
+                        affected_cams = set(affected_segments_dict[seg_id])
+                        filtered_cams = [c for c in cam_list if c in affected_cams]
+                        if filtered_cams:
+                            new_targets[seg_id] = filtered_cams
+                
+                if not new_targets:
+                    logger.warning("Time-range filter resulted in no segments to process")
+                    return 0
+                
+                targets = new_targets
+                logger.info(
+                    "Targets filtered by time range: %d segment(s), %d total camera(s)",
+                    len(targets),
+                    sum(len(cams) for cams in targets.values())
+                )
+        except TimeRangeFilterError as e:
+            logger.error("Time-range filter failed: %s", e)
+            return 4
+        except Exception as e:
+            logger.error("Unexpected error in time-range filter: %s", e)
+            return 4
+    elif time_start or time_end:
+        logger.warning(
+            "Both --time-start and --time-end must be specified for time-range filtering. Ignoring."
+        )
 
     failures = 0
     for seg_id, cam_list in targets.items():
@@ -938,6 +986,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Allow ffmpeg to overwrite existing clipped audio files.",
     )
+    parser.add_argument(
+        "--time-start",
+        type=str,
+        help="Start time for time-range filter (format: 'YYYY-MM-DD HH:MM:SS')",
+    )
+    parser.add_argument(
+        "--time-end",
+        type=str,
+        help="End time for time-range filter (format: 'YYYY-MM-DD HH:MM:SS')",
+    )
 
     args = parser.parse_args()
 
@@ -958,5 +1016,7 @@ if __name__ == "__main__":
         split_clean=args.split_clean,
         split_outdir=args.split_outdir,
         overwrite_clips=args.overwrite_clips,
+        time_start=args.time_start,
+        time_end=args.time_end,
     )
     raise SystemExit(rc)
