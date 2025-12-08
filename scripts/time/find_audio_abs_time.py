@@ -284,8 +284,16 @@ def _derive_anchor_from_videos(
         raise RuntimeError("Serial index map is empty; decode step may have failed.")
 
     best: Optional[tuple[AnchorEntry, object]] = None
+    processed = 0
+    LOGGER.info("Scanning videos in %s to derive anchors…", video_dir)
 
     for video in _iter_videos(video_dir):
+        processed += 1
+        if processed % 10 == 0:
+            LOGGER.info(
+                "Processed %d video(s) while searching for earliest anchor",
+                processed,
+            )
         try:
             serials, frame_ids, frame_ids_reidx = _extract_cam_arrays_from_video(video)
         except Exception as exc:
@@ -507,6 +515,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     args = parser.parse_args(argv)
 
+    # Configure basic logging when invoked standalone (no handlers configured yet).
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s %(message)s",
+        )
+
     try:
         local_tz = ZoneInfo(args.timezone)
     except Exception as exc:  # pragma: no cover - invalid TZ
@@ -534,6 +550,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.output_json:
         print(output_path)
     else:
+        print(json.dumps(payload, indent=2))
         print(f"\nSaved metadata to {output_path}")
 
     return 0
