@@ -27,6 +27,8 @@ nav:
       - NBU lounge data loss: nbu/understanding_audio/nbu_lounge_audio_loss.md
       - NBU sleep room data loss: nbu/understanding_audio/nbu_sleep_audio_loss.md
       - Jamail data loss: nbu/understanding_audio/jamail_audio_loss.md
+    - Anomalies:
+      - Frame ID anomalies: nbu/anomalies/frame_id_anomalies.md
   - EMU A/V Sync:
     - Getting Started:
       - Run via UI: emu/ui.md
