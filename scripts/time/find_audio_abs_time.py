@@ -525,14 +525,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.output_json:
         output_path = args.output_json
     else:
-        output_path = args.out_dir / AUDIO_METADATA_SUBDIR / DEFAULT_METADATA_FILENAME
+        output_path = OutputLayout(args.out_dir).default_metadata_path
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     LOGGER.info("Wrote %d record(s) to %s", len(payload), output_path)
 
-    if args.output_json is None:
+    if args.output_json:
         print(output_path)
+    else:
+        print(f"\nSaved metadata to {output_path}")
 
     return 0
 
