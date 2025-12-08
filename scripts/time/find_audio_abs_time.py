@@ -341,7 +341,14 @@ def resolve_reference_anchor(
 
     existing = _anchor_from_existing_files(layout, video_dir)
     if existing is not None:
+        LOGGER.info(
+            "Reusing existing anchors from %s (segment %s cam %s)",
+            existing.anchor_path,
+            existing.anchor.segment_id,
+            existing.anchor.cam_serial,
+        )
         return existing
+    LOGGER.info("No cached anchors found; deriving anchors from video metadata")
     return _derive_anchor_from_videos(serial_index_map, video_dir)
 
 
@@ -366,20 +373,27 @@ def _ensure_serial_csvs(
     raw_csv = layout.raw_csv
     if raw_csv.exists():
         source_raw = raw_csv
+        LOGGER.info("Reusing decoded serial CSV: %s", source_raw)
     else:
         source_raw, _, _, _ = decode_to_raw(
             serial_audio_path, outdir=layout.decoded_dir, site=site
         )
+        LOGGER.info("Decoded serial audio → %s", source_raw)
 
     gapfilled_csv = layout.gapfilled_csv
     if gapfilled_csv.exists():
         gapfilled_path = gapfilled_csv
+        LOGGER.info("Reusing gapfilled CSV: %s", gapfilled_path)
     else:
         gapfilled_path = gapfill_csv_file(source_raw, out_path=gapfilled_csv)
+        LOGGER.info("Gapfilled serial CSV → %s", gapfilled_path)
 
     filtered_csv = layout.filtered_csv
     if not filtered_csv.exists():
         filter_audio_file(gapfilled_path, out_path=filtered_csv)
+        LOGGER.info("Filtered serial CSV → %s", filtered_csv)
+    else:
+        LOGGER.info("Reusing filtered CSV: %s", filtered_csv)
 
     return filtered_csv
 
