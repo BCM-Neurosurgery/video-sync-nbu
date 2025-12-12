@@ -212,7 +212,21 @@ def _anchor_frame_time_from_video(video, anchor: AnchorEntry) -> datetime:
             f"Camera JSON {cam_json.path} lacks realtime data for segment {anchor.segment_id}"
         )
 
-    approx = start_rt + timedelta(seconds=float(idx) / 30.0)
+    fps = getattr(video, "frame_rate", None)
+    if not fps or fps <= 0:
+        LOGGER.warning(
+            "Video %s missing valid frame_rate; defaulting to 30fps for anchor approximation",
+            video.path.name,
+        )
+        fps = 30.0
+
+    approx = start_rt + timedelta(seconds=float(idx) / float(fps))
+    if not real_times:
+        LOGGER.warning(
+            "Video %s lacks per-frame realtime metadata; approximating using fps=%.3f",
+            video.path.name,
+            fps,
+        )
     return approx if approx.tzinfo else approx.replace(tzinfo=timezone.utc)
 
 
