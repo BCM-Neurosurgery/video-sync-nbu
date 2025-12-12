@@ -19,6 +19,7 @@ nav:
       - Input & Output Layouts: nbu/io-layouts.md
       - Quick Start (Elias example): nbu/quickstart.md
       - Recipes (common runs): nbu/recipes.md
+      - Absolute audio timestamps: nbu/absolute-audio-timestamps.md
     - Understanding Audio:
       - How to decode serial?: nbu/understanding_audio/decoding_serial.md
       - What's the quality of serial?: nbu/understanding_audio/serial_quality.md
