@@ -16,13 +16,10 @@ class AudioFilter:
     Strategy
     --------
     Anchor-aware monotone filter on the 'serial' column:
-      • Locate the earliest run of at least MIN_RUN_LENGTH rows whose serials are
-        strictly increasing and, when MAX_FWD_DELTA is set, never jump forward by
-        more than that amount. The first row of that run becomes the initial anchor.
-      • For each subsequent value 'cur':
-          - Drop if cur <= ANCHOR            (handles back-jumps & duplicates)
-          - Drop if MAX_FWD_DELTA is not None and (cur - LAST_KEPT) > MAX_FWD_DELTA
-          - Otherwise keep; update ANCHOR = LAST_KEPT = cur.
+      • Scan for strictly increasing runs that, when MAX_FWD_DELTA is set, never jump
+        forward by more than that amount between consecutive rows.
+      • Keep every run whose length reaches MIN_RUN_LENGTH; discard shorter runs so
+        they cannot seed anchors.
 
     Notes
     -----
@@ -101,70 +98,44 @@ class AudioFilter:
 
         max_delta = getattr(AudioFilter, "MAX_FWD_DELTA", None)
         min_run = getattr(AudioFilter, "MIN_RUN_LENGTH", 3)
-        start_idx = AudioFilter._select_anchor_index(s.tolist(), max_delta, min_run)
+        values = [int(v) for v in s.tolist()]
+        runs = AudioFilter._collect_valid_runs(values, max_delta, min_run)
+        if not runs:
+            raise ValueError(
+                "No strictly increasing run reached MIN_RUN_LENGTH; check serial data."
+            )
 
-        keep_idx = [start_idx]
-        anchor = int(s[start_idx])  # last trusted increasing value
-        last_kept = int(s[start_idx])  # last value we actually appended
+        keep_rows: list[int] = []
+        for start, end in runs:
+            keep_rows.extend(range(start, end))
 
-        for i in range(start_idx + 1, n):
-            cur = int(s[i])
-
-            # Reject values at or below the anchor (handles 1005 → 98, 99, ...)
-            if cur <= anchor:
-                continue
-
-            # Optional guard against implausibly large forward jumps
-            if max_delta is not None and (cur - last_kept) > max_delta:
-                continue
-
-            # Accept and advance anchor
-            keep_idx.append(i)
-            anchor = cur
-            last_kept = cur
-
-        out = df.iloc[keep_idx].copy()
+        out = df.iloc[keep_rows].copy()
         out.reset_index(drop=True, inplace=True)
         return out
 
     @staticmethod
-    def _select_anchor_index(
+    def _collect_valid_runs(
         values: list[int], max_delta: Optional[int], min_run: int
-    ) -> int:
-        """
-        Identify the starting index of the first sufficiently long monotone run.
+    ) -> list[tuple[int, int]]:
+        """Return (start, end) pairs for monotone runs meeting MIN_RUN_LENGTH."""
 
-        Returns the earliest segment whose consecutive differences are positive
-        (and within max_delta when specified) and whose length is at least min_run.
-        Falls back to the longest segment if no run reaches min_run.
-        """
-        values = [int(v) for v in values]
+        runs: list[tuple[int, int]] = []
         n = len(values)
         if n <= 1:
-            return 0
+            return runs
 
-        best_start = 0
-        best_len = 1
-        seg_start = 0
-
+        run_start = 0
         for idx in range(1, n):
-            diff = int(values[idx]) - int(values[idx - 1])
-            if diff <= 0 or (max_delta is not None and diff > max_delta):
-                seg_len = idx - seg_start
-                if seg_len >= min_run:
-                    return seg_start
-                if seg_len > best_len:
-                    best_start = seg_start
-                    best_len = seg_len
-                seg_start = idx
+            diff = values[idx] - values[idx - 1]
+            violates = diff <= 0 or (max_delta is not None and diff > max_delta)
+            if violates:
+                if idx - run_start >= min_run:
+                    runs.append((run_start, idx))
+                run_start = idx
 
-        # tail segment
-        final_len = n - seg_start
-        if final_len >= min_run:
-            return seg_start
-        if final_len > best_len:
-            return seg_start
-        return best_start
+        if n - run_start >= min_run:
+            runs.append((run_start, n))
+        return runs
 
 
 def filter_audio_file(
