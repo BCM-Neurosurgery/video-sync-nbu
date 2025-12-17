@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 from collections import defaultdict
@@ -130,6 +131,16 @@ def merge_channel_wavs(
         channel,
         output_path,
     )
+
+    metadata_path = output_path.with_suffix(".json")
+    metadata = {
+        "channel": channel,
+        "merged_file": output_path.name,
+        "source_files": [str(info.path) for info in ordered_files],
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2))
+    logging.debug("Wrote metadata for channel %s to %s", channel, metadata_path)
+
     return output_path
 
 
