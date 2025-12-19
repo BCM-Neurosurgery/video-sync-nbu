@@ -266,6 +266,84 @@ def _flip_video_if_needed(
     log.info("Applied flip for upside-down camera %s", cam_serial)
 
 
+def concatenate_segments_for_camera(
+    cam_serial: str,
+    segments: list[str],
+    parent_out: Path,
+    log: logging.Logger,
+) -> Path | None:
+    """
+    Concatenate synced videos from multiple segments for a single camera.
+    Returns the path to the concatenated video, or None if concatenation fails.
+    """
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin is None:
+        log.error("ffmpeg not found on PATH; required for video concatenation")
+        return None
+    
+    # Collect synced video paths in chronological order
+    video_paths = []
+    for seg_id in sorted(segments):
+        seg_dir = parent_out / seg_id / cam_serial / "synced_video"
+        synced_videos = list(seg_dir.glob(f"{seg_id}.serial{cam_serial}_synced.mp4"))
+        if synced_videos:
+            video_paths.append(synced_videos[0])
+    
+    if len(video_paths) <= 1:
+        log.debug("Only one segment for camera %s, no concatenation needed", cam_serial)
+        return video_paths[0] if video_paths else None
+    
+    # Create output directory for concatenated videos
+    concat_dir = parent_out / "concatenated"
+    concat_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create concat list file for ffmpeg
+    concat_list = concat_dir / f"concat_list_{cam_serial}.txt"
+    with concat_list.open("w", encoding="utf-8") as f:
+        for video_path in video_paths:
+            # ffmpeg concat requires absolute paths with forward slashes
+            abs_path = str(video_path.resolve()).replace("\\", "/")
+            f.write(f"file '{abs_path}'\n")
+    
+    # Output concatenated video
+    output_path = concat_dir / f"camera_{cam_serial}_concatenated.mp4"
+    if output_path.exists():
+        output_path.unlink()
+    
+    log.info(
+        "Concatenating %d segments for camera %s → %s",
+        len(video_paths),
+        cam_serial,
+        output_path.name
+    )
+    
+    # Run ffmpeg concat
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_list),
+        "-c", "copy",
+        str(output_path),
+    ]
+    
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        log.error("ffmpeg concatenation failed: %s", stderr or "unknown error")
+        return None
+    
+    log.info("Concatenated video saved: %s", output_path)
+    
+    # Clean up concat list file
+    concat_list.unlink()
+    
+    return output_path
+
+
 def build_targets(
     video_dir: Path,
     segments: list[str] | None,
@@ -334,6 +412,7 @@ def run_pipeline(
     overwrite_clips: bool = False,
     time_start: str | None = None,
     time_end: str | None = None,
+    time_zone: str = "UTC",
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -386,13 +465,14 @@ def run_pipeline(
     # Time-range filter if entered by user
     affected_segments_dict = None
     if time_start and time_end:
-        logger.info("Applying time-range filter: %s to %s", time_start, time_end)
+        logger.info("Applying time-range filter: %s to %s (%s)", time_start, time_end, time_zone)
         try:
             filtered_csv, affected_segments_dict = filter_by_time_range(
                 serial_csv=filtered_csv,
                 video_dir=video_dir,
                 time_start=time_start,
                 time_end=time_end,
+                user_timezone=time_zone,
             )
             logger.info("Time-range filter applied successfully")
             
@@ -446,6 +526,32 @@ def run_pipeline(
             )
         else:
             logger.info("segment %s: done!", seg_id)
+
+    # Concatenate segments if time-range filter was used and multiple segments were processed
+    if time_start and time_end and len(targets) > 1:
+        logger.info("Concatenating videos across %d segments", len(targets))
+        
+        # Group cameras across all segments
+        all_cameras = set()
+        for cam_list in targets.values():
+            all_cameras.update(cam_list)
+        
+        for cam_serial in sorted(all_cameras):
+            # Find which segments have this camera
+            segments_with_cam = [seg_id for seg_id, cam_list in targets.items() if cam_serial in cam_list]
+            
+            if len(segments_with_cam) > 1:
+                with log_context(seg="concat", cam=cam_serial):
+                    concat_path = concatenate_segments_for_camera(
+                        cam_serial=cam_serial,
+                        segments=segments_with_cam,
+                        parent_out=out_dir,
+                        log=logger,
+                    )
+                    if concat_path:
+                        logger.info("Camera %s: concatenated %d segments", cam_serial, len(segments_with_cam))
+                    else:
+                        logger.warning("Camera %s: concatenation failed", cam_serial)
 
     return 0 if failures == 0 else 4
 
@@ -996,6 +1102,12 @@ if __name__ == "__main__":
         type=str,
         help="End time for time-range filter (format: 'YYYY-MM-DD HH:MM:SS')",
     )
+    parser.add_argument(
+        "--time-zone",
+        type=str,
+        default="UTC",
+        help="Timezone for time-start and time-end (IANA format, e.g., 'America/Chicago', 'US/Central'). Default: UTC.",
+    )
 
     args = parser.parse_args()
 
@@ -1018,5 +1130,6 @@ if __name__ == "__main__":
         overwrite_clips=args.overwrite_clips,
         time_start=args.time_start,
         time_end=args.time_end,
+        time_zone=args.time_zone,
     )
     raise SystemExit(rc)

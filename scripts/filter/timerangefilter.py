@@ -33,9 +33,10 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from scripts.parsers.jsonfileparser import JsonParser
 from scripts.index.videodiscover import VideoDiscoverer
@@ -70,12 +71,14 @@ class TimeRangeFilter:
         serial_csv: Path,
         video_dir: Path,
         time_start: str,
-        time_end: str
+        time_end: str,
+        user_timezone: str = "UTC",
     ):
         self.serial_csv = Path(serial_csv)
         self.video_dir = Path(video_dir)
+        self.user_timezone = user_timezone
         
-        # Parse time strings
+        # Parse time strings (will convert from user timezone to UTC)
         self.time_start, self.time_end = self._parse_time_range(time_start, time_end)
         
         # Storage for serial range
@@ -86,11 +89,27 @@ class TimeRangeFilter:
     def _parse_time_string(self, time_str: str) -> datetime:
         """
         Parse a time string in format: "YYYY-MM-DD HH:MM:SS"
+        Interprets the time in user's timezone and converts to UTC.
         """
         time_str = time_str.strip()
         
         try:
-            return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            # Parse the naive datetime
+            dt_naive = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            
+            # Localize to user's timezone
+            try:
+                user_tz = ZoneInfo(self.user_timezone)
+                dt_local = dt_naive.replace(tzinfo=user_tz)
+            except Exception as e:
+                raise TimeRangeFilterError(
+                    f"Invalid timezone '{self.user_timezone}': {e}"
+                )
+            
+            # Convert to UTC and return as naive datetime (for comparison with video timestamps)
+            dt_utc = dt_local.astimezone(timezone.utc)
+            return dt_utc.replace(tzinfo=None)
+            
         except ValueError as e:
             raise TimeRangeFilterError(
                 f"Unable to parse time string '{time_str}'. "
@@ -98,7 +117,7 @@ class TimeRangeFilter:
             )
     
     def _parse_time_range(self, start_str: str, end_str: str) -> Tuple[datetime, datetime]:
-        """Parse start and end time strings in format: YYYY-MM-DD HH:MM:SS"""
+        """Parse start and end time strings and apply 1-second buffer for boundary frame capture"""
         start_time = self._parse_time_string(start_str)
         end_time = self._parse_time_string(end_str)
         
@@ -107,14 +126,19 @@ class TimeRangeFilter:
                 f"End time ({end_time}) must be after start time ({start_time})"
             )
         
+        # Apply 1-second buffer on both ends to ensure boundary frames are captured
+        start_time_buffered = start_time - timedelta(seconds=1)
+        end_time_buffered = end_time + timedelta(seconds=1)
+        
         logger.info(
-            "Time range filter: %s to %s (duration: %s)",
-            start_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
-            end_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
+            "Time range filter (%s): %s to %s UTC (duration: %s, with 1s buffer on each end)",
+            self.user_timezone,
+            start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            end_time.strftime("%Y-%m-%d %H:%M:%S"),
             end_time - start_time
         )
         
-        return start_time, end_time
+        return start_time_buffered, end_time_buffered
     
     def _find_serial_range_from_videos(self) -> Tuple[int, int]:
         """
@@ -173,7 +197,7 @@ class TimeRangeFilter:
                 
                 camera_serials = [int(cs) for cs in cam_serials_list]
                 
-                # Find frames within time range
+                # Find frames within time range (buffer already applied in _parse_time_range)
                 for idx, rt in enumerate(real_times):
                     if self.time_start <= rt <= self.time_end:
                         # This frame is in range; get serials for all cameras
@@ -296,10 +320,11 @@ def filter_by_time_range(
     serial_csv: Path,
     video_dir: Path,
     time_start: str,
-    time_end: str
+    time_end: str,
+    user_timezone: str = "UTC",
 ) -> Tuple[Path, Dict[str, List[str]]]:
     """
-    Filter serial CSV to a specific time range.
+    Filter serial CSV to a specific wall-clock time range.
     
     Parameters
     ----------
@@ -308,9 +333,11 @@ def filter_by_time_range(
     video_dir : Path
         Directory containing video JSON files with real_times data
     time_start : str
-        Start time string (format: "YYYY-MM-DD HH:MM:SS")
+        Start time string in user's timezone (format: "YYYY-MM-DD HH:MM:SS")
     time_end : str
-        End time string (format: "YYYY-MM-DD HH:MM:SS")
+        End time string in user's timezone (format: "YYYY-MM-DD HH:MM:SS")
+    user_timezone : str
+        IANA timezone name (e.g., 'America/Chicago', 'US/Central', 'UTC'). Default: 'UTC'
     
     Returns
     -------
@@ -326,14 +353,16 @@ def filter_by_time_range(
     
     Examples
     --------
+    >>> # Using local timezone (Central Time)
     >>> filtered_csv, segments = filter_by_time_range(
     ...     Path("output/audio_decoded/raw-gapfilled-filtered.csv"),
     ...     Path("input/video"),
-    ...     "2025-11-09 14:30:00",
-    ...     "2025-11-09 15:00:00"
+    ...     "2025-11-09 14:30:00",  # 2:30 PM Central
+    ...     "2025-11-09 15:00:00",  # 3:00 PM Central
+    ...     user_timezone="America/Chicago"
     ... )
     >>> print(f"Filtered CSV: {filtered_csv}")
     >>> print(f"Affected segments: {segments}")
     """
-    filter_obj = TimeRangeFilter(serial_csv, video_dir, time_start, time_end)
+    filter_obj = TimeRangeFilter(serial_csv, video_dir, time_start, time_end, user_timezone)
     return filter_obj.run()
