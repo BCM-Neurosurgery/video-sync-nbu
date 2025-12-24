@@ -270,8 +270,11 @@ class TimeRangeFilter:
                 f"Input CSV: {self.serial_csv}"
             )
         
-        # Write filtered CSV
-        output_csv = self.serial_csv.parent / f"{self.serial_csv.stem}-timerange.csv"
+        # Write filtered CSV with time range in filename
+        # Format times as YYYYMMDD_HHMMSS for filename-safe identifiers
+        start_str = self.time_start.strftime("%Y%m%d_%H%M%S")
+        end_str = self.time_end.strftime("%Y%m%d_%H%M%S")
+        output_csv = self.serial_csv.parent / f"{self.serial_csv.stem}-timerange-{start_str}-{end_str}.csv"
         with output_csv.open("w", newline="", encoding="utf-8") as f:
             if rows:
                 writer = csv.DictWriter(f, fieldnames=rows[0].keys())

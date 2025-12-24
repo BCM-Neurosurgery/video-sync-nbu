@@ -428,6 +428,19 @@ def run_pipeline(
         )
         return 5
 
+    # Creates time-range-specific output folder if time range is specified
+    if time_start and time_end:
+        from datetime import datetime
+        # Parse times to create folder name (using user's timezone format)
+        start_dt = datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
+        # Adding current timestamp to make each run unique
+        run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        time_range_folder = f"{start_dt.strftime('%Y%m%d_%H%M%S')}-{end_dt.strftime('%Y%m%d_%H%M%S')}_run_at_{run_timestamp}"
+        out_dir = out_dir / time_range_folder
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Output directory for time range: %s", out_dir)
+
     # Discover audio group once (shared across segments/cams)
     try:
         ad = AudioDiscoverer(audio_dir=audio_dir, log=logger)
