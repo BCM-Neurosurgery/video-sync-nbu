@@ -22,7 +22,7 @@ Notes
 -----
 - We set `Audio.duration = 0.0` as a placeholder (no duration probing).
 - `Audio.sample_rate` is filled via a **WAV header read** or **ffprobe (MP3)**.
-  If ffprobe is unavailable or fails to report, we fall back to ``0`` and log.
+  If sample-rate detection fails, we raise `AudioGroupDiscoverError`.
 """
 
 import logging
@@ -32,6 +32,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Iterable
 
+from scripts.errors import AudioGroupDiscoverError
 from scripts.index.common import (
     _DirMixin,
     _filesize_mb,
@@ -377,9 +378,15 @@ class AudioDiscoverer(_DirMixin):
             sr = self._sniff_mp3_samplerate(p)
         else:
             sr = 0
-        if sr == 0:
-            self.log.warning("Could not determine sample rate for %s", p.name)
+        if sr <= 0:
+            msg = (
+                f"Could not determine sample rate for {p.name} (ext={ext}). "
+                "Fix the audio file or ensure required tools (e.g. ffprobe) are available."
+            )
+            self.log.error("%s", msg)
+            raise AudioGroupDiscoverError(msg)
 
+        self.log.info("Discovered audio ch%02d: %s (SR=%d Hz)", ch, p, sr)
         return Audio(
             path=p,
             duration=0.0,
