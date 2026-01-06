@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "video-sync-nbu" }}</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="container topbar-inner">
+        <div class="brand">
+          <a href="/runs">video-sync-nbu</a>
+          <span class="muted">Web UI</span>
+        </div>
+        <nav class="nav">
+          <a href="/runs" class="{% if nav=='runs' %}active{% endif %}">Runs</a>
+          <a href="/runs/new" class="{% if nav=='new' %}active{% endif %}">New Run</a>
+        </nav>
+      </div>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

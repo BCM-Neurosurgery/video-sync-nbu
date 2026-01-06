@@ -1,0 +1,99 @@
+{% extends "layout.html" %}
+{% set title = "New Run — video-sync-nbu" %}
+{% set nav = "new" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>New run</h1>
+      <p class="muted">Configure and run <span class="mono">scripts.cli.cli_nbu</span> without the terminal.</p>
+    </div>
+  </div>
+
+  <form class="card form" method="post" action="/runs/new">
+    <div class="grid2">
+      <label>
+        Title
+        <input name="title" placeholder="Optional" />
+      </label>
+    </div>
+
+    <div class="grid2">
+      <label>
+        Audio dir
+        <input name="audio_dir" required value="{{ args['audio_dir'] }}" placeholder="/path/to/audio" />
+      </label>
+      <label>
+        Video dir
+        <input name="video_dir" required value="{{ args['video_dir'] }}" placeholder="/path/to/video" />
+      </label>
+    </div>
+
+    <label>
+      Output dir
+      <input name="out_dir" required value="{{ args['out_dir'] }}" placeholder="/path/to/out" />
+    </label>
+
+    <div class="grid3">
+      <label>
+        Site
+        <select name="site">
+          {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
+            <option value="{{ s }}" {% if args['site']==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Segments (comma-separated)
+        <input name="segments" value="{{ (args['segments'] or [])|join(',') }}" placeholder="TRBD002_20250709_102609" />
+      </label>
+      <label>
+        Cameras (comma-separated)
+        <input name="cameras" value="{{ (args['cameras'] or [])|join(',') }}" placeholder="23512909" />
+      </label>
+    </div>
+
+    <div class="grid3">
+      <label>
+        Log level
+        <select name="log_level">
+          {% for l in ["DEBUG","INFO","WARNING","ERROR"] %}
+            <option value="{{ l }}" {% if (args['log_level'] or 'INFO')==l %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Schedule at (UTC)
+        <input name="schedule_at" type="datetime-local" />
+      </label>
+      <label>
+        Split chunk seconds
+        <input name="split_chunk_seconds" type="number" min="60" value="{{ args['split_chunk_seconds'] or 3600 }}" />
+      </label>
+    </div>
+
+    <div class="grid3">
+      <label class="check">
+        <input type="checkbox" name="skip_decode" {% if args['skip_decode'] %}checked{% endif %} />
+        <span>Skip decode</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split" {% if args['split'] %}checked{% endif %} />
+        <span>Split serial MP3</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split_overwrite" {% if args['split_overwrite'] %}checked{% endif %} />
+        <span>Split overwrite</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split_clean" {% if args['split_clean'] %}checked{% endif %} />
+        <span>Split clean</span>
+      </label>
+    </div>
+
+    <div class="grid2">
+      <div class="actions right">
+        <button class="btn primary" type="submit">Create run</button>
+      </div>
+    </div>
+  </form>
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+{% set title = "Run #" ~ run['id'] ~ " — video-sync-nbu" %}
+{% set nav = "runs" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Run #{{ run['id'] }}</h1>
+      <p class="muted">{{ run['title'] }}</p>
+    </div>
+    <div class="actions">
+      {% if run['status'] in ['scheduled','queued','running'] %}
+        <form method="post" action="/runs/{{ run['id'] }}/cancel">
+          <button class="btn danger" type="submit">Cancel</button>
+        </form>
+      {% endif %}
+      <a class="btn" href="/runs/new">New run</a>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Status</h3>
+      <div class="kv">
+        <div class="k">State</div>
+        <div class="v"><span id="status-pill" class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+        <div class="k">Created</div>
+        <div class="v mono">{{ run['created_at'] }}</div>
+        <div class="k">Scheduled</div>
+        <div class="v mono">{{ run['scheduled_at'] or "" }}</div>
+        <div class="k">Started</div>
+        <div class="v mono">{{ run['started_at'] or "" }}</div>
+        <div class="k">Finished</div>
+        <div class="v mono">{{ run['finished_at'] or "" }}</div>
+        <div class="k">Exit code</div>
+        <div class="v mono">{{ run['exit_code'] if run['exit_code'] is not none else "" }}</div>
+        <div class="k">PID</div>
+        <div class="v mono">{{ run['pid'] if run['pid'] is not none else "" }}</div>
+      </div>
+      {% if run['error'] %}
+        <div class="alert danger mono">{{ run['error'] }}</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h3>Command</h3>
+      <pre class="code mono">{{ run['cmd_json'] }}</pre>
+      <h3>Log</h3>
+      <div class="actions">
+        <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">Download log</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="loghead">
+      <h3>Live logs</h3>
+      <div class="muted small">Auto-updates while the run is active.</div>
+    </div>
+    <pre id="log" class="log mono"></pre>
+  </div>
+
+  <script>
+    const runId = {{ run['id'] }};
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status-pill");
+    const es = new EventSource(`/runs/${runId}/logs/stream`);
+    es.onmessage = (ev) => {
+      logEl.textContent += ev.data + "\\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+    async function refreshStatus(){
+      try{
+        const res = await fetch(`/api/runs/${runId}`);
+        const data = await res.json();
+        statusEl.textContent = data.status;
+        statusEl.className = `pill ${data.status}`;
+      }catch(e){}
+    }
+    setInterval(refreshStatus, 2000);
+    refreshStatus();
+  </script>
+{% endblock %}
+

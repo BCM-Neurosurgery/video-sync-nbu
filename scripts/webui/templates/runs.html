@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+{% set title = "Runs — video-sync-nbu" %}
+{% set nav = "runs" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Runs</h1>
+      <p class="muted">Latest 200 runs. Click a run to view status and logs.</p>
+    </div>
+    <div class="actions">
+      <a class="btn primary" href="/runs/new">New run</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Scheduled</th>
+          <th>Exit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+          <tr>
+            <td><a href="/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
+            <td class="mono">{{ r['title'] }}</td>
+            <td><span class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
+            <td class="mono">{{ r['created_at'] }}</td>
+            <td class="mono">{{ r['scheduled_at'] or "" }}</td>
+            <td class="mono">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
+          </tr>
+        {% endfor %}
+        {% if runs|length == 0 %}
+          <tr><td colspan="6" class="muted">No runs yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+
