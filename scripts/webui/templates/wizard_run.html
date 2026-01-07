@@ -1,0 +1,85 @@
+{% extends "wizard_layout.html" %}
+{% set nav = "new" %}
+{% set title = "New run" %}
+{% set subtitle = "Step 5/6 — Review and start" %}
+{% set step = 5 %}
+
+{% block wizard %}
+  <form class="card form" method="post" action="/wizard/{{ draft_id }}/run">
+    <label>
+      <span class="label-row">
+        Title
+        <span class="help" data-tip="Optional label to help you recognize this run in the list."></span>
+      </span>
+      <input name="title" value="{{ title_value or '' }}" placeholder="Optional" />
+    </label>
+
+    <div class="grid3">
+      <label>
+        <span class="label-row">
+          Log level
+          <span class="help" data-tip="Controls verbosity of logs shown in the UI. INFO is recommended."></span>
+        </span>
+        <select name="log_level">
+          {% for l in ["DEBUG","INFO","WARNING","ERROR"] %}
+            <option value="{{ l }}" {% if log_level==l %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="label-row">
+          Schedule at
+          <span class="help" data-tip="Optional. If set, the run will start at this local date/time. Leave blank to run immediately."></span>
+        </span>
+        <input name="schedule_at" type="datetime-local" />
+      </label>
+      <label>
+        <span class="label-row">
+          Split chunk seconds
+          <span class="help" data-tip="When splitting serial MP3, each chunk length in seconds. Default is 3600 (1 hour)."></span>
+        </span>
+        <input name="split_chunk_seconds" type="number" min="60" value="{{ split_chunk_seconds or 3600 }}" />
+      </label>
+    </div>
+
+    <div class="grid3">
+      <label class="check">
+        <input type="checkbox" name="skip_decode" {% if skip_decode %}checked{% endif %} />
+        <span class="label-row">
+          Skip decode
+          <span class="help" data-tip="Reuse existing decoded audio artifacts in the output directory and skip the serial decode step."></span>
+        </span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split" {% if split %}checked{% endif %} />
+        <span class="label-row">
+          Split serial MP3
+          <span class="help" data-tip="Split the serial channel MP3 into WAV chunks before decoding (useful for very long recordings)."></span>
+        </span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split_overwrite" {% if split_overwrite %}checked{% endif %} />
+        <span class="label-row">
+          Split overwrite
+          <span class="help" data-tip="Allow overwriting existing split WAV chunks. Use carefully if re-running."></span>
+        </span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="split_clean" {% if split_clean %}checked{% endif %} />
+        <span class="label-row">
+          Split clean
+          <span class="help" data-tip="Delete existing split WAV chunks before splitting again."></span>
+        </span>
+      </label>
+    </div>
+
+    {% if error %}
+      <div class="alert danger mono">{{ error }}</div>
+    {% endif %}
+
+    <div class="actions" style="margin-top:12px; justify-content:space-between">
+      <a class="btn" href="/wizard/{{ draft_id }}/select">Back</a>
+      <button class="btn primary" type="submit">Continue</button>
+    </div>
+  </form>
+{% endblock %}

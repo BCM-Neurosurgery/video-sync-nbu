@@ -7,22 +7,27 @@
       <h1>Run #{{ run['id'] }}</h1>
       <p class="muted">{{ run['title'] }}</p>
     </div>
-    <div class="actions">
-      {% if run['status'] in ['scheduled','queued','running'] %}
-        <form method="post" action="/runs/{{ run['id'] }}/cancel">
-          <button class="btn danger" type="submit">Cancel</button>
-        </form>
-      {% endif %}
-      <a class="btn" href="/runs/new">New run</a>
-    </div>
+    <div class="actions"></div>
   </div>
 
-  <div class="grid2">
-    <div class="card">
-      <h3>Status</h3>
+  <div class="card">
+    <div class="cardhead">
+      <h3 style="margin:0">Status & logs</h3>
+      <div class="actions">
+        {% if run['status'] in ['scheduled','queued','running'] %}
+          <form method="post" action="/runs/{{ run['id'] }}/cancel" class="inline">
+            <button class="btn danger" type="submit">Cancel</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
       <div class="kv">
         <div class="k">State</div>
         <div class="v"><span id="status-pill" class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+        {% if run['cancel_requested'] %}
+          <div class="k">Cancel</div>
+          <div class="v"><span class="pill running">Requested</span></div>
+        {% endif %}
         <div class="k">Created</div>
         <div class="v mono">{{ run['created_at'] }}</div>
         <div class="k">Scheduled</div>
@@ -39,16 +44,9 @@
       {% if run['error'] %}
         <div class="alert danger mono">{{ run['error'] }}</div>
       {% endif %}
-    </div>
-
-    <div class="card">
-      <h3>Command</h3>
-      <pre class="code mono">{{ run['cmd_json'] }}</pre>
-      <h3>Log</h3>
-      <div class="actions">
-        <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">Download log</a>
+      <div class="actions right" style="margin-top:12px">
+        <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">View logs</a>
       </div>
-    </div>
   </div>
 
   <div class="card">
@@ -65,7 +63,7 @@
     const statusEl = document.getElementById("status-pill");
     const es = new EventSource(`/runs/${runId}/logs/stream`);
     es.onmessage = (ev) => {
-      logEl.textContent += ev.data + "\\n";
+      if (ev.data !== "") logEl.textContent += ev.data + "\n";
       logEl.scrollTop = logEl.scrollHeight;
     };
     async function refreshStatus(){
@@ -80,4 +78,3 @@
     refreshStatus();
   </script>
 {% endblock %}
-

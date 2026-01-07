@@ -59,6 +59,15 @@ def init_db(conn: sqlite3.Connection) -> None:
           ON runs(status, scheduled_at);
         CREATE INDEX IF NOT EXISTS idx_runs_created
           ON runs(created_at);
+
+        CREATE TABLE IF NOT EXISTS drafts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          data_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_drafts_updated
+          ON drafts(updated_at);
         """
     )
     conn.commit()

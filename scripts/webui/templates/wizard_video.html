@@ -1,0 +1,328 @@
+{% extends "wizard_layout.html" %}
+{% set nav = "new" %}
+{% set title = "New run" %}
+{% set subtitle = "Step 2/6 — Select video folder" %}
+{% set step = 2 %}
+
+{% block wizard %}
+  <form class="card form" method="post" action="/wizard/{{ draft_id }}/video">
+    <label>
+      <span class="label-row">
+        Video dir
+        <span class="help" data-tip="Folder containing the segment JSON and camera MP4 files (e.g., <SEG>.json and <SEG>.<CAM>.mp4)."></span>
+        <span id="video_status" class="pill" style="margin-left:6px">Not checked</span>
+      </span>
+      <div class="input-row">
+        <input id="video_dir" name="video_dir" required value="{{ video_dir or '' }}" placeholder="/path/to/video" />
+        <button class="btn" type="button" onclick="browseDir('video_dir')">Browse</button>
+      </div>
+    </label>
+
+    <div id="video_hint" class="hint" style="margin-top:6px">
+      Select a folder to run validation. Continue becomes available only if checks pass.
+    </div>
+
+    <div id="video_result_wrap" style="margin-top:12px">
+      {% if error %}
+        <div class="alert danger mono">{{ error }}</div>
+      {% endif %}
+
+      {% if video_result %}
+        <div class="card">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Video check</h3>
+            <div class="muted small">Checked at <span class="mono">{{ video_result.checked_at }}</span></div>
+          </div>
+
+          <div class="grid3" style="margin-bottom:10px">
+            <div class="card" style="padding:12px">
+              <div class="muted small">Top-level JSON files</div>
+              <div class="mono" style="font-size:18px">{{ video_result.json_count }}</div>
+            </div>
+            <div class="card" style="padding:12px">
+              <div class="muted small">Top-level MP4 files</div>
+              <div class="mono" style="font-size:18px">{{ video_result.mp4_count }}</div>
+            </div>
+            <div class="card" style="padding:12px">
+              <div class="muted small">Discovered</div>
+              <div class="mono" style="font-size:18px">{{ video_result.segments_count }} seg / {{ video_result.cameras_count }} cam</div>
+            </div>
+          </div>
+
+          {% if video_result.segments_preview or video_result.cameras_preview %}
+            <div class="grid2">
+              <div>
+                <div class="hint">Segments (preview)</div>
+                <div class="code mono wrap" style="max-height:180px">
+                  {% for s in video_result.segments_preview %}
+{{ s }}
+                  {% endfor %}
+                </div>
+              </div>
+              <div>
+                <div class="hint">Cameras (preview)</div>
+                <div class="code mono wrap" style="max-height:180px">
+                  {% for c in video_result.cameras_preview %}
+{{ c }}
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+          {% endif %}
+
+          {% if (video_result.json_count == 0) and (video_result.mp4_count == 0) and video_result.nested_count %}
+            <div class="hint" style="margin-top:10px">
+              Found {{ video_result.nested_count }} video file(s) in subfolders. Select the folder that directly contains the segment JSON and camera MP4 files.
+            </div>
+            {% if video_result.nested_files %}
+              <table class="table" style="margin-top:8px">
+                <thead>
+                  <tr>
+                    <th>Example files</th>
+                    <th>Relative path</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for nf in video_result.nested_files %}
+                    <tr>
+                      <td class="mono">{{ nf.name }}</td>
+                      <td class="mono">{{ nf.relpath }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+          {% endif %}
+
+          {% if video_result.checks %}
+            <div class="hint" style="margin-top:10px">Checks</div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th>Status</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in video_result.checks %}
+                  <tr>
+                    <td>{{ c.name }}</td>
+                    <td>
+                      {% if c.status == "pass" %}
+                        <span class="pill succeeded">Pass</span>
+                      {% elif c.status == "fail" %}
+                        <span class="pill failed">Fail</span>
+                      {% else %}
+                        <span class="pill">{{ c.status }}</span>
+                      {% endif %}
+                    </td>
+                    <td class="mono">{{ c.message or "" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="actions" style="margin-top:12px; justify-content:space-between">
+      <a class="btn" href="/wizard/{{ draft_id }}/audio">Back</a>
+      <div class="actions">
+        <button id="btn_recheck" class="btn" type="button" onclick="validateVideo(true)">Re-check</button>
+        <button
+          id="btn_continue"
+          class="btn primary"
+          type="button"
+          onclick="location.href='/wizard/{{ draft_id }}/output'"
+          disabled
+          title="Continue is available after the video check passes"
+        >Continue</button>
+      </div>
+    </div>
+  </form>
+
+  <script>
+    const draftId = {{ draft_id }};
+    const videoInput = document.getElementById("video_dir");
+    const statusPill = document.getElementById("video_status");
+    const hintEl = document.getElementById("video_hint");
+    const resultWrap = document.getElementById("video_result_wrap");
+    const continueBtn = document.getElementById("btn_continue");
+    const recheckBtn = document.getElementById("btn_recheck");
+
+    function esc(s){
+      return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      }[c]));
+    }
+
+    function setStatus(kind, text){
+      statusPill.className = "pill";
+      if(kind === "checking"){ statusPill.classList.add("running"); }
+      if(kind === "ok"){ statusPill.classList.add("succeeded"); }
+      if(kind === "fail"){ statusPill.classList.add("failed"); }
+      statusPill.textContent = text;
+    }
+
+    function setContinue(enabled){
+      continueBtn.disabled = !enabled;
+      if(enabled){
+        continueBtn.title = "";
+      }else{
+        continueBtn.title = "Continue is available after the video check passes";
+      }
+    }
+
+    function renderResult(data){
+      if(!data){ return; }
+
+      const ok = !!data.ok;
+      const checkedAt = data.checked_at ? esc(data.checked_at) : "";
+      const err = data.error ? esc(data.error) : "";
+      const jsonCount = Number(data.json_count || 0);
+      const mp4Count = Number(data.mp4_count || 0);
+      const segCount = Number(data.segments_count || 0);
+      const camCount = Number(data.cameras_count || 0);
+      const segPrev = Array.isArray(data.segments_preview) ? data.segments_preview : [];
+      const camPrev = Array.isArray(data.cameras_preview) ? data.cameras_preview : [];
+      const checks = Array.isArray(data.checks) ? data.checks : [];
+      const nestedCount = Number(data.nested_count || 0);
+      const nestedFiles = Array.isArray(data.nested_files) ? data.nested_files : [];
+
+      let html = "";
+      if(err){
+        html += `<div class="alert danger mono">${err}</div>`;
+      }
+      html += `<div class="card">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Video check</h3>`;
+      html += `<div class="muted small">Checked at <span class="mono">${checkedAt}</span></div>`;
+      html += `</div>`;
+
+      html += `<div class="grid3" style="margin-bottom:10px">`;
+      html += `<div class="card" style="padding:12px"><div class="muted small">Top-level JSON files</div><div class="mono" style="font-size:18px">${jsonCount}</div></div>`;
+      html += `<div class="card" style="padding:12px"><div class="muted small">Top-level MP4 files</div><div class="mono" style="font-size:18px">${mp4Count}</div></div>`;
+      html += `<div class="card" style="padding:12px"><div class="muted small">Discovered</div><div class="mono" style="font-size:18px">${segCount} seg / ${camCount} cam</div></div>`;
+      html += `</div>`;
+
+      if(segPrev.length || camPrev.length){
+        html += `<div class="grid2">`;
+        html += `<div><div class="hint">Segments (preview)</div><div class="code mono wrap" style="max-height:180px">`;
+        for(const s of segPrev){ html += `${esc(s)}\n`; }
+        html += `</div></div>`;
+        html += `<div><div class="hint">Cameras (preview)</div><div class="code mono wrap" style="max-height:180px">`;
+        for(const c of camPrev){ html += `${esc(c)}\n`; }
+        html += `</div></div>`;
+        html += `</div>`;
+      }
+
+      if(jsonCount === 0 && mp4Count === 0 && nestedCount > 0){
+        html += `<div class="hint" style="margin-top:10px">Found ${nestedCount} video file(s) in subfolders. Select the folder that directly contains the segment JSON and camera MP4 files.</div>`;
+        if(nestedFiles.length){
+          html += `<table class="table" style="margin-top:8px"><thead><tr><th>Example files</th><th>Relative path</th></tr></thead><tbody>`;
+          for(const nf of nestedFiles){
+            html += `<tr><td class="mono">${esc(nf.name)}</td><td class="mono">${esc(nf.relpath || nf.path || "")}</td></tr>`;
+          }
+          html += `</tbody></table>`;
+        }
+      }
+
+      if(checks.length){
+        html += `<div class="hint" style="margin-top:10px">Checks</div>`;
+        html += `<table class="table"><thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody>`;
+        for(const c of checks){
+          const name = esc(c.name);
+          const status = String(c.status ?? "");
+          let pill = `<span class="pill">${esc(status)}</span>`;
+          if(status === "pass"){ pill = `<span class="pill succeeded">Pass</span>`; }
+          if(status === "fail"){ pill = `<span class="pill failed">Fail</span>`; }
+          html += `<tr><td>${name}</td><td>${pill}</td><td class="mono">${esc(c.message || "")}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+
+      html += `</div>`;
+      resultWrap.innerHTML = html;
+      hintEl.textContent = ok ? "Video checks passed. Continue to choose the output folder." : "Fix any failing checks, then re-check.";
+    }
+
+    let validateTimer = null;
+    async function validateVideo(force){
+      const dir = (videoInput.value || "").trim();
+      if(!dir){
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+        hintEl.textContent = "Select a folder to run validation. Continue becomes available only if checks pass.";
+        return;
+      }
+
+      if(recheckBtn) recheckBtn.disabled = true;
+      setStatus("checking", "Checking…");
+      setContinue(false);
+      try{
+        const res = await fetch(`/api/drafts/${draftId}/validate-video?video_dir=${encodeURIComponent(dir)}`);
+        const data = await res.json();
+        renderResult(data);
+        if(data && data.ok){
+          setStatus("ok", "Passed");
+          setContinue(true);
+        }else{
+          setStatus("fail", "Failed");
+          setContinue(false);
+        }
+      }catch(e){
+        setStatus("fail", "Failed");
+        setContinue(false);
+        resultWrap.innerHTML = `<div class="alert danger mono">Failed to validate video folder.</div>`;
+      }finally{
+        if(recheckBtn) recheckBtn.disabled = false;
+      }
+    }
+
+    function scheduleValidate(){
+      if(validateTimer) clearTimeout(validateTimer);
+      validateTimer = setTimeout(() => validateVideo(false), 450);
+    }
+
+    videoInput.addEventListener("input", scheduleValidate);
+
+    async function browseDir(inputId){
+      const input = document.getElementById(inputId);
+      const initial = input?.value || "";
+      const btn = document.activeElement;
+      const prevText = (btn && btn.tagName === "BUTTON") ? btn.textContent : null;
+      try{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = true; btn.textContent = "Opening…"; }
+        const res = await fetch(`/api/pick-dir?initial=${encodeURIComponent(initial)}`);
+        const data = await res.json();
+        if(data && data.path){
+          input.value = data.path;
+          input.dispatchEvent(new Event("input"));
+        }else if(data && data.error){
+          alert(data.error);
+        }
+      }catch(e){
+        alert("Directory picker is not available in this environment.");
+      }finally{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = false; if(prevText!==null) btn.textContent = prevText; }
+      }
+    }
+
+    (function init(){
+      const ok = {{ "true" if video_ok else "false" }};
+      if(ok){
+        setStatus("ok", "Passed");
+        setContinue(true);
+      }else if((videoInput.value || "").trim()){
+        scheduleValidate();
+      }else{
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+      }
+    })();
+  </script>
+{% endblock %}

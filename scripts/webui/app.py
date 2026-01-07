@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
+import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,19 +18,23 @@ from fastapi.templating import Jinja2Templates
 from scripts.webui.db import get_conn, tx
 from scripts.webui.models import utc_now_iso
 from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_sse
+from scripts.validate.validate_audio_dir import validate_audio_dir
+from scripts.validate.validate_audio_dir import validate_audio_dir_progress
+from scripts.validate.validate_out_dir import validate_out_dir
+from scripts.validate.validate_video_dir import (
+    discover_from_video_dir,
+    validate_video_dir,
+)
 
 
 ROOT = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
-
-
-def _parse_csv_list(s: str) -> List[str]:
-    items = []
-    for part in (s or "").split(","):
-        part = part.strip()
-        if part:
-            items.append(part)
-    return items
+try:
+    templates.env.globals["static_v"] = int(
+        (ROOT / "static" / "app.css").stat().st_mtime
+    )
+except Exception:
+    templates.env.globals["static_v"] = 1
 
 
 def _default_args() -> Dict[str, Any]:
@@ -46,6 +54,46 @@ def _default_args() -> Dict[str, Any]:
     }
 
 
+def _draft_create() -> int:
+    conn = get_conn()
+    now = utc_now_iso()
+    with tx(conn):
+        cur = conn.execute(
+            "INSERT INTO drafts(created_at, updated_at, data_json) VALUES(?, ?, ?)",
+            (now, now, json.dumps({})),
+        )
+        return int(cur.lastrowid)
+
+
+def _draft_get(draft_id: int) -> Dict[str, Any]:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT data_json FROM drafts WHERE id=?", (draft_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    try:
+        return json.loads(row["data_json"])
+    except Exception:
+        return {}
+
+
+def _draft_set(draft_id: int, data: Dict[str, Any]) -> None:
+    conn = get_conn()
+    now = utc_now_iso()
+    with tx(conn):
+        conn.execute(
+            "UPDATE drafts SET updated_at=?, data_json=? WHERE id=?",
+            (now, json.dumps(data), draft_id),
+        )
+
+
+def _draft_delete(draft_id: int) -> None:
+    conn = get_conn()
+    with tx(conn):
+        conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="video-sync-nbu Web UI")
     app.mount(
@@ -57,6 +105,121 @@ def create_app() -> FastAPI:
     max_parallel = int(os.environ.get("VSYNC_WEBUI_MAX_PARALLEL", "1"))
     runner = Runner(cfg=RunnerConfig(max_parallel=max_parallel))
     runner.start()
+
+    audio_val_lock = threading.Lock()
+    audio_val_state: Dict[int, Dict[str, Any]] = {}
+    audio_check_names = [
+        "Find audio files",
+        "Naming pattern",
+        "Serial channel present",
+        "Program channel present",
+        "Sample rate detected",
+        "Duration detected",
+    ]
+
+    @app.get("/api/video-index")
+    def api_video_index(video_dir: str) -> Dict[str, Any]:
+        """
+        Return discovered segment IDs and camera serials for a given video directory.
+        """
+        p = Path(video_dir).expanduser()
+        try:
+            data = discover_from_video_dir(p)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to scan video_dir: {e}"
+            )
+        return {"video_dir": str(p), **data}
+
+    @app.get("/api/pick-dir")
+    def api_pick_dir(initial: str = "") -> Dict[str, Any]:
+        """
+        Open a native directory picker on the machine running the web server.
+
+        Note: this cannot open a picker on a remote client's machine; it opens locally.
+        """
+        initial = (initial or "").strip()
+
+        # Prefer platform-native pickers where possible (tkinter is flaky on some macOS setups).
+        if sys.platform == "darwin":
+            script_lines = [
+                "try",
+                'set promptText to "Select folder"',
+            ]
+            if initial:
+                # If a file path is provided, use its parent directory as the initial folder.
+                p = Path(initial).expanduser()
+                if p.is_file():
+                    p = p.parent
+                initial_dir = str(p)
+                # Escape quotes for AppleScript.
+                initial_dir = initial_dir.replace('"', '\\"')
+                script_lines.append(
+                    f'set chosen to (choose folder with prompt promptText default location (POSIX file "{initial_dir}"))'
+                )
+            else:
+                script_lines.append(
+                    "set chosen to (choose folder with prompt promptText)"
+                )
+            script_lines += [
+                "POSIX path of chosen",
+                "on error number -128",
+                '""',
+                "end try",
+            ]
+            script = "\n".join(script_lines)
+            try:
+                r = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                chosen = (r.stdout or "").strip()
+                if chosen:
+                    return {"path": chosen, "canceled": False}
+                return {"path": "", "canceled": True}
+            except Exception:
+                # Fall back to tkinter.
+                pass
+
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception:
+            return {
+                "path": "",
+                "canceled": False,
+                "error": "Directory picker requires tkinter (not available in this Python environment).",
+            }
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                root.attributes("-topmost", True)
+            except Exception:
+                pass
+            chosen = filedialog.askdirectory(
+                initialdir=initial or str(Path.cwd()),
+                title="Select folder",
+            )
+            root.destroy()
+        except Exception:
+            try:
+                root.destroy()  # type: ignore[name-defined]
+            except Exception:
+                pass
+            return {
+                "path": "",
+                "canceled": False,
+                "error": "Directory picker failed to open.",
+            }
+
+        if chosen:
+            return {"path": str(chosen), "canceled": False}
+        return {"path": "", "canceled": True}
 
     @app.get("/", response_class=HTMLResponse)
     def home() -> RedirectResponse:
@@ -71,24 +234,469 @@ def create_app() -> FastAPI:
             {"request": request, "runs": items},
         )
 
+    @app.post("/runs/clear")
+    def runs_clear() -> RedirectResponse:
+        """
+        Clear run history (DB rows + log files) for all runs that are not running.
+        """
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT id, status, log_path FROM runs WHERE status != 'running'"
+        ).fetchall()
+        for r in rows:
+            try:
+                p = Path(r["log_path"])
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                # Best-effort deletion; DB clear still proceeds.
+                pass
+        with tx(conn):
+            conn.execute("DELETE FROM runs WHERE status != 'running'")
+        return RedirectResponse(url="/runs", status_code=303)
+
     @app.get("/runs/new", response_class=HTMLResponse)
-    def runs_new(request: Request) -> HTMLResponse:
-        args = _default_args()
+    def runs_new() -> RedirectResponse:
+        draft_id = _draft_create()
+        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+
+    @app.get("/api/drafts/{draft_id}/validate-audio")
+    def api_validate_audio(draft_id: int, audio_dir: str) -> Dict[str, Any]:
+        """
+        Validate audio_dir and persist the result into the run-creation draft.
+        """
+        data = _draft_get(draft_id)
+        if data.get("audio_dir") != audio_dir.strip():
+            # Changing audio dir invalidates downstream choices.
+            data.pop("video_dir", None)
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("out_dir", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+        data["audio_dir"] = audio_dir.strip()
+
+        result = validate_audio_dir(
+            audio_dir, logger=logging.getLogger("webui.validate.audio")
+        )
+        data["audio_ok"] = bool(result.get("ok"))
+        data["audio_result"] = result
+        data["audio_error"] = result.get("error")
+        _draft_set(draft_id, data)
+        return result
+
+    @app.get("/api/drafts/{draft_id}/validate-audio/start")
+    def api_validate_audio_start(draft_id: int, audio_dir: str) -> Dict[str, Any]:
+        """
+        Start async audio validation so the UI can show per-check progress.
+        """
+        data = _draft_get(draft_id)
+        audio_dir = audio_dir.strip()
+        if data.get("audio_dir") != audio_dir:
+            # Changing audio dir invalidates downstream choices.
+            data.pop("video_dir", None)
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("out_dir", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+        data["audio_dir"] = audio_dir
+        _draft_set(draft_id, data)
+
+        with audio_val_lock:
+            st = audio_val_state.get(draft_id)
+            if st and st.get("running") and st.get("audio_dir") == audio_dir:
+                return st.get("result") or {
+                    "audio_dir": audio_dir,
+                    "ok": False,
+                    "running": True,
+                    "files": [],
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in audio_check_names
+                    ],
+                    "error": None,
+                }
+
+            seq = int(st.get("seq", 0)) + 1 if st else 1
+            audio_val_state[draft_id] = {
+                "seq": seq,
+                "audio_dir": audio_dir,
+                "running": True,
+                "result": {
+                    "audio_dir": audio_dir,
+                    "ok": False,
+                    "running": True,
+                    "files": [],
+                    "nested_files": [],
+                    "nested_count": 0,
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in audio_check_names
+                    ],
+                    "error": None,
+                },
+            }
+
+        def run_validation(local_seq: int, local_audio_dir: str) -> None:
+            def on_progress(payload: Dict[str, Any]) -> None:
+                # Deep-copy into state to avoid sharing mutable dicts across threads.
+                snap = json.loads(json.dumps(payload))
+                with audio_val_lock:
+                    cur = audio_val_state.get(draft_id)
+                    if not cur or int(cur.get("seq", 0)) != local_seq:
+                        return
+                    cur["result"] = snap
+                    cur["running"] = bool(snap.get("running", False))
+
+            result = validate_audio_dir_progress(
+                local_audio_dir,
+                logger=logging.getLogger("webui.validate.audio"),
+                on_progress=on_progress,
+            )
+            result["running"] = False
+            on_progress(result)
+
+            with audio_val_lock:
+                cur = audio_val_state.get(draft_id)
+                if not cur or int(cur.get("seq", 0)) != local_seq:
+                    return
+                cur["running"] = False
+                cur["result"] = json.loads(json.dumps(result))
+
+            # Persist the final result to the draft.
+            data2 = _draft_get(draft_id)
+            if data2.get("audio_dir") != local_audio_dir:
+                return
+            data2["audio_ok"] = bool(result.get("ok"))
+            data2["audio_result"] = result
+            data2["audio_error"] = result.get("error")
+            _draft_set(draft_id, data2)
+
+        threading.Thread(
+            target=run_validation,
+            args=(seq, audio_dir),
+            name=f"webui-audio-validate-{draft_id}",
+            daemon=True,
+        ).start()
+
+        with audio_val_lock:
+            return audio_val_state[draft_id]["result"]
+
+    @app.get("/api/drafts/{draft_id}/validate-audio/status")
+    def api_validate_audio_status(draft_id: int) -> Dict[str, Any]:
+        with audio_val_lock:
+            st = audio_val_state.get(draft_id)
+            if st and st.get("result") is not None:
+                return st["result"]
+        data = _draft_get(draft_id)
+        if data.get("audio_result"):
+            return data["audio_result"]
+        return {
+            "audio_dir": data.get("audio_dir", ""),
+            "ok": False,
+            "running": False,
+            "files": [],
+            "checks": [
+                {"name": n, "status": "pending", "message": ""}
+                for n in audio_check_names
+            ],
+            "error": None,
+        }
+
+    @app.get("/api/drafts/{draft_id}/validate-video")
+    def api_validate_video(draft_id: int, video_dir: str) -> Dict[str, Any]:
+        """
+        Validate video_dir and persist the result into the run-creation draft.
+        """
+        data = _draft_get(draft_id)
+        if data.get("video_dir") != video_dir.strip():
+            # Changing video dir invalidates downstream choices.
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("all_segments", None)
+            data.pop("all_cameras", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+        data["video_dir"] = video_dir.strip()
+
+        result = validate_video_dir(video_dir)
+        data["video_ok"] = bool(result.get("ok"))
+        data["video_result"] = result
+        data["video_error"] = result.get("error")
+        if data["video_ok"]:
+            try:
+                idx = discover_from_video_dir(Path(video_dir).expanduser())
+                data["segments_all"] = idx["segments"]
+                data["cameras_all"] = idx["cameras"]
+            except Exception as e:
+                data["video_ok"] = False
+                data["video_error"] = str(e)
+                data["video_result"] = {**result, "ok": False, "error": str(e)}
+        _draft_set(draft_id, data)
+        return data.get("video_result") or result
+
+    @app.get("/api/drafts/{draft_id}/validate-out")
+    def api_validate_out(draft_id: int, out_dir: str) -> Dict[str, Any]:
+        """
+        Validate out_dir and persist the result into the run-creation draft.
+        """
+        data = _draft_get(draft_id)
+        data["out_dir"] = out_dir.strip()
+
+        segments = data.get("segments_all")
+        if not isinstance(segments, list):
+            segments = None
+
+        result = validate_out_dir(out_dir, segments=segments)
+        data["out_ok"] = bool(result.get("ok"))
+        data["out_result"] = result
+        data["out_error"] = result.get("error")
+        _draft_set(draft_id, data)
+        return result
+
+    @app.get("/wizard/{draft_id}/audio", response_class=HTMLResponse)
+    def wizard_audio(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
         return templates.TemplateResponse(
-            "run_new.html",
-            {"request": request, "args": args},
+            "wizard_audio.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "audio_dir": data.get("audio_dir", ""),
+                "audio_ok": bool(data.get("audio_ok", False)),
+                "audio_result": data.get("audio_result"),
+                "error": data.get("audio_error"),
+            },
         )
 
-    @app.post("/runs/new")
-    def runs_create(
-        request: Request,
-        title: str = Form(default=""),
-        audio_dir: str = Form(...),
-        video_dir: str = Form(...),
-        out_dir: str = Form(...),
+    @app.post("/wizard/{draft_id}/audio")
+    def wizard_audio_post(
+        draft_id: int, audio_dir: str = Form(...)
+    ) -> RedirectResponse:
+        audio_dir = audio_dir.strip()
+        data = _draft_get(draft_id)
+        if data.get("audio_dir") != audio_dir:
+            # Changing audio dir invalidates downstream choices.
+            data.pop("video_dir", None)
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("out_dir", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+
+        data["audio_dir"] = audio_dir
+        # Validate on POST as a no-JS fallback (JS uses /api/drafts/<id>/validate-audio).
+        result = validate_audio_dir(
+            audio_dir, logger=logging.getLogger("webui.validate.audio")
+        )
+        data["audio_ok"] = bool(result.get("ok"))
+        data["audio_result"] = result
+        data["audio_error"] = result.get("error")
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+
+    @app.get("/wizard/{draft_id}/video", response_class=HTMLResponse)
+    def wizard_video(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            # If a user jumps directly here, we still allow them to set video_dir and validate.
+            pass
+        return templates.TemplateResponse(
+            "wizard_video.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "video_dir": data.get("video_dir", ""),
+                "video_ok": bool(data.get("video_ok", False)),
+                "video_result": data.get("video_result"),
+                "error": data.get("video_error"),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/video")
+    def wizard_video_post(
+        draft_id: int, video_dir: str = Form(...)
+    ) -> RedirectResponse:
+        video_dir = video_dir.strip()
+        data = _draft_get(draft_id)
+        if data.get("video_dir") != video_dir:
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("all_segments", None)
+            data.pop("all_cameras", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+
+        data["video_dir"] = video_dir
+        result = validate_video_dir(video_dir)
+        data["video_ok"] = bool(result.get("ok"))
+        data["video_result"] = result
+        data["video_error"] = result.get("error")
+        if data["video_ok"]:
+            try:
+                idx = discover_from_video_dir(Path(video_dir).expanduser())
+                data["segments_all"] = idx["segments"]
+                data["cameras_all"] = idx["cameras"]
+            except Exception as e:
+                data["video_ok"] = False
+                data["video_error"] = str(e)
+                data["video_result"] = {**result, "ok": False, "error": str(e)}
+
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+
+    @app.get("/wizard/{draft_id}/output", response_class=HTMLResponse)
+    def wizard_output(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        return templates.TemplateResponse(
+            "wizard_output.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "out_dir": data.get("out_dir", ""),
+                "out_ok": bool(data.get("out_ok", False)),
+                "out_result": data.get("out_result"),
+                "error": data.get("out_error"),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/output")
+    def wizard_output_post(draft_id: int, out_dir: str = Form(...)) -> RedirectResponse:
+        out_dir = out_dir.strip()
+        data = _draft_get(draft_id)
+        data["out_dir"] = out_dir
+        segments = data.get("segments_all")
+        if not isinstance(segments, list):
+            segments = None
+        result = validate_out_dir(out_dir, segments=segments)
+        data["out_ok"] = bool(result.get("ok"))
+        data["out_result"] = result
+        data["out_error"] = result.get("error")
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+    @app.get("/wizard/{draft_id}/select", response_class=HTMLResponse)
+    def wizard_select(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+        return templates.TemplateResponse(
+            "wizard_select.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "site": data.get("site", "nbu_lounge"),
+                "segments": data.get("segments_all", []),
+                "cameras": data.get("cameras_all", []),
+                "selected_segments": data.get("segments", []),
+                "selected_cameras": data.get("cameras", []),
+                "all_segments": bool(data.get("all_segments", True)),
+                "all_cameras": bool(data.get("all_cameras", True)),
+                "error": data.get("select_error"),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/select")
+    def wizard_select_post(
+        draft_id: int,
         site: str = Form(default="nbu_lounge"),
-        segments: str = Form(default=""),
-        cameras: str = Form(default=""),
+        all_segments: Optional[str] = Form(default=None),
+        all_cameras: Optional[str] = Form(default=None),
+        segments: Optional[List[str]] = Form(default=None),
+        cameras: Optional[List[str]] = Form(default=None),
+    ) -> RedirectResponse:
+        data = _draft_get(draft_id)
+        data["site"] = site
+        use_all_segments = all_segments is not None
+        use_all_cameras = all_cameras is not None
+        picked_segments = [s.strip() for s in (segments or []) if str(s).strip()]
+        picked_cameras = [c.strip() for c in (cameras or []) if str(c).strip()]
+
+        data["all_segments"] = use_all_segments
+        data["all_cameras"] = use_all_cameras
+
+        data["segments"] = [] if use_all_segments else picked_segments
+        data["cameras"] = [] if use_all_cameras else picked_cameras
+
+        data["select_error"] = None
+        if not use_all_segments and not data["segments"]:
+            data["select_error"] = (
+                "Select at least one segment, or choose “Process all segments”."
+            )
+        if not use_all_cameras and not data["cameras"]:
+            data["select_error"] = (
+                "Select at least one camera, or choose “Process all cameras”."
+            )
+        if data["select_error"]:
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/run", status_code=303)
+
+    @app.get("/wizard/{draft_id}/run", response_class=HTMLResponse)
+    def wizard_run(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+        return templates.TemplateResponse(
+            "wizard_run.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "audio_dir": data.get("audio_dir", ""),
+                "video_dir": data.get("video_dir", ""),
+                "site": data.get("site", "nbu_lounge"),
+                "selected_segments": data.get("segments", []),
+                "selected_cameras": data.get("cameras", []),
+                "all_segments": bool(data.get("all_segments", True)),
+                "all_cameras": bool(data.get("all_cameras", True)),
+                "title_value": data.get("title", ""),
+                "out_dir": data.get("out_dir", ""),
+                "log_level": data.get("log_level", "INFO"),
+                "skip_decode": bool(data.get("skip_decode", False)),
+                "split": bool(data.get("split", False)),
+                "split_overwrite": bool(data.get("split_overwrite", False)),
+                "split_clean": bool(data.get("split_clean", False)),
+                "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
+                "error": data.get("run_error"),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/run")
+    def wizard_run_post(
+        draft_id: int,
+        title: str = Form(default=""),
         log_level: str = Form(default="INFO"),
         skip_decode: Optional[str] = Form(default=None),
         split: Optional[str] = Form(default=None),
@@ -97,37 +705,106 @@ def create_app() -> FastAPI:
         split_chunk_seconds: int = Form(default=3600),
         schedule_at: str = Form(default=""),
     ) -> RedirectResponse:
+        data = _draft_get(draft_id)
+        data["title"] = title.strip()
+        data["log_level"] = log_level
+        data["skip_decode"] = skip_decode is not None
+        data["split"] = split is not None
+        data["split_overwrite"] = split_overwrite is not None
+        data["split_clean"] = split_clean is not None
+        data["split_chunk_seconds"] = int(split_chunk_seconds)
+        data["schedule_at"] = schedule_at.strip()
+        data["run_error"] = None
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/summary", status_code=303)
+
+    @app.get("/wizard/{draft_id}/summary", response_class=HTMLResponse)
+    def wizard_draft_summary(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        if not str(data.get("out_dir", "")).strip():
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
         args: Dict[str, Any] = {
-            "audio_dir": audio_dir,
-            "video_dir": video_dir,
-            "out_dir": out_dir,
-            "site": site,
-            "segments": _parse_csv_list(segments),
-            "cameras": _parse_csv_list(cameras),
-            "log_level": log_level,
-            "skip_decode": skip_decode is not None,
-            "split": split is not None,
-            "split_overwrite": split_overwrite is not None,
-            "split_clean": split_clean is not None,
-            "split_chunk_seconds": int(split_chunk_seconds),
+            "audio_dir": data.get("audio_dir", ""),
+            "video_dir": data.get("video_dir", ""),
+            "out_dir": data.get("out_dir", ""),
+            "site": data.get("site", "nbu_lounge"),
+            "segments": data.get("segments", []),
+            "cameras": data.get("cameras", []),
+            "log_level": data.get("log_level", "INFO"),
+            "skip_decode": bool(data.get("skip_decode", False)),
+            "split": bool(data.get("split", False)),
+            "split_overwrite": bool(data.get("split_overwrite", False)),
+            "split_clean": bool(data.get("split_clean", False)),
+            "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
+        }
+        return templates.TemplateResponse(
+            "wizard_summary.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "args": args,
+                "title_value": data.get("title", ""),
+                "schedule_at": data.get("schedule_at", ""),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/start")
+    def wizard_start(draft_id: int) -> RedirectResponse:
+        data = _draft_get(draft_id)
+        data["run_error"] = None
+
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+        if not str(data.get("out_dir", "")).strip():
+            data["run_error"] = "Output dir is required."
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        args: Dict[str, Any] = {
+            "audio_dir": data.get("audio_dir", ""),
+            "video_dir": data.get("video_dir", ""),
+            "out_dir": data.get("out_dir", ""),
+            "site": data.get("site", "nbu_lounge"),
+            "segments": data.get("segments", []),
+            "cameras": data.get("cameras", []),
+            "log_level": data.get("log_level", "INFO"),
+            "skip_decode": bool(data.get("skip_decode", False)),
+            "split": bool(data.get("split", False)),
+            "split_overwrite": bool(data.get("split_overwrite", False)),
+            "split_clean": bool(data.get("split_clean", False)),
+            "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
         }
         cmd = build_cli_cmd(args)
 
+        schedule_at = str(data.get("schedule_at", "") or "").strip()
         now = utc_now_iso()
         scheduled_iso: Optional[str] = None
         status = "queued"
-        if schedule_at.strip():
+        if schedule_at:
             try:
-                # Expect local input like "2026-01-06T12:34"
-                dt = datetime.fromisoformat(schedule_at.strip())
+                dt = datetime.fromisoformat(schedule_at)
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
                 scheduled_iso = dt.astimezone(timezone.utc).isoformat(
                     timespec="seconds"
                 )
                 status = "scheduled"
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Bad schedule_at: {e}")
+                data["run_error"] = f"Bad schedule_at: {e}"
+                _draft_set(draft_id, data)
+                return RedirectResponse(url=f"/wizard/{draft_id}/run", status_code=303)
 
         logs_dir = Path(".webui") / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +817,7 @@ def create_app() -> FastAPI:
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    title.strip() or "video-sync run",
+                    data.get("title") or "video-sync run",
                     now,
                     scheduled_iso,
                     status,
@@ -153,10 +830,10 @@ def create_app() -> FastAPI:
             run_id = int(cur.lastrowid)
             log_path = logs_dir / f"run-{run_id}.log"
             conn.execute(
-                "UPDATE runs SET log_path=? WHERE id=?",
-                (str(log_path), run_id),
+                "UPDATE runs SET log_path=? WHERE id=?", (str(log_path), run_id)
             )
 
+        _draft_delete(draft_id)
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
@@ -170,12 +847,39 @@ def create_app() -> FastAPI:
             {"request": request, "run": row},
         )
 
+    # (Summary is shown before starting; see /wizard/{draft_id}/summary.)
+
     @app.post("/runs/{run_id}/cancel")
     def run_cancel(run_id: int) -> RedirectResponse:
         ok = runner.request_cancel(run_id)
         if not ok:
             raise HTTPException(status_code=400, detail="Cannot cancel this run")
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+
+    @app.post("/runs/{run_id}/delete")
+    def run_delete(run_id: int) -> RedirectResponse:
+        """
+        Remove a run from history (DB row) and delete its log file (best-effort).
+        """
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT status, log_path FROM runs WHERE id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if str(row["status"]) == "running":
+            raise HTTPException(status_code=400, detail="Cannot delete a running run")
+
+        try:
+            p = Path(row["log_path"])
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+        with tx(conn):
+            conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
+        return RedirectResponse(url="/runs", status_code=303)
 
     @app.get("/runs/{run_id}/logs")
     def run_logs(run_id: int) -> StreamingResponse:

@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Historical name: we now stamp runs in local time for user-facing clarity.
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 @dataclass(frozen=True)

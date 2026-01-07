@@ -8,7 +8,6 @@
       <p class="muted">Latest 200 runs. Click a run to view status and logs.</p>
     </div>
     <div class="actions">
-      <a class="btn primary" href="/runs/new">New run</a>
     </div>
   </div>
 
@@ -22,6 +21,7 @@
           <th>Created</th>
           <th>Scheduled</th>
           <th>Exit</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -33,13 +33,20 @@
             <td class="mono">{{ r['created_at'] }}</td>
             <td class="mono">{{ r['scheduled_at'] or "" }}</td>
             <td class="mono">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
+            <td class="right">
+              <a class="btn" href="/runs/{{ r['id'] }}/logs" target="_blank">Log</a>
+              {% if r['status'] != 'running' %}
+                <form class="inline" method="post" action="/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this run from history (also deletes its log file)?')">
+                  <button class="btn danger" type="submit">Remove</button>
+                </form>
+              {% endif %}
+            </td>
           </tr>
         {% endfor %}
         {% if runs|length == 0 %}
-          <tr><td colspan="6" class="muted">No runs yet.</td></tr>
+          <tr><td colspan="7" class="muted">No runs yet.</td></tr>
         {% endif %}
       </tbody>
     </table>
   </div>
 {% endblock %}
-

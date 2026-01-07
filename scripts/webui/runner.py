@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -90,6 +91,7 @@ class Runner:
 
     def request_cancel(self, run_id: int) -> bool:
         conn = get_conn()
+        status: Optional[str] = None
         with tx(conn):
             row = conn.execute(
                 "SELECT status FROM runs WHERE id=?",
@@ -104,6 +106,20 @@ class Runner:
                 "UPDATE runs SET cancel_requested=1 WHERE id=?",
                 (run_id,),
             )
+
+            # If the run has not started yet, cancel immediately so it won't be promoted/run.
+            if status in {"scheduled", "queued"}:
+                conn.execute(
+                    "UPDATE runs SET status='canceled', finished_at=? WHERE id=?",
+                    (utc_now_iso(), run_id),
+                )
+
+        # If currently running, try to terminate immediately (don't wait for next log line).
+        if status == "running":
+            with self._lock:
+                proc = self._running.get(run_id)
+            if proc is not None:
+                self._terminate(proc)
         return True
 
     def _loop(self) -> None:
@@ -139,7 +155,7 @@ class Runner:
             return
 
         row = conn.execute(
-            "SELECT * FROM runs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
+            "SELECT * FROM runs WHERE status='queued' AND cancel_requested=0 ORDER BY created_at ASC LIMIT 1"
         ).fetchone()
         if not row:
             return
@@ -165,7 +181,6 @@ class Runner:
         if not row:
             return
 
-        args = json.loads(row["args_json"])
         cmd = json.loads(row["cmd_json"])
         log_path = Path(row["log_path"])
         cwd = Path(row["cwd"])
@@ -182,6 +197,14 @@ class Runner:
                 logf.write(header)
                 logf.flush()
 
+                popen_kwargs = {}
+                if os.name == "posix":
+                    # Put the run in its own process group so we can terminate children too.
+                    popen_kwargs["start_new_session"] = True
+                elif os.name == "nt":
+                    # Best-effort: create a new process group on Windows.
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+
                 proc = subprocess.Popen(
                     cmd,
                     cwd=str(cwd),
@@ -189,6 +212,7 @@ class Runner:
                     stderr=subprocess.STDOUT,
                     bufsize=1,
                     text=True,
+                    **popen_kwargs,
                 )
                 with self._lock:
                     self._running[run_id] = proc
@@ -200,11 +224,39 @@ class Runner:
                     )
 
                 assert proc.stdout is not None
-                for line in proc.stdout:
-                    logf.write(line.encode("utf-8", errors="replace"))
-                    logf.flush()
+
+                def pump_output() -> None:
+                    try:
+                        for line in proc.stdout:  # type: ignore[union-attr]
+                            logf.write(line.encode("utf-8", errors="replace"))
+                            logf.flush()
+                    except Exception:
+                        # Best-effort log streaming; don't crash runner on read issues.
+                        pass
+
+                t = threading.Thread(
+                    target=pump_output, name=f"webui-run-{run_id}-stdout", daemon=True
+                )
+                t.start()
+
+                cancel_logged = False
+                while proc.poll() is None:
                     if self._cancel_requested(run_id):
+                        if not cancel_logged:
+                            logf.write(
+                                b"\n[webui] Cancel requested. Stopping process...\n"
+                            )
+                            logf.flush()
+                            cancel_logged = True
                         self._terminate(proc)
+                        # After termination attempt, break only when proc exits.
+                    time.sleep(0.5)
+
+                # Ensure we drained remaining output (best-effort).
+                try:
+                    t.join(timeout=2)
+                except Exception:
+                    pass
 
                 rc = proc.wait()
                 finished = utc_now_iso()
@@ -238,11 +290,29 @@ class Runner:
         try:
             if proc.poll() is not None:
                 return
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if os.name == "posix":
+                # Terminate the whole process group (parent + children).
+                try:
+                    os.killpg(int(proc.pid), signal.SIGTERM)
+                except Exception:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(int(proc.pid), signal.SIGKILL)
+                    except Exception:
+                        proc.kill()
+            else:
+                # Windows: best-effort terminate.
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -267,9 +337,9 @@ async def tail_log_sse(path: Path, *, poll_interval: float = 0.25) -> Iterable[s
                     text = chunk.decode("utf-8", errors="replace")
                     # SSE data lines must not contain bare CR; normalize.
                     text = text.replace("\r\n", "\n").replace("\r", "\n")
-                    for line in text.split("\n"):
-                        yield f"data: {line}\n"
-                    yield "\n"
+                    for line in text.splitlines():
+                        # One SSE message per log line.
+                        yield f"data: {line}\n\n"
                     last_emit = time.time()
         except Exception:
             # ignore transient read errors
