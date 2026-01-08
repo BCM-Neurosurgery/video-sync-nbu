@@ -118,21 +118,14 @@
               <div class="k">First segment</div>
               <div class="v mono">{{ video_result.segments_first or "—" }}</div>
               <div class="k">Last segment</div>
-              <div class="v mono">{{ video_result.segments_last or "—" }}</div>
-              <div class="k">Cameras</div>
-              <div class="v mono camera-lines">
-                {% set cams = (video_result.cameras or video_result.cameras_preview or []) %}
-                {% if cams %}
-                  {% for c in cams %}{{ c }}{% if not loop.last %}
-{% endif %}{% endfor %}
-                {% else %}
-                  —
-                {% endif %}
-              </div>
-            </div>
-          {% else %}
-            <div class="muted">Summary will appear after checks pass.</div>
-          {% endif %}
+	              <div class="v mono">{{ video_result.segments_last or "—" }}</div>
+	              <div class="k">Cameras</div>
+	              {% set cams = (video_result.cameras or video_result.cameras_preview or []) %}
+	              <div class="v mono camera-lines">{{ cams|join('\n') if cams else "—" }}</div>
+	            </div>
+	          {% else %}
+	            <div class="muted">Summary will appear after checks pass.</div>
+	          {% endif %}
         </div>
       {% elif error %}
         <div class="card subcard">

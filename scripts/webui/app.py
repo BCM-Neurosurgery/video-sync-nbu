@@ -128,6 +128,12 @@ def create_app() -> FastAPI:
         "Cameras discovered",
     ]
 
+    out_val_lock = threading.Lock()
+    out_val_state: Dict[int, Dict[str, Any]] = {}
+    out_check_names = [
+        "Directory empty",
+    ]
+
     @app.get("/api/video-index")
     def api_video_index(video_dir: str) -> Dict[str, Any]:
         """
@@ -619,6 +625,143 @@ def create_app() -> FastAPI:
         data["out_error"] = result.get("error")
         _draft_set(draft_id, data)
         return result
+
+    @app.get("/api/drafts/{draft_id}/validate-out/start")
+    def api_validate_out_start(draft_id: int, out_dir: str) -> Dict[str, Any]:
+        """
+        Start async out_dir validation so the UI can show per-check progress.
+        """
+        data = _draft_get(draft_id)
+        out_dir = out_dir.strip()
+        data["out_dir"] = out_dir
+        _draft_set(draft_id, data)
+
+        segments = data.get("segments_all")
+        if not isinstance(segments, list):
+            segments = None
+
+        with out_val_lock:
+            st = out_val_state.get(draft_id)
+            if st and st.get("running") and st.get("out_dir") == out_dir:
+                return st.get("result") or {
+                    "out_dir": out_dir,
+                    "ok": False,
+                    "running": True,
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in out_check_names
+                    ],
+                    "error": None,
+                }
+
+            seq = int(st.get("seq", 0)) + 1 if st else 1
+            out_val_state[draft_id] = {
+                "seq": seq,
+                "out_dir": out_dir,
+                "running": True,
+                "result": {
+                    "out_dir": out_dir,
+                    "ok": False,
+                    "running": True,
+                    "exists": False,
+                    "will_create": False,
+                    "empty": None,
+                    "entries_count": 0,
+                    "audio_decoded": {
+                        "exists": False,
+                        "raw_csv": False,
+                        "filtered_csv": False,
+                    },
+                    "can_reuse_audio_decoded": False,
+                    "split_decoded_count": 0,
+                    "serial_chunks_count": 0,
+                    "synced_segments_count": 0,
+                    "synced_segments_preview": [],
+                    "total_segments": None,
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in out_check_names
+                    ],
+                    "error": None,
+                },
+            }
+
+        def run_validation(local_seq: int, local_out_dir: str) -> None:
+            def on_progress(payload: Dict[str, Any]) -> None:
+                snap = json.loads(json.dumps(payload))
+                with out_val_lock:
+                    cur = out_val_state.get(draft_id)
+                    if not cur or int(cur.get("seq", 0)) != local_seq:
+                        return
+                    cur["result"] = snap
+                    cur["running"] = bool(snap.get("running", False))
+
+            from scripts.validate.validate_out_dir import validate_out_dir_progress
+
+            result = validate_out_dir_progress(
+                local_out_dir, segments=segments, on_progress=on_progress
+            )
+            result["running"] = False
+            on_progress(result)
+
+            with out_val_lock:
+                cur = out_val_state.get(draft_id)
+                if not cur or int(cur.get("seq", 0)) != local_seq:
+                    return
+                cur["running"] = False
+                cur["result"] = json.loads(json.dumps(result))
+
+            data2 = _draft_get(draft_id)
+            if data2.get("out_dir") != local_out_dir:
+                return
+            data2["out_ok"] = bool(result.get("ok"))
+            data2["out_result"] = result
+            data2["out_error"] = result.get("error")
+            _draft_set(draft_id, data2)
+
+        threading.Thread(
+            target=run_validation,
+            args=(seq, out_dir),
+            name=f"webui-out-validate-{draft_id}",
+            daemon=True,
+        ).start()
+
+        with out_val_lock:
+            return out_val_state[draft_id]["result"]
+
+    @app.get("/api/drafts/{draft_id}/validate-out/status")
+    def api_validate_out_status(draft_id: int) -> Dict[str, Any]:
+        with out_val_lock:
+            st = out_val_state.get(draft_id)
+            if st and st.get("result") is not None:
+                return st["result"]
+        data = _draft_get(draft_id)
+        if data.get("out_result"):
+            return data["out_result"]
+        return {
+            "out_dir": data.get("out_dir", ""),
+            "ok": False,
+            "running": False,
+            "exists": False,
+            "will_create": False,
+            "empty": None,
+            "entries_count": 0,
+            "audio_decoded": {
+                "exists": False,
+                "raw_csv": False,
+                "filtered_csv": False,
+            },
+            "can_reuse_audio_decoded": False,
+            "split_decoded_count": 0,
+            "serial_chunks_count": 0,
+            "synced_segments_count": 0,
+            "synced_segments_preview": [],
+            "total_segments": None,
+            "checks": [
+                {"name": n, "status": "pending", "message": ""} for n in out_check_names
+            ],
+            "error": None,
+        }
 
     @app.get("/wizard/{draft_id}/audio", response_class=HTMLResponse)
     def wizard_audio(request: Request, draft_id: int) -> HTMLResponse:

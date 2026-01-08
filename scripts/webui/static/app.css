@@ -165,7 +165,8 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
 .v{font-size:13px}
 .code{background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:10px;overflow:auto;max-height:220px}
 .code.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
-.camera-lines{
+.camera-lines,
+.mono-lines{
   white-space: pre-line;
   overflow-wrap: anywhere;
   line-height: 1.6;
