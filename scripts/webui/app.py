@@ -22,6 +22,7 @@ from scripts.validate.validate_audio_dir import validate_audio_dir
 from scripts.validate.validate_audio_dir import validate_audio_dir_progress
 from scripts.validate.validate_out_dir import discover_synced_pairs, validate_out_dir
 from scripts.validate.validate_video_dir import (
+    discover_video_pairs,
     discover_from_video_dir,
     validate_video_dir,
     validate_video_dir_progress,
@@ -944,6 +945,13 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
         if not bool(data.get("out_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+        video_dir = str(data.get("video_dir", "")).strip()
+        pairs_set: set[tuple[str, str]] = set()
+        if video_dir:
+            try:
+                pairs_set = discover_video_pairs(Path(video_dir).expanduser())
+            except Exception:
+                pairs_set = set()
         return templates.TemplateResponse(
             "wizard_select.html",
             {
@@ -957,6 +965,22 @@ def create_app() -> FastAPI:
                 "selected_pairs": data.get("target_pairs", []),
                 "all_segments": bool(data.get("all_segments", True)),
                 "all_cameras": bool(data.get("all_cameras", True)),
+                "title_value": data.get("title", ""),
+                "log_level": data.get("log_level", "INFO"),
+                "skip_decode": bool(data.get("skip_decode", False)),
+                "split": bool(data.get("split", False)),
+                "split_overwrite": bool(data.get("split_overwrite", False)),
+                "split_clean": bool(data.get("split_clean", False)),
+                "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
+                "run_error": data.get("run_error"),
+                "reuse_audio_available": bool(
+                    (data.get("out_result") or {})
+                    .get("audio_decoded", {})
+                    .get("filtered_csv")
+                ),
+                "available_pair_map": {
+                    f"{seg}::{cam}": True for seg, cam in pairs_set if seg and cam
+                },
                 "synced_pair_map": {
                     f"{p.get('segment', '')}::{p.get('camera', '')}": True
                     for p in discover_synced_pairs(
@@ -982,11 +1006,9 @@ def create_app() -> FastAPI:
     def wizard_select_post(
         draft_id: int,
         site: str = Form(default="nbu_lounge"),
-        all_segments: Optional[str] = Form(default=None),
-        all_cameras: Optional[str] = Form(default=None),
-        segments: Optional[List[str]] = Form(default=None),
-        cameras: Optional[List[str]] = Form(default=None),
         target_pairs: Optional[List[str]] = Form(default=None),
+        log_level: str = Form(default="INFO"),
+        reuse_audio: Optional[str] = Form(default=None),
     ) -> RedirectResponse:
         data = _draft_get(draft_id)
         data["site"] = site
@@ -999,71 +1021,35 @@ def create_app() -> FastAPI:
         data["cameras"] = []
 
         data["select_error"] = None
+        data["run_error"] = None
         if not picked_pairs:
             data["select_error"] = "Select at least one segment/camera pair."
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
-        _draft_set(draft_id, data)
-        return RedirectResponse(url=f"/wizard/{draft_id}/run", status_code=303)
-
-    @app.get("/wizard/{draft_id}/run", response_class=HTMLResponse)
-    def wizard_run(request: Request, draft_id: int) -> HTMLResponse:
-        data = _draft_get(draft_id)
-        if not bool(data.get("audio_ok", False)):
-            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
-        if not bool(data.get("video_ok", False)):
-            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
-        if not bool(data.get("out_ok", False)):
-            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
-        return templates.TemplateResponse(
-            "wizard_run.html",
-            {
-                "request": request,
-                "draft_id": draft_id,
-                "audio_dir": data.get("audio_dir", ""),
-                "video_dir": data.get("video_dir", ""),
-                "site": data.get("site", "nbu_lounge"),
-                "selected_segments": data.get("segments", []),
-                "selected_cameras": data.get("cameras", []),
-                "all_segments": bool(data.get("all_segments", True)),
-                "all_cameras": bool(data.get("all_cameras", True)),
-                "title_value": data.get("title", ""),
-                "out_dir": data.get("out_dir", ""),
-                "log_level": data.get("log_level", "INFO"),
-                "skip_decode": bool(data.get("skip_decode", False)),
-                "split": bool(data.get("split", False)),
-                "split_overwrite": bool(data.get("split_overwrite", False)),
-                "split_clean": bool(data.get("split_clean", False)),
-                "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
-                "error": data.get("run_error"),
-            },
-        )
-
-    @app.post("/wizard/{draft_id}/run")
-    def wizard_run_post(
-        draft_id: int,
-        title: str = Form(default=""),
-        log_level: str = Form(default="INFO"),
-        skip_decode: Optional[str] = Form(default=None),
-        split: Optional[str] = Form(default=None),
-        split_overwrite: Optional[str] = Form(default=None),
-        split_clean: Optional[str] = Form(default=None),
-        split_chunk_seconds: int = Form(default=3600),
-        schedule_at: str = Form(default=""),
-    ) -> RedirectResponse:
-        data = _draft_get(draft_id)
-        data["title"] = title.strip()
+        data["title"] = ""
         data["log_level"] = log_level
-        data["skip_decode"] = skip_decode is not None
-        data["split"] = split is not None
-        data["split_overwrite"] = split_overwrite is not None
-        data["split_clean"] = split_clean is not None
-        data["split_chunk_seconds"] = int(split_chunk_seconds)
-        data["schedule_at"] = schedule_at.strip()
-        data["run_error"] = None
+        can_reuse = bool(
+            (data.get("out_result") or {}).get("audio_decoded", {}).get("filtered_csv")
+        )
+        reuse_enabled = reuse_audio is not None and can_reuse
+        data["skip_decode"] = reuse_enabled
+        data["split"] = not reuse_enabled
+        data["split_overwrite"] = not reuse_enabled
+        data["split_clean"] = False
+        data["split_chunk_seconds"] = 3600
+        data["schedule_at"] = ""
+
         _draft_set(draft_id, data)
         return RedirectResponse(url=f"/wizard/{draft_id}/summary", status_code=303)
+
+    @app.get("/wizard/{draft_id}/run")
+    def wizard_run(draft_id: int) -> RedirectResponse:
+        return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+
+    @app.post("/wizard/{draft_id}/run")
+    def wizard_run_post(draft_id: int) -> RedirectResponse:
+        return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
     @app.get("/wizard/{draft_id}/summary", response_class=HTMLResponse)
     def wizard_draft_summary(request: Request, draft_id: int) -> HTMLResponse:
@@ -1153,7 +1139,9 @@ def create_app() -> FastAPI:
             except Exception as e:
                 data["run_error"] = f"Bad schedule_at: {e}"
                 _draft_set(draft_id, data)
-                return RedirectResponse(url=f"/wizard/{draft_id}/run", status_code=303)
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/select", status_code=303
+                )
 
         logs_dir = Path(".webui") / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)

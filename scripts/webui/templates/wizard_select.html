@@ -1,28 +1,38 @@
 {% extends "wizard_layout.html" %}
 {% set nav = "new" %}
 {% set title = "New run" %}
-{% set subtitle = "Step 4/6 — Choose segments and cameras" %}
+{% set subtitle = "Step 4/5 — Choose segments and run options" %}
 {% set step = 4 %}
+{% set available_pair_map = available_pair_map | default({}) %}
 
 {% block wizard %}
   <form class="card form" method="post" action="/wizard/{{ draft_id }}/select">
-    <div class="grid3">
-      <label>
-        <span class="label-row">
-          Site
-          <span class="help" data-tip="Select the recording site preset (affects serial decoding defaults)."></span>
-        </span>
-        <select name="site">
-          {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
-            <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
-          {% endfor %}
-        </select>
-      </label>
-
+    <div class="input-row">
+      <div class="label-row field-label">
+        Site
+        <span class="help" data-tip="Select the recording site preset (affects serial decoding defaults)."></span>
+      </div>
+      <select name="site" class="narrow-select">
+        {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
+          <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
     </div>
 
-    <div class="hint" style="margin-top:10px">
-      Each row is a segment and each column is a camera. OK means the output already exists. GO means selected to sync. Click a box to mark it for re-sync (RE). Selecting any box will run only those selected pairs. Click a segment or camera header to toggle all in that row/column.
+    <div class="input-row check{% if not reuse_audio_available %} disabled{% endif %}" style="margin-top:8px">
+      <div class="label-row field-label">
+        Reuse audio artifacts
+        <span class="help" data-tip="Reuse existing decoded audio artifacts in the output directory and skip serial decoding."></span>
+      </div>
+      <span class="checkbox">
+        <input type="checkbox" name="reuse_audio" {% if skip_decode %}checked{% endif %} {% if not reuse_audio_available %}disabled{% endif %} />
+      </span>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="hint" style="margin-top:6px">
+      Select segment-camera pairs to sync. OK = already synced. GO = selected. RE = re-sync. -- = missing video. Click a segment or camera header to toggle its row/column.
     </div>
 
     <div class="matrix-wrap" style="margin-top:8px">
@@ -50,10 +60,11 @@
               {% for cam in cameras %}
                 {% set key = seg ~ '::' ~ cam %}
                 {% set is_synced = synced_pair_map.get(key) %}
+                {% set is_present = available_pair_map.get(key) %}
                 {% set is_selected = key in (selected_pairs or []) %}
                 <td class="center">
-                  <label class="cell{% if is_synced %} synced{% endif %}" title="{% if is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
-                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} />
+                  <label class="cell{% if is_synced %} synced{% endif %}{% if not is_present %} missing{% endif %}" title="{% if not is_present %}Video missing for this segment/camera.{% elif is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
+                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} {% if not is_present %}disabled{% endif %} />
                     <span class="cellbox"></span>
                   </label>
                 </td>
@@ -86,23 +97,28 @@
       return Array.from(document.querySelectorAll("input[name='target_pairs']"));
     }
 
+    function enabledInputs(inputs){
+      return inputs.filter((input) => !input.disabled);
+    }
+
     function updateContinueState(){
       const btn = document.getElementById("continue_btn");
       if(!btn){ return; }
-      const anyChecked = pairInputs().some((input) => input.checked);
+      const anyChecked = enabledInputs(pairInputs()).some((input) => input.checked);
       btn.disabled = !anyChecked;
     }
 
     function toggleSet(inputs){
-      if(!inputs.length){ return; }
-      const allChecked = inputs.every((input) => input.checked);
-      inputs.forEach((input) => { input.checked = !allChecked; });
+      const enabled = enabledInputs(inputs);
+      if(!enabled.length){ return; }
+      const allChecked = enabled.every((input) => input.checked);
+      enabled.forEach((input) => { input.checked = !allChecked; });
     }
 
     function updateSelectAllLabel(){
       const btn = document.getElementById("select_all_pairs");
       if(!btn){ return; }
-      const inputs = pairInputs();
+      const inputs = enabledInputs(pairInputs());
       const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
       btn.textContent = allChecked ? "Select none" : "Select all";
     }
@@ -110,7 +126,7 @@
     const selectAllBtn = document.getElementById("select_all_pairs");
     if(selectAllBtn){
       selectAllBtn.addEventListener("click", () => {
-        const inputs = pairInputs();
+        const inputs = enabledInputs(pairInputs());
         const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
         inputs.forEach((input) => { input.checked = !allChecked; });
         updateSelectAllLabel();
@@ -126,11 +142,11 @@
       const seg = btn.getAttribute("data-seg");
       const cam = btn.getAttribute("data-cam");
       if(seg){
-        const inputs = pairInputs().filter((input) => input.getAttribute("data-seg") === seg);
+        const inputs = enabledInputs(pairInputs()).filter((input) => input.getAttribute("data-seg") === seg);
         toggleSet(inputs);
         updateContinueState();
       } else if(cam){
-        const inputs = pairInputs().filter((input) => input.getAttribute("data-cam") === cam);
+        const inputs = enabledInputs(pairInputs()).filter((input) => input.getAttribute("data-cam") === cam);
         toggleSet(inputs);
         updateSelectAllLabel();
         updateContinueState();

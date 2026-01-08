@@ -94,6 +94,25 @@ def discover_from_video_dir(video_dir: Path) -> Dict[str, List[str]]:
     return {"segments": segs, "cameras": cams}
 
 
+def discover_video_pairs(video_dir: Path) -> set[tuple[str, str]]:
+    """
+    Discover available (segment, camera) pairs from <SEG>.<CAM>.mp4 files.
+    """
+    if not video_dir.exists() or not video_dir.is_dir():
+        raise FileNotFoundError(video_dir)
+
+    pairs: set[tuple[str, str]] = set()
+    mp4_re = re.compile(r"^(?P<seg>.+)\.(?P<cam>[0-9A-Za-z]+)\.mp4$", re.IGNORECASE)
+    for p in video_dir.iterdir():
+        if not p.is_file() or p.suffix.lower() != ".mp4":
+            continue
+        m = mp4_re.match(p.name)
+        if not m:
+            continue
+        pairs.add((m.group("seg"), m.group("cam")))
+    return pairs
+
+
 def validate_video_dir(video_dir: str) -> Dict[str, Any]:
     result = validate_video_dir_progress(video_dir, on_progress=None)
     result["running"] = False

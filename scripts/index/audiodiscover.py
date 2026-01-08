@@ -36,8 +36,6 @@ from scripts.errors import AudioGroupDiscoverError
 from scripts.index.common import (
     _DirMixin,
     _filesize_mb,
-    _safe_glob,
-    _format_channels,
 )
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import (
@@ -96,7 +94,14 @@ class AudioDiscoverer(_DirMixin):
             If `audio_dir` does not exist.
         """
         self._ensure_exists(self.audio_dir)
-        return _safe_glob(self.audio_dir, ("*.wav", "*.mp3"))
+        # Case-insensitive extension match (important on case-sensitive filesystems).
+        candidates: List[Path] = []
+        for p in self.audio_dir.iterdir():
+            if not p.is_file():
+                continue
+            if p.suffix.lower() in {".wav", ".mp3"}:
+                candidates.append(p)
+        return sorted(candidates)
 
     def _validate_candidates(self, candidates: List[Path]) -> None:
         """

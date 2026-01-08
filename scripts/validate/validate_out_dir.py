@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 
 def _now_iso() -> str:
@@ -11,6 +11,34 @@ def _now_iso() -> str:
     from datetime import datetime
 
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+Check = Dict[str, Any]
+
+
+def _init_checks() -> List[Check]:
+    return [
+        {"name": "Directory empty", "status": "pending", "message": ""},
+    ]
+
+
+def _set_check(
+    checks: List[Check],
+    name: str,
+    status: str,
+    message: str = "",
+) -> None:
+    for c in checks:
+        if c.get("name") == name:
+            c["status"] = status
+            c["message"] = message
+            return
+
+
+def _finalize_checks_on_fail(checks: List[Check]) -> None:
+    for c in checks:
+        if c.get("status") in {"pending", "running"}:
+            c["status"] = "skipped"
 
 
 def _list_nontrivial_entries(p: Path) -> List[Path]:
@@ -74,14 +102,76 @@ def _count_synced_segments(
     }
 
 
+def discover_synced_pairs(
+    out_dir: str,
+    *,
+    segments: Optional[List[str]] = None,
+    cameras: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Discover which segment/camera combinations appear already synced in an output folder.
+
+    Evidence:
+    - <out>/<segment>/<camera>/sync.log exists, OR
+    - <out>/<segment>/<camera>/synced_video/*.mp4 exists
+    """
+    out_dir = (out_dir or "").strip()
+    p = Path(out_dir).expanduser()
+    if not out_dir or not p.exists() or not p.is_dir():
+        return {"synced_pairs": [], "synced_pairs_count": 0}
+
+    seg_set = {str(s).strip() for s in (segments or []) if str(s).strip()} or None
+    cam_set = {str(c).strip() for c in (cameras or []) if str(c).strip()} or None
+
+    pairs: Set[tuple[str, str]] = set()
+    for seg_dir in p.iterdir():
+        if not seg_dir.is_dir():
+            continue
+        seg = seg_dir.name
+        if seg_set is not None and seg not in seg_set:
+            continue
+        try:
+            for cam_dir in seg_dir.iterdir():
+                if not cam_dir.is_dir():
+                    continue
+                cam = cam_dir.name
+                if cam_set is not None and cam not in cam_set:
+                    continue
+                if (cam_dir / "sync.log").exists():
+                    pairs.add((seg, cam))
+                    continue
+                sv = cam_dir / "synced_video"
+                if sv.is_dir():
+                    try:
+                        if any(sv.glob("*.mp4")):
+                            pairs.add((seg, cam))
+                    except Exception:
+                        # Ignore glob issues; treat as not-synced.
+                        pass
+        except Exception:
+            continue
+
+    synced_pairs = [{"segment": s, "camera": c} for s, c in sorted(pairs)]
+    return {"synced_pairs": synced_pairs, "synced_pairs_count": len(synced_pairs)}
+
+
 def validate_out_dir(
     out_dir: str, *, segments: Optional[List[str]] = None
 ) -> Dict[str, Any]:
+    result = validate_out_dir_progress(out_dir, segments=segments, on_progress=None)
+    result["running"] = False
+    return result
+
+
+def validate_out_dir_progress(
+    out_dir: str,
+    *,
+    segments: Optional[List[str]] = None,
+    on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
     """
-    Validate an output directory:
-    - whether it exists / is empty
-    - whether it contains reusable audio decode artifacts
-    - how many segments appear to have already been synced
+    Validate an output directory, updating per-check statuses as it runs.
+    Intended for UIs that want to show per-check progress.
     """
     out_dir = (out_dir or "").strip()
     p = Path(out_dir).expanduser()
@@ -89,6 +179,7 @@ def validate_out_dir(
     payload: Dict[str, Any] = {
         "out_dir": str(p),
         "ok": False,
+        "running": True,
         "exists": False,
         "will_create": False,
         "empty": None,
@@ -104,33 +195,61 @@ def validate_out_dir(
         "synced_segments_count": 0,
         "synced_segments_preview": [],
         "total_segments": None,
-        "checks": [],
+        "checks": _init_checks(),
         "error": None,
         "checked_at": _now_iso(),
     }
 
+    def emit() -> None:
+        if on_progress is not None:
+            on_progress(payload)
+
+    emit()
+
     if not out_dir:
         payload["error"] = "Output dir is required."
+        _set_check(payload["checks"], "Directory empty", "fail", payload["error"])
+        payload["running"] = False
+        emit()
         return payload
 
     if p.exists() and not p.is_dir():
         payload["error"] = f"Output dir is not a directory: {p}"
+        _set_check(payload["checks"], "Directory empty", "fail", payload["error"])
+        payload["running"] = False
+        emit()
         return payload
 
     if not p.exists():
         payload["exists"] = False
         payload["will_create"] = True
         payload["empty"] = True
-        payload["checks"].append(
-            {"name": "Directory", "status": "pass", "message": "Will be created"}
+        _set_check(
+            payload["checks"], "Directory empty", "pass", "Will be created (empty)"
         )
         payload["ok"] = True
+        payload["running"] = False
+        emit()
         return payload
 
     payload["exists"] = True
+    payload["will_create"] = False
+
+    _set_check(payload["checks"], "Directory empty", "running")
+    emit()
     entries = _list_nontrivial_entries(p)
     payload["entries_count"] = len(entries)
     payload["empty"] = len(entries) == 0
+    if payload["empty"]:
+        _set_check(payload["checks"], "Directory empty", "pass", "Empty")
+    else:
+        _set_check(
+            payload["checks"],
+            "Directory empty",
+            "warn",
+            f"{payload['entries_count']} item(s)",
+        )
+    emit()
 
     # Audio decoded artifacts (enables --skip-decode)
     ad = p / "audio_decoded"
@@ -160,38 +279,9 @@ def validate_out_dir(
     sync_stats = _count_synced_segments(p, segments)
     payload.update(sync_stats)
 
-    payload["checks"].append(
-        {
-            "name": "Directory exists",
-            "status": "pass",
-            "message": (
-                "Empty" if payload["empty"] else f"{payload['entries_count']} item(s)"
-            ),
-        }
-    )
-    payload["checks"].append(
-        {
-            "name": "Reusable audio decode",
-            "status": "pass" if payload["can_reuse_audio_decoded"] else "warn",
-            "message": (
-                "Found raw.csv + raw-gapfilled-filtered.csv"
-                if payload["can_reuse_audio_decoded"]
-                else "Not found"
-            ),
-        }
-    )
-    payload["checks"].append(
-        {
-            "name": "Previously synced segments",
-            "status": "pass",
-            "message": f"{payload['synced_segments_count']} found",
-        }
-    )
-
-    # Output dir is always usable (pipeline creates subfolders), but warn if not empty.
     payload["ok"] = True
-    if not payload["empty"]:
-        payload["error"] = None
+    payload["running"] = False
+    emit()
     return payload
 
 

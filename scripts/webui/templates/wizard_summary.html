@@ -1,8 +1,8 @@
 {% extends "wizard_layout.html" %}
 {% set nav = "new" %}
 {% set title = "New run" %}
-{% set subtitle = "Step 6/6 — Summary" %}
-{% set step = 6 %}
+{% set subtitle = "Step 5/5 — Summary" %}
+{% set step = 5 %}
 
 {% block wizard %}
   <div class="card">
@@ -10,15 +10,6 @@
       <h3 style="margin:0">Review</h3>
       <div class="muted small">The run will start only after you click “Start run”.</div>
     </div>
-
-    <hr class="divider" />
-
-    <h3>Schedule</h3>
-    <div class="kv">
-      <div class="k">When</div>
-      <div class="v mono">{{ schedule_at or "Immediately" }}</div>
-    </div>
-    <div class="hint">If scheduled, the runner will start at the specified local time.</div>
 
     <hr class="divider" />
 
@@ -56,7 +47,6 @@
 
     <h3>Options</h3>
     <div class="kv">
-      <div class="k">Title</div><div class="v mono">{{ title_value or "" }}</div>
       <div class="k">Log level</div><div class="v mono">{{ args.get('log_level','INFO') }}</div>
       <div class="k">Skip decode</div><div class="v mono">{{ 'Yes' if args.get('skip_decode') else 'No' }}</div>
       <div class="k">Split</div><div class="v mono">{{ 'Yes' if args.get('split') else 'No' }}</div>
@@ -66,7 +56,10 @@
     </div>
 
     <div class="actions" style="margin-top:14px; justify-content:space-between">
-      <a class="btn" href="/wizard/{{ draft_id }}/run">Back</a>
+      <div class="actions">
+        <a class="btn" href="/wizard/{{ draft_id }}/select">Back</a>
+        <a class="btn" href="/runs">Cancel</a>
+      </div>
       <form method="post" action="/wizard/{{ draft_id }}/start" class="inline">
         <button class="btn primary" type="submit">Start run</button>
       </form>

@@ -49,6 +49,15 @@ h3{margin:0 0 10px 0;font-size:16px;color:var(--text)}
 .subcard{box-shadow:none}
 label{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:13px}
 .label-row{display:flex;align-items:center;gap:8px}
+.narrow-select{
+  width:220px;
+  max-width:220px;
+}
+.field-label{
+  font-size:14px;
+  font-weight:600;
+  color:var(--text);
+}
 .input-row{display:flex;gap:10px;align-items:center}
 .input-row input,.input-row select{flex:1}
 .help{
@@ -126,6 +135,34 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
 .check{flex-direction:row;align-items:center;gap:10px}
 .check input{width:16px;height:16px}
 .checkrow input[type="checkbox"], .check input[type="checkbox"]{margin:0; padding:0; flex:0 0 auto}
+.checkbox{
+  position:relative;
+  width:16px;
+  height:16px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+.checkbox input{
+  position:absolute;
+  inset:0;
+}
+.check.disabled{
+  cursor:not-allowed;
+}
+.check.disabled .checkbox{
+  opacity:0.45;
+}
+.check.disabled .checkbox::after{
+  content:"";
+  position:absolute;
+  left:-3px;
+  right:-3px;
+  top:50%;
+  height:2px;
+  background:#9ca3af;
+  transform:rotate(-45deg);
+}
 .field{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:13px}
 .btn{
   border:1px solid var(--border);
@@ -161,8 +198,8 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
 .pill.queued,.pill.scheduled{border-color:rgba(37,99,235,0.30);color:var(--primary);background:rgba(37,99,235,0.06)}
 .pill.succeeded{border-color:rgba(4,120,87,0.30);color:var(--ok);background:rgba(4,120,87,0.06)}
 .pill.failed,.pill.canceled{border-color:rgba(185,28,28,0.30);color:var(--danger);background:rgba(185,28,28,0.06)}
-.kv{display:grid;grid-template-columns:140px 1fr;gap:8px 12px}
-.k{color:var(--muted);font-size:12px}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:8px 12px;align-items:start}
+.k{color:var(--muted);font-size:12px;white-space:nowrap}
 .v{font-size:13px}
 .code{background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:10px;overflow:auto;max-height:220px}
 .code.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -228,6 +265,10 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
   cursor:pointer;
   position:relative;
 }
+.cell.missing{
+  cursor:not-allowed;
+  opacity:0.55;
+}
 .cell input{
   position:absolute;
   opacity:0;
@@ -254,6 +295,21 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
   font-weight:600;
 }
 .cell.synced .cellbox::after{content:"OK"}
+.cell.missing .cellbox{
+  border-color:#d1d5db;
+  background:#f3f4f6;
+  color:#9ca3af;
+  position:relative;
+}
+.cell.missing .cellbox::after{content:"--"}
+.cell.missing .cellbox::before{
+  content:"";
+  position:absolute;
+  width:22px;
+  height:2px;
+  background:#9ca3af;
+  transform:rotate(-45deg);
+}
 .cell input:checked + .cellbox{
   border-color:rgba(180,83,9,0.45);
   background:rgba(180,83,9,0.10);
