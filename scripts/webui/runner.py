@@ -48,10 +48,15 @@ def build_cli_cmd(args: Dict[str, object]) -> List[str]:
     add("--site", args.get("site"))
     add("--log-level", args.get("log_level") or "INFO")
 
-    for seg in args.get("segments") or []:
-        cmd.extend(["--segment", str(seg)])
-    for cam in args.get("cameras") or []:
-        cmd.extend(["--camera", str(cam)])
+    target_pairs = args.get("target_pairs") or []
+    if target_pairs:
+        for pair in target_pairs:
+            cmd.extend(["--target", str(pair)])
+    else:
+        for seg in args.get("segments") or []:
+            cmd.extend(["--segment", str(seg)])
+        for cam in args.get("cameras") or []:
+            cmd.extend(["--camera", str(cam)])
 
     if args.get("skip_decode"):
         cmd.append("--skip-decode")

@@ -20,7 +20,7 @@ from scripts.webui.models import utc_now_iso
 from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_sse
 from scripts.validate.validate_audio_dir import validate_audio_dir
 from scripts.validate.validate_audio_dir import validate_audio_dir_progress
-from scripts.validate.validate_out_dir import validate_out_dir
+from scripts.validate.validate_out_dir import discover_synced_pairs, validate_out_dir
 from scripts.validate.validate_video_dir import (
     discover_from_video_dir,
     validate_video_dir,
@@ -46,6 +46,7 @@ def _default_args() -> Dict[str, Any]:
         "site": "nbu_lounge",
         "segments": [],
         "cameras": [],
+        "target_pairs": [],
         "log_level": "INFO",
         "skip_decode": False,
         "split": False,
@@ -53,6 +54,31 @@ def _default_args() -> Dict[str, Any]:
         "split_clean": False,
         "split_chunk_seconds": 3600,
     }
+
+
+def _normalize_target_pairs(raw: Optional[List[str]]) -> List[str]:
+    pairs: List[str] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        s = str(item).strip()
+        if not s:
+            continue
+        if "::" in s:
+            seg, cam = s.split("::", 1)
+        elif ":" in s:
+            seg, cam = s.split(":", 1)
+        else:
+            continue
+        seg = seg.strip()
+        cam = cam.strip()
+        if not seg or not cam:
+            continue
+        key = f"{seg}::{cam}"
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
 
 
 def _draft_create() -> int:
@@ -290,6 +316,7 @@ def create_app() -> FastAPI:
             data.pop("cameras_all", None)
             data.pop("segments", None)
             data.pop("cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
@@ -319,6 +346,7 @@ def create_app() -> FastAPI:
             data.pop("cameras_all", None)
             data.pop("segments", None)
             data.pop("cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
@@ -441,6 +469,7 @@ def create_app() -> FastAPI:
             data.pop("cameras", None)
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
@@ -477,6 +506,7 @@ def create_app() -> FastAPI:
             data.pop("cameras", None)
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
@@ -613,7 +643,10 @@ def create_app() -> FastAPI:
         Validate out_dir and persist the result into the run-creation draft.
         """
         data = _draft_get(draft_id)
-        data["out_dir"] = out_dir.strip()
+        out_dir = out_dir.strip()
+        if data.get("out_dir") != out_dir:
+            data.pop("target_pairs", None)
+        data["out_dir"] = out_dir
 
         segments = data.get("segments_all")
         if not isinstance(segments, list):
@@ -633,6 +666,8 @@ def create_app() -> FastAPI:
         """
         data = _draft_get(draft_id)
         out_dir = out_dir.strip()
+        if data.get("out_dir") != out_dir:
+            data.pop("target_pairs", None)
         data["out_dir"] = out_dir
         _draft_set(draft_id, data)
 
@@ -791,6 +826,7 @@ def create_app() -> FastAPI:
             data.pop("cameras_all", None)
             data.pop("segments", None)
             data.pop("cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
@@ -840,6 +876,7 @@ def create_app() -> FastAPI:
             data.pop("cameras", None)
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
+            data.pop("target_pairs", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
@@ -885,6 +922,8 @@ def create_app() -> FastAPI:
     def wizard_output_post(draft_id: int, out_dir: str = Form(...)) -> RedirectResponse:
         out_dir = out_dir.strip()
         data = _draft_get(draft_id)
+        if data.get("out_dir") != out_dir:
+            data.pop("target_pairs", None)
         data["out_dir"] = out_dir
         segments = data.get("segments_all")
         if not isinstance(segments, list):
@@ -915,8 +954,26 @@ def create_app() -> FastAPI:
                 "cameras": data.get("cameras_all", []),
                 "selected_segments": data.get("segments", []),
                 "selected_cameras": data.get("cameras", []),
+                "selected_pairs": data.get("target_pairs", []),
                 "all_segments": bool(data.get("all_segments", True)),
                 "all_cameras": bool(data.get("all_cameras", True)),
+                "synced_pair_map": {
+                    f"{p.get('segment', '')}::{p.get('camera', '')}": True
+                    for p in discover_synced_pairs(
+                        data.get("out_dir", ""),
+                        segments=(
+                            data.get("segments_all")
+                            if isinstance(data.get("segments_all"), list)
+                            else None
+                        ),
+                        cameras=(
+                            data.get("cameras_all")
+                            if isinstance(data.get("cameras_all"), list)
+                            else None
+                        ),
+                    ).get("synced_pairs", [])
+                    if p.get("segment") and p.get("camera")
+                },
                 "error": data.get("select_error"),
             },
         )
@@ -929,30 +986,21 @@ def create_app() -> FastAPI:
         all_cameras: Optional[str] = Form(default=None),
         segments: Optional[List[str]] = Form(default=None),
         cameras: Optional[List[str]] = Form(default=None),
+        target_pairs: Optional[List[str]] = Form(default=None),
     ) -> RedirectResponse:
         data = _draft_get(draft_id)
         data["site"] = site
-        use_all_segments = all_segments is not None
-        use_all_cameras = all_cameras is not None
-        picked_segments = [s.strip() for s in (segments or []) if str(s).strip()]
-        picked_cameras = [c.strip() for c in (cameras or []) if str(c).strip()]
+        picked_pairs = _normalize_target_pairs(target_pairs)
 
-        data["all_segments"] = use_all_segments
-        data["all_cameras"] = use_all_cameras
-
-        data["segments"] = [] if use_all_segments else picked_segments
-        data["cameras"] = [] if use_all_cameras else picked_cameras
+        data["target_pairs"] = picked_pairs
+        data["all_segments"] = False
+        data["all_cameras"] = False
+        data["segments"] = []
+        data["cameras"] = []
 
         data["select_error"] = None
-        if not use_all_segments and not data["segments"]:
-            data["select_error"] = (
-                "Select at least one segment, or choose “Process all segments”."
-            )
-        if not use_all_cameras and not data["cameras"]:
-            data["select_error"] = (
-                "Select at least one camera, or choose “Process all cameras”."
-            )
-        if data["select_error"]:
+        if not picked_pairs:
+            data["select_error"] = "Select at least one segment/camera pair."
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
@@ -1037,6 +1085,7 @@ def create_app() -> FastAPI:
             "site": data.get("site", "nbu_lounge"),
             "segments": data.get("segments", []),
             "cameras": data.get("cameras", []),
+            "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
             "split": bool(data.get("split", False)),
@@ -1078,6 +1127,7 @@ def create_app() -> FastAPI:
             "site": data.get("site", "nbu_lounge"),
             "segments": data.get("segments", []),
             "cameras": data.get("cameras", []),
+            "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
             "split": bool(data.get("split", False)),

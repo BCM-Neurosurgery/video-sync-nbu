@@ -34,16 +34,22 @@
 
     <h3>Selection</h3>
     <div class="kv">
-      <div class="k">Segments</div>
-      <div class="v mono">
-        {% set segs = args.get('segments') or [] %}
-        {{ '(all)' if segs|length == 0 else (segs | join(', ')) }}
-      </div>
-      <div class="k">Cameras</div>
-      <div class="v mono">
-        {% set cams = args.get('cameras') or [] %}
-        {{ '(all)' if cams|length == 0 else (cams | join(', ')) }}
-      </div>
+      {% set pairs = args.get('target_pairs') or [] %}
+      {% if pairs|length > 0 %}
+        <div class="k">Target pairs</div>
+        <div class="v mono mono-lines">{{ pairs | join('\n') }}</div>
+      {% else %}
+        <div class="k">Segments</div>
+        <div class="v mono">
+          {% set segs = args.get('segments') or [] %}
+          {{ '(all)' if segs|length == 0 else (segs | join(', ')) }}
+        </div>
+        <div class="k">Cameras</div>
+        <div class="v mono">
+          {% set cams = args.get('cameras') or [] %}
+          {{ '(all)' if cams|length == 0 else (cams | join(', ')) }}
+        </div>
+      {% endif %}
     </div>
 
     <hr class="divider" />

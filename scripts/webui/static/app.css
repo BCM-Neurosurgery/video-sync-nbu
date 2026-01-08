@@ -153,6 +153,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
 .table th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.08em}
 .checks-table .statuscol{width:120px}
 .right{text-align:right}
+.center{text-align:center}
 .inline{display:inline}
 .mono{font-family:var(--mono)}
 .pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;color:var(--muted);background:#f8fafc}
@@ -171,6 +172,96 @@ input:not([type="checkbox"]):not([type="radio"]):focus,select:focus{border-color
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
+.matrix-wrap{
+  border:1px solid var(--border);
+  border-radius:12px;
+  overflow:auto;
+  max-height: 520px;
+  background:#fff;
+}
+.matrix{min-width: 720px}
+.matrix td,.matrix th{vertical-align: middle}
+.matrix th,.matrix td{
+  padding:8px 8px;
+  height:42px;
+  box-sizing:border-box;
+  vertical-align: middle;
+}
+.matrix thead th{
+  position: sticky;
+  top: 0;
+  background:#fff;
+  z-index: 3;
+}
+.matrix .sticky-col{
+  position: sticky;
+  left: 0;
+  background:#fff;
+  z-index: 4;
+}
+.matrix-col{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+}
+.matrix-row{display:flex;align-items:center;gap:10px}
+.matrix-toggle{
+  background:transparent;
+  border:0;
+  margin:0;
+  padding:0;
+  cursor:pointer;
+  color:inherit;
+  font:inherit;
+  display:inline-flex;
+  align-items:center;
+  line-height:1;
+  appearance:none;
+  -webkit-appearance:none;
+}
+.matrix-toggle:hover{color:var(--primary)}
+.cell{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  position:relative;
+}
+.cell input{
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+}
+.cellbox{
+  width:18px;
+  height:18px;
+  border:1px solid var(--border);
+  border-radius:4px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:9px;
+  line-height:1;
+  color:var(--muted);
+  background:#fff;
+}
+.cellbox::after{content:""}
+.cell.synced .cellbox{
+  border-color:rgba(4,120,87,0.35);
+  background:rgba(4,120,87,0.08);
+  color:var(--ok);
+  font-weight:600;
+}
+.cell.synced .cellbox::after{content:"OK"}
+.cell input:checked + .cellbox{
+  border-color:rgba(180,83,9,0.45);
+  background:rgba(180,83,9,0.10);
+  color:var(--warn);
+  font-weight:600;
+}
+.cell input:checked + .cellbox::after{content:"GO"}
+.cell.synced input:checked + .cellbox::after{content:"RE"}
 .log{
   background:#0b1220;
   border:1px solid var(--border);

@@ -18,53 +18,54 @@
           {% endfor %}
         </select>
       </label>
-      <div></div>
-      <div></div>
+
     </div>
 
-    <div class="grid2">
-      <div class="field">
-        <span class="label-row">
-          Segments
-          <span class="help" data-tip="Optional. Select one or more segments. Leave empty to process all segments."></span>
-        </span>
-        <label class="check" style="margin:6px 0 0">
-          <input id="all_segments" type="checkbox" name="all_segments" {% if all_segments %}checked{% endif %} onchange="toggleAll('segments')"/>
-          <span class="label-row">
-            Process all segments
-            <span class="help" data-tip="Recommended. If enabled, no segment selection is needed."></span>
-          </span>
-        </label>
-        <input id="seg_filter" placeholder="Search…" oninput="filterChecks('segments', this.value)" />
-        <div id="segments" class="checklist"></div>
-        <div class="actions">
-          <button class="btn" type="button" onclick="selectVisible('segments', true)">Select visible</button>
-          <button class="btn" type="button" onclick="selectVisible('segments', false)">Clear</button>
-          <span id="segments_count" class="muted small"></span>
-        </div>
-        <div class="hint">Tip: Click checkboxes. No Cmd/Ctrl needed.</div>
-      </div>
-      <div class="field">
-        <span class="label-row">
-          Cameras
-          <span class="help" data-tip="Optional. Select one or more camera serials. Leave empty to process all cameras."></span>
-        </span>
-        <label class="check" style="margin:6px 0 0">
-          <input id="all_cameras" type="checkbox" name="all_cameras" {% if all_cameras %}checked{% endif %} onchange="toggleAll('cameras')"/>
-          <span class="label-row">
-            Process all cameras
-            <span class="help" data-tip="Recommended. If enabled, no camera selection is needed."></span>
-          </span>
-        </label>
-        <input id="cam_filter" placeholder="Search…" oninput="filterChecks('cameras', this.value)" />
-        <div id="cameras" class="checklist"></div>
-        <div class="actions">
-          <button class="btn" type="button" onclick="selectVisible('cameras', true)">Select visible</button>
-          <button class="btn" type="button" onclick="selectVisible('cameras', false)">Clear</button>
-          <span id="cameras_count" class="muted small"></span>
-        </div>
-        <div class="hint">Tip: Click checkboxes. No Cmd/Ctrl needed.</div>
-      </div>
+    <div class="hint" style="margin-top:10px">
+      Each row is a segment and each column is a camera. OK means the output already exists. GO means selected to sync. Click a box to mark it for re-sync (RE). Selecting any box will run only those selected pairs. Click a segment or camera header to toggle all in that row/column.
+    </div>
+
+    <div class="matrix-wrap" style="margin-top:8px">
+      <table class="table matrix">
+        <thead>
+          <tr>
+            <th class="sticky-col">Segment</th>
+            {% for cam in cameras %}
+              <th class="center">
+                <button type="button" class="matrix-toggle" data-cam="{{ cam }}" title="Toggle all segments for camera {{ cam }}">
+                  <span class="mono">{{ cam }}</span>
+                </button>
+              </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for seg in segments %}
+            <tr>
+              <td class="sticky-col">
+                <button type="button" class="matrix-toggle" data-seg="{{ seg }}" title="Toggle all cameras for segment {{ seg }}">
+                  <span class="mono">{{ seg }}</span>
+                </button>
+              </td>
+              {% for cam in cameras %}
+                {% set key = seg ~ '::' ~ cam %}
+                {% set is_synced = synced_pair_map.get(key) %}
+                {% set is_selected = key in (selected_pairs or []) %}
+                <td class="center">
+                  <label class="cell{% if is_synced %} synced{% endif %}" title="{% if is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
+                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} />
+                    <span class="cellbox"></span>
+                  </label>
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions" style="margin-top:8px; justify-content:flex-end">
+      <button class="btn" type="button" id="select_all_pairs">Select all</button>
     </div>
 
     {% if error %}
@@ -72,105 +73,81 @@
     {% endif %}
 
     <div class="actions" style="margin-top:12px; justify-content:space-between">
-      <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
-      <button class="btn primary" type="submit">Continue</button>
+      <div class="actions">
+        <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
+        <a class="btn" href="/runs">Cancel</a>
+      </div>
+      <button class="btn primary" type="submit" id="continue_btn">Continue</button>
     </div>
   </form>
 
   <script>
-    const allSegments = {{ segments | tojson }};
-    const allCameras = {{ cameras | tojson }};
-    const selectedSegments = {{ selected_segments | tojson }};
-    const selectedCameras = {{ selected_cameras | tojson }};
-
-    function setChecks(containerId, options, selectedValues){
-      const box = document.getElementById(containerId);
-      if(!box) return;
-      const selected = new Set((selectedValues || []).map(String));
-      box.innerHTML = "";
-      for(const opt of options){
-        const id = `${containerId}__${String(opt).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
-        const row = document.createElement("label");
-        row.className = "checkrow";
-        row.htmlFor = id;
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.name = containerId === "segments" ? "segments" : "cameras";
-        cb.value = String(opt);
-        cb.id = id;
-        cb.checked = selected.has(String(opt));
-        cb.addEventListener("change", () => updateCounts());
-        const span = document.createElement("span");
-        span.className = "mono";
-        span.textContent = String(opt);
-        row.appendChild(cb);
-        row.appendChild(span);
-        box.appendChild(row);
-      }
-      updateCounts();
+    function pairInputs(){
+      return Array.from(document.querySelectorAll("input[name='target_pairs']"));
     }
 
-    function filterChecks(containerId, q){
-      const box = document.getElementById(containerId);
-      if(!box) return;
-      const query = (q || "").toLowerCase().trim();
-      for(const row of box.querySelectorAll(".checkrow")){
-        const text = row.textContent.toLowerCase();
-        row.classList.toggle("hidden", !!query && !text.includes(query));
-      }
+    function updateContinueState(){
+      const btn = document.getElementById("continue_btn");
+      if(!btn){ return; }
+      const anyChecked = pairInputs().some((input) => input.checked);
+      btn.disabled = !anyChecked;
     }
 
-    function selectVisible(containerId, yes){
-      const box = document.getElementById(containerId);
-      if(!box) return;
-      for(const row of box.querySelectorAll(".checkrow")){
-        if(row.classList.contains("hidden")) continue;
-        const cb = row.querySelector("input[type='checkbox']");
-        if(cb) cb.checked = !!yes;
-      }
-      updateCounts();
+    function toggleSet(inputs){
+      if(!inputs.length){ return; }
+      const allChecked = inputs.every((input) => input.checked);
+      inputs.forEach((input) => { input.checked = !allChecked; });
     }
 
-    function toggleAll(containerId){
-      const allId = containerId === "segments" ? "all_segments" : "all_cameras";
-      const allCb = document.getElementById(allId);
-      const box = document.getElementById(containerId);
-      const filter = document.getElementById(containerId === "segments" ? "seg_filter" : "cam_filter");
-      const disabled = !!(allCb && allCb.checked);
-      if(box) box.style.opacity = disabled ? "0.55" : "1";
-      if(box) box.style.pointerEvents = disabled ? "none" : "auto";
-      if(filter) filter.disabled = disabled;
-      updateCounts();
+    function updateSelectAllLabel(){
+      const btn = document.getElementById("select_all_pairs");
+      if(!btn){ return; }
+      const inputs = pairInputs();
+      const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
+      btn.textContent = allChecked ? "Select none" : "Select all";
     }
 
-    function updateCounts(){
-      const segAll = document.getElementById("all_segments")?.checked;
-      const camAll = document.getElementById("all_cameras")?.checked;
-
-      const segBox = document.getElementById("segments");
-      const camBox = document.getElementById("cameras");
-      const segCountEl = document.getElementById("segments_count");
-      const camCountEl = document.getElementById("cameras_count");
-
-      if(segCountEl){
-        if(segAll){ segCountEl.textContent = "All"; }
-        else{
-          const n = segBox ? segBox.querySelectorAll("input[type='checkbox']:checked").length : 0;
-          segCountEl.textContent = `${n} selected`;
-        }
-      }
-      if(camCountEl){
-        if(camAll){ camCountEl.textContent = "All"; }
-        else{
-          const n = camBox ? camBox.querySelectorAll("input[type='checkbox']:checked").length : 0;
-          camCountEl.textContent = `${n} selected`;
-        }
-      }
+    const selectAllBtn = document.getElementById("select_all_pairs");
+    if(selectAllBtn){
+      selectAllBtn.addEventListener("click", () => {
+        const inputs = pairInputs();
+        const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
+        inputs.forEach((input) => { input.checked = !allChecked; });
+        updateSelectAllLabel();
+        updateContinueState();
+      });
     }
 
-    setChecks("segments", allSegments, selectedSegments);
-    setChecks("cameras", allCameras, selectedCameras);
-    toggleAll("segments");
-    toggleAll("cameras");
+    document.addEventListener("click", (e) => {
+      const t = e.target;
+      if(!t) return;
+      const btn = t.closest(".matrix-toggle");
+      if(!btn){ return; }
+      const seg = btn.getAttribute("data-seg");
+      const cam = btn.getAttribute("data-cam");
+      if(seg){
+        const inputs = pairInputs().filter((input) => input.getAttribute("data-seg") === seg);
+        toggleSet(inputs);
+        updateContinueState();
+      } else if(cam){
+        const inputs = pairInputs().filter((input) => input.getAttribute("data-cam") === cam);
+        toggleSet(inputs);
+        updateSelectAllLabel();
+        updateContinueState();
+      }
+    });
+
+    document.addEventListener("change", (e) => {
+      const t = e.target;
+      if(!t) return;
+      if(t.name === "target_pairs"){
+        updateSelectAllLabel();
+        updateContinueState();
+      }
+    });
+
+    updateSelectAllLabel();
+    updateContinueState();
   </script>
+
 {% endblock %}

@@ -281,7 +281,7 @@ def concatenate_segments_for_camera(
     if ffmpeg_bin is None:
         log.error("ffmpeg not found on PATH; required for video concatenation")
         return None
-    
+
     # Collect synced video paths in chronological order
     video_paths = []
     for seg_id in sorted(segments):
@@ -289,15 +289,15 @@ def concatenate_segments_for_camera(
         synced_videos = list(seg_dir.glob(f"{seg_id}.serial{cam_serial}_synced.mp4"))
         if synced_videos:
             video_paths.append(synced_videos[0])
-    
+
     if len(video_paths) <= 1:
         log.debug("Only one segment for camera %s, no concatenation needed", cam_serial)
         return video_paths[0] if video_paths else None
-    
+
     # Create output directory for concatenated videos
     concat_dir = parent_out / "concatenated"
     concat_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create concat list file for ffmpeg
     concat_list = concat_dir / f"concat_list_{cam_serial}.txt"
     with concat_list.open("w", encoding="utf-8") as f:
@@ -305,50 +305,84 @@ def concatenate_segments_for_camera(
             # ffmpeg concat requires absolute paths with forward slashes
             abs_path = str(video_path.resolve()).replace("\\", "/")
             f.write(f"file '{abs_path}'\n")
-    
+
     # Output concatenated video
     output_path = concat_dir / f"camera_{cam_serial}_concatenated.mp4"
     if output_path.exists():
         output_path.unlink()
-    
+
     log.info(
         "Concatenating %d segments for camera %s → %s",
         len(video_paths),
         cam_serial,
-        output_path.name
+        output_path.name,
     )
-    
+
     # Run ffmpeg concat
     cmd = [
         ffmpeg_bin,
         "-hide_banner",
         "-loglevel",
         "error",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list),
-        "-c", "copy",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_list),
+        "-c",
+        "copy",
         str(output_path),
     ]
-    
+
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
         log.error("ffmpeg concatenation failed: %s", stderr or "unknown error")
         return None
-    
+
     log.info("Concatenated video saved: %s", output_path)
-    
+
     # Clean up concat list file
     concat_list.unlink()
-    
+
     return output_path
+
+
+def _parse_target_pairs(raw: Iterable[str]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        s = str(item).strip()
+        if not s:
+            continue
+        if "::" in s:
+            seg, cam = s.split("::", 1)
+        elif ":" in s:
+            seg, cam = s.split(":", 1)
+        else:
+            raise TargetBuildError(
+                f"Invalid --target '{s}'. Use format <segment>::<camera>."
+            )
+        seg = seg.strip()
+        cam = cam.strip()
+        if not seg or not cam:
+            raise TargetBuildError(
+                f"Invalid --target '{s}'. Use format <segment>::<camera>."
+            )
+        key = (seg, cam)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
 
 
 def build_targets(
     video_dir: Path,
     segments: list[str] | None,
     cameras: list[str] | None,
+    target_pairs: Iterable[str] | None = None,
 ) -> dict[str, list[str]]:
     """
     Build a {segment_id: [cam_serial, ...]} map following selection rules.
@@ -357,6 +391,24 @@ def build_targets(
     vd = Path(video_dir)
     if not vd.exists() or not vd.is_dir():
         raise TargetBuildError(f"video_dir does not exist or is not a directory: {vd}")
+
+    raw_pairs = _parse_target_pairs(target_pairs or [])
+    if raw_pairs:
+        if segments or cameras:
+            logger.warning("--target provided; ignoring --segment/--camera filters.")
+        targets: dict[str, list[str]] = {}
+        for seg, cam in raw_pairs:
+            if not (vd / f"{seg}.json").exists():
+                raise TargetBuildError(f"Missing segment JSON for: {seg} (in {vd})")
+            all_cams = set(list_cameras_for_segment(vd, seg))
+            if cam not in all_cams:
+                raise TargetBuildError(f"Segment {seg}: camera {cam} not found in {vd}")
+            targets.setdefault(seg, [])
+            if cam not in targets[seg]:
+                targets[seg].append(cam)
+        for seg in targets:
+            targets[seg].sort()
+        return targets
 
     if segments:
         missing = [s for s in segments if not (vd / f"{s}.json").exists()]
@@ -390,7 +442,7 @@ def build_targets(
 
     if not targets:
         raise TargetBuildError(
-            "No targets found. Check --video-dir / --segment / --camera inputs."
+            "No targets found. Check --video-dir / --segment / --camera / --target inputs."
         )
     return targets
 
@@ -402,6 +454,7 @@ def run_pipeline(
     site: str,
     segments: list[str] | None,
     cameras: list[str] | None,
+    target_pairs: list[str] | None,
     log_level: str = "INFO",
     skip_decode: bool = False,
     *,
@@ -433,11 +486,12 @@ def run_pipeline(
     # Creates time-range-specific output folder if time range is specified
     if time_start and time_end:
         from datetime import datetime
+
         # Parse times to create folder name (using user's timezone format)
         start_dt = datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
         # Adding current timestamp to make each run unique
-        run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         time_range_folder = f"{start_dt.strftime('%Y%m%d_%H%M%S')}-{end_dt.strftime('%Y%m%d_%H%M%S')}_run_at_{run_timestamp}"
         out_dir = out_dir / time_range_folder
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -453,7 +507,7 @@ def run_pipeline(
         return 2
 
     try:
-        targets = build_targets(video_dir, segments, cameras)
+        targets = build_targets(video_dir, segments, cameras, target_pairs)
     except TargetBuildError as e:
         logger.error("%s", e)
         return 3
@@ -470,7 +524,7 @@ def run_pipeline(
         )
         if start_index is None:
             logger.error(
-                "Resume segment %s not found after applying --segment/--camera filters.",
+                "Resume segment %s not found after applying selection filters.",
                 resume_from_segment,
             )
             return 3
@@ -505,7 +559,9 @@ def run_pipeline(
     # Time-range filter if entered by user
     affected_segments_dict = None
     if time_start and time_end:
-        logger.info("Applying time-range filter: %s to %s (%s)", time_start, time_end, time_zone)
+        logger.info(
+            "Applying time-range filter: %s to %s (%s)", time_start, time_end, time_zone
+        )
         try:
             filtered_csv, affected_segments_dict = filter_by_time_range(
                 serial_csv=filtered_csv,
@@ -515,7 +571,7 @@ def run_pipeline(
                 user_timezone=time_zone,
             )
             logger.info("Time-range filter applied successfully")
-            
+
             # Update targets to only include affected segments/cameras
             if affected_segments_dict:
                 new_targets = {}
@@ -526,16 +582,18 @@ def run_pipeline(
                         filtered_cams = [c for c in cam_list if c in affected_cams]
                         if filtered_cams:
                             new_targets[seg_id] = filtered_cams
-                
+
                 if not new_targets:
-                    logger.warning("Time-range filter resulted in no segments to process")
+                    logger.warning(
+                        "Time-range filter resulted in no segments to process"
+                    )
                     return 0
-                
+
                 targets = new_targets
                 logger.info(
                     "Targets filtered by time range: %d segment(s), %d total camera(s)",
                     len(targets),
-                    sum(len(cams) for cams in targets.values())
+                    sum(len(cams) for cams in targets.values()),
                 )
         except TimeRangeFilterError as e:
             logger.error("Time-range filter failed: %s", e)
@@ -570,16 +628,18 @@ def run_pipeline(
     # Concatenate segments if time-range filter was used and multiple segments were processed
     if time_start and time_end and len(targets) > 1:
         logger.info("Concatenating videos across %d segments", len(targets))
-        
+
         # Group cameras across all segments
         all_cameras = set()
         for cam_list in targets.values():
             all_cameras.update(cam_list)
-        
+
         for cam_serial in sorted(all_cameras):
             # Find which segments have this camera
-            segments_with_cam = [seg_id for seg_id, cam_list in targets.items() if cam_serial in cam_list]
-            
+            segments_with_cam = [
+                seg_id for seg_id, cam_list in targets.items() if cam_serial in cam_list
+            ]
+
             if len(segments_with_cam) > 1:
                 with log_context(seg="concat", cam=cam_serial):
                     concat_path = concatenate_segments_for_camera(
@@ -589,7 +649,11 @@ def run_pipeline(
                         log=logger,
                     )
                     if concat_path:
-                        logger.info("Camera %s: concatenated %d segments", cam_serial, len(segments_with_cam))
+                        logger.info(
+                            "Camera %s: concatenated %d segments",
+                            cam_serial,
+                            len(segments_with_cam),
+                        )
                     else:
                         logger.warning("Camera %s: concatenation failed", cam_serial)
 
@@ -1089,6 +1153,12 @@ if __name__ == "__main__":
         help="Camera serial to process (repeatable). If omitted, process ALL cams per segment.",
     )
     parser.add_argument(
+        "--target",
+        dest="target_pairs",
+        action="append",
+        help="Explicit segment+camera pair to process (repeatable). Format: <segment>::<camera>.",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -1165,6 +1235,7 @@ if __name__ == "__main__":
         site=args.site,
         segments=args.segments,
         cameras=args.cameras,
+        target_pairs=args.target_pairs,
         log_level=args.log_level,
         skip_decode=args.skip_decode,
         do_split=args.do_split,
