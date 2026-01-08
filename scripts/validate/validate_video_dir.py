@@ -330,17 +330,13 @@ def validate_video_dir_progress(
             if extra > 0:
                 preview += f" … (+{extra} more)"
             parts.append(f"Duplicate JSON for segment(s): {preview}.")
-        payload["error"] = " ".join(parts).strip()
-        _set_check(
-            payload["checks"], "Companion JSON per segment", "fail", payload["error"]
-        )
-        _finalize_checks_on_fail(payload["checks"])
-        payload["running"] = False
+        warning = " ".join(parts).strip()
+        payload["warning"] = warning
+        _set_check(payload["checks"], "Companion JSON per segment", "warn", warning)
         emit()
-        return payload
-
-    _set_check(payload["checks"], "Companion JSON per segment", "pass")
-    emit()
+    else:
+        _set_check(payload["checks"], "Companion JSON per segment", "pass")
+        emit()
 
     # 5) Cameras discovered
     _set_check(payload["checks"], "Cameras discovered", "running")
