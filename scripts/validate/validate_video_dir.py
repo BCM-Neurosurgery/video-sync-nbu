@@ -5,7 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 def _now_iso() -> str:
@@ -13,6 +13,38 @@ def _now_iso() -> str:
     from datetime import datetime
 
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+Check = Dict[str, Any]
+
+
+def _init_checks() -> List[Check]:
+    return [
+        {"name": "Segment JSON present", "status": "pending", "message": ""},
+        {"name": "Camera MP4 present", "status": "pending", "message": ""},
+        {"name": "Segments discovered", "status": "pending", "message": ""},
+        {"name": "Companion JSON per segment", "status": "pending", "message": ""},
+        {"name": "Cameras discovered", "status": "pending", "message": ""},
+    ]
+
+
+def _set_check(
+    checks: List[Check],
+    name: str,
+    status: str,
+    message: str = "",
+) -> None:
+    for c in checks:
+        if c.get("name") == name:
+            c["status"] = status
+            c["message"] = message
+            return
+
+
+def _finalize_checks_on_fail(checks: List[Check]) -> None:
+    for c in checks:
+        if c.get("status") in {"pending", "running"}:
+            c["status"] = "skipped"
 
 
 def _sort_segment_ids(segment_ids: List[str]) -> List[str]:
@@ -63,51 +95,91 @@ def discover_from_video_dir(video_dir: Path) -> Dict[str, List[str]]:
 
 
 def validate_video_dir(video_dir: str) -> Dict[str, Any]:
-    """
-    Validate a video directory for expected segment JSON and camera MP4 files.
+    result = validate_video_dir_progress(video_dir, on_progress=None)
+    result["running"] = False
+    return result
 
-    Returns a JSON-friendly payload suitable for UIs and CLIs.
+
+def validate_video_dir_progress(
+    video_dir: str,
+    *,
+    on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    """
+    Validate a video directory, updating per-check statuses as it runs.
+    Intended for UIs that want to show per-check progress.
     """
     video_dir = (video_dir or "").strip()
     p = Path(video_dir).expanduser()
     payload: Dict[str, Any] = {
         "video_dir": str(p),
         "ok": False,
+        "running": True,
         "segments_count": 0,
         "cameras_count": 0,
+        "segments_first": None,
+        "segments_last": None,
         "segments_preview": [],
+        "cameras": [],
         "cameras_preview": [],
         "json_count": 0,
         "mp4_count": 0,
         "nested_files": [],
         "nested_count": 0,
-        "checks": [],
+        "checks": _init_checks(),
         "error": None,
         "checked_at": _now_iso(),
     }
+
+    def emit() -> None:
+        if on_progress is not None:
+            on_progress(payload)
+
+    emit()
+
     if not video_dir:
         payload["error"] = "Video dir is required."
+        _set_check(payload["checks"], "Segment JSON present", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
         return payload
     if not p.exists():
         payload["error"] = f"Video dir does not exist: {p}"
+        _set_check(payload["checks"], "Segment JSON present", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
         return payload
     if not p.is_dir():
         payload["error"] = f"Video dir is not a directory: {p}"
+        _set_check(payload["checks"], "Segment JSON present", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
         return payload
 
-    # Pre-scan top-level for quick counts (case-insensitive).
+    # Pre-scan top-level for quick counts (case-insensitive) and stems.
     mp4_count = 0
     json_count = 0
+    json_stem_counts: Dict[str, int] = {}
+    mp4_re = re.compile(r"^(?P<seg>.+)\.(?P<cam>[0-9A-Za-z]+)\.mp4$", re.IGNORECASE)
+    mp4_segments: set[str] = set()
     for c in p.iterdir():
         if not c.is_file():
             continue
         suf = c.suffix.lower()
         if suf == ".mp4":
             mp4_count += 1
+            m = mp4_re.match(c.name)
+            if m:
+                mp4_segments.add(m.group("seg"))
         elif suf == ".json":
             json_count += 1
+            json_stem_counts[c.stem] = json_stem_counts.get(c.stem, 0) + 1
     payload["mp4_count"] = mp4_count
     payload["json_count"] = json_count
+    emit()
 
     # Helpful hint: users often select a parent folder; surface MP4/JSON in subfolders.
     if mp4_count == 0 and json_count == 0:
@@ -138,74 +210,135 @@ def validate_video_dir(video_dir: str) -> Dict[str, Any]:
                     )
         payload["nested_count"] = nested_count
         payload["nested_files"] = nested
+        emit()
 
+    # 1) Segment JSON present
+    _set_check(payload["checks"], "Segment JSON present", "running")
+    emit()
+    if json_count <= 0:
+        payload["error"] = "No segment JSON files found in this folder."
+        _set_check(payload["checks"], "Segment JSON present", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+    _set_check(payload["checks"], "Segment JSON present", "pass")
+    emit()
+
+    # 2) Camera MP4 present
+    _set_check(payload["checks"], "Camera MP4 present", "running")
+    emit()
+    if mp4_count <= 0:
+        payload["error"] = "No camera MP4 files found in this folder."
+        _set_check(payload["checks"], "Camera MP4 present", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+    _set_check(payload["checks"], "Camera MP4 present", "pass")
+    emit()
+
+    # 3) Segments discovered
+    _set_check(payload["checks"], "Segments discovered", "running")
+    emit()
     try:
         idx = discover_from_video_dir(p)
         segs = idx["segments"]
         cams = idx["cameras"]
-        payload["segments_count"] = len(segs)
-        payload["cameras_count"] = len(cams)
-        payload["segments_preview"] = segs[:25]
-        payload["cameras_preview"] = cams[:25]
-
-        payload["checks"].append(
-            {
-                "name": "Segment JSON present",
-                "status": "pass" if json_count > 0 else "fail",
-                "message": f"{json_count} found",
-            }
-        )
-        payload["checks"].append(
-            {
-                "name": "Camera MP4 present",
-                "status": "pass" if mp4_count > 0 else "fail",
-                "message": f"{mp4_count} found",
-            }
-        )
-        payload["checks"].append(
-            {
-                "name": "Segments discovered",
-                "status": "pass" if payload["segments_count"] > 0 else "fail",
-                "message": f"{payload['segments_count']} found",
-            }
-        )
-        payload["checks"].append(
-            {
-                "name": "Cameras discovered",
-                "status": "pass" if payload["cameras_count"] > 0 else "fail",
-                "message": f"{payload['cameras_count']} found",
-            }
-        )
-
-        payload["ok"] = bool(
-            json_count > 0
-            and mp4_count > 0
-            and payload["segments_count"] > 0
-            and payload["cameras_count"] > 0
-        )
-        if not payload["ok"]:
-            if mp4_count > 0 and payload["segments_count"] == 0:
-                payload["error"] = (
-                    "MP4 files were found, but none matched the expected naming pattern "
-                    "`<SEG>.<CAM>.mp4` (example: `TRBD002_20250709_102609.23512909.mp4`)."
-                )
-            elif json_count > 0 and payload["segments_count"] == 0 and mp4_count == 0:
-                payload["error"] = (
-                    "JSON files were found, but no matching MP4 files were found at the same folder level."
-                )
-            else:
-                payload["error"] = (
-                    "Video folder does not look valid for this pipeline "
-                    "(missing JSON/MP4 or unable to discover segments/cameras)."
-                )
-        return payload
     except Exception as e:
-        payload["checks"].append(
-            {"name": "Discovery", "status": "fail", "message": str(e)}
-        )
         payload["error"] = str(e)
-        payload["ok"] = False
+        _set_check(payload["checks"], "Segments discovered", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
         return payload
+
+    payload["segments_count"] = len(segs)
+    payload["cameras_count"] = len(cams)
+    payload["segments_first"] = segs[0] if segs else None
+    payload["segments_last"] = segs[-1] if segs else None
+    payload["segments_preview"] = segs[:25]
+    payload["cameras"] = cams
+    payload["cameras_preview"] = cams[:25]
+    emit()
+
+    if payload["segments_count"] <= 0:
+        payload["error"] = "No segments discovered from JSON/MP4 filenames."
+        _set_check(payload["checks"], "Segments discovered", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+    _set_check(payload["checks"], "Segments discovered", "pass")
+    emit()
+
+    # 4) Companion JSON per segment
+    _set_check(payload["checks"], "Companion JSON per segment", "running")
+    emit()
+    if not mp4_segments:
+        payload["error"] = (
+            "MP4 files were found, but none matched the expected naming pattern "
+            "`<SEG>.<CAM>.mp4` (example: `TRBD002_20250709_102609.23512909.mp4`)."
+        )
+        _set_check(
+            payload["checks"], "Companion JSON per segment", "fail", payload["error"]
+        )
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+
+    missing_json: List[str] = []
+    dup_json: List[str] = []
+    for seg in sorted(mp4_segments):
+        cnt = json_stem_counts.get(seg, 0)
+        if cnt == 0:
+            missing_json.append(seg)
+        elif cnt > 1:
+            dup_json.append(seg)
+
+    if missing_json or dup_json:
+        parts: List[str] = []
+        if missing_json:
+            preview = ", ".join(missing_json[:10])
+            extra = len(missing_json) - 10
+            if extra > 0:
+                preview += f" … (+{extra} more)"
+            parts.append(f"Missing JSON for segment(s): {preview}.")
+        if dup_json:
+            preview = ", ".join(dup_json[:10])
+            extra = len(dup_json) - 10
+            if extra > 0:
+                preview += f" … (+{extra} more)"
+            parts.append(f"Duplicate JSON for segment(s): {preview}.")
+        payload["error"] = " ".join(parts).strip()
+        _set_check(
+            payload["checks"], "Companion JSON per segment", "fail", payload["error"]
+        )
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+
+    _set_check(payload["checks"], "Companion JSON per segment", "pass")
+    emit()
+
+    # 5) Cameras discovered
+    _set_check(payload["checks"], "Cameras discovered", "running")
+    emit()
+    if payload["cameras_count"] <= 0:
+        payload["error"] = "No cameras discovered from MP4 filenames."
+        _set_check(payload["checks"], "Cameras discovered", "fail", payload["error"])
+        _finalize_checks_on_fail(payload["checks"])
+        payload["running"] = False
+        emit()
+        return payload
+
+    _set_check(payload["checks"], "Cameras discovered", "pass")
+    payload["ok"] = True
+    payload["running"] = False
+    emit()
+    return payload
 
 
 def main(argv: Optional[List[str]] = None) -> int:

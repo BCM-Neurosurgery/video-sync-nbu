@@ -24,6 +24,7 @@ from scripts.validate.validate_out_dir import validate_out_dir
 from scripts.validate.validate_video_dir import (
     discover_from_video_dir,
     validate_video_dir,
+    validate_video_dir_progress,
 )
 
 
@@ -115,6 +116,16 @@ def create_app() -> FastAPI:
         "Program channel present",
         "Sample rate detected",
         "Duration detected",
+    ]
+
+    video_val_lock = threading.Lock()
+    video_val_state: Dict[int, Dict[str, Any]] = {}
+    video_check_names = [
+        "Segment JSON present",
+        "Camera MP4 present",
+        "Segments discovered",
+        "Companion JSON per segment",
+        "Cameras discovered",
     ]
 
     @app.get("/api/video-index")
@@ -444,6 +455,151 @@ def create_app() -> FastAPI:
                 data["video_result"] = {**result, "ok": False, "error": str(e)}
         _draft_set(draft_id, data)
         return data.get("video_result") or result
+
+    @app.get("/api/drafts/{draft_id}/validate-video/start")
+    def api_validate_video_start(draft_id: int, video_dir: str) -> Dict[str, Any]:
+        """
+        Start async video validation so the UI can show per-check progress.
+        """
+        data = _draft_get(draft_id)
+        video_dir = video_dir.strip()
+        if data.get("video_dir") != video_dir:
+            # Changing video dir invalidates downstream choices.
+            data.pop("segments_all", None)
+            data.pop("cameras_all", None)
+            data.pop("segments", None)
+            data.pop("cameras", None)
+            data.pop("all_segments", None)
+            data.pop("all_cameras", None)
+            data.pop("out_ok", None)
+            data.pop("out_result", None)
+            data.pop("out_error", None)
+        data["video_dir"] = video_dir
+        _draft_set(draft_id, data)
+
+        with video_val_lock:
+            st = video_val_state.get(draft_id)
+            if st and st.get("running") and st.get("video_dir") == video_dir:
+                return st.get("result") or {
+                    "video_dir": video_dir,
+                    "ok": False,
+                    "running": True,
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in video_check_names
+                    ],
+                    "error": None,
+                }
+
+            seq = int(st.get("seq", 0)) + 1 if st else 1
+            video_val_state[draft_id] = {
+                "seq": seq,
+                "video_dir": video_dir,
+                "running": True,
+                "result": {
+                    "video_dir": video_dir,
+                    "ok": False,
+                    "running": True,
+                    "segments_count": 0,
+                    "cameras_count": 0,
+                    "segments_first": None,
+                    "segments_last": None,
+                    "segments_preview": [],
+                    "cameras": [],
+                    "cameras_preview": [],
+                    "json_count": 0,
+                    "mp4_count": 0,
+                    "nested_files": [],
+                    "nested_count": 0,
+                    "checks": [
+                        {"name": n, "status": "pending", "message": ""}
+                        for n in video_check_names
+                    ],
+                    "error": None,
+                },
+            }
+
+        def run_validation(local_seq: int, local_video_dir: str) -> None:
+            def on_progress(payload: Dict[str, Any]) -> None:
+                snap = json.loads(json.dumps(payload))
+                with video_val_lock:
+                    cur = video_val_state.get(draft_id)
+                    if not cur or int(cur.get("seq", 0)) != local_seq:
+                        return
+                    cur["result"] = snap
+                    cur["running"] = bool(snap.get("running", False))
+
+            result = validate_video_dir_progress(
+                local_video_dir, on_progress=on_progress
+            )
+            result["running"] = False
+            on_progress(result)
+
+            with video_val_lock:
+                cur = video_val_state.get(draft_id)
+                if not cur or int(cur.get("seq", 0)) != local_seq:
+                    return
+                cur["running"] = False
+                cur["result"] = json.loads(json.dumps(result))
+
+            # Persist the final result to the draft.
+            data2 = _draft_get(draft_id)
+            if data2.get("video_dir") != local_video_dir:
+                return
+            data2["video_ok"] = bool(result.get("ok"))
+            data2["video_result"] = result
+            data2["video_error"] = result.get("error")
+            if data2["video_ok"]:
+                try:
+                    idx = discover_from_video_dir(Path(local_video_dir).expanduser())
+                    data2["segments_all"] = idx["segments"]
+                    data2["cameras_all"] = idx["cameras"]
+                except Exception as e:
+                    data2["video_ok"] = False
+                    data2["video_error"] = str(e)
+                    data2["video_result"] = {**result, "ok": False, "error": str(e)}
+            _draft_set(draft_id, data2)
+
+        threading.Thread(
+            target=run_validation,
+            args=(seq, video_dir),
+            name=f"webui-video-validate-{draft_id}",
+            daemon=True,
+        ).start()
+
+        with video_val_lock:
+            return video_val_state[draft_id]["result"]
+
+    @app.get("/api/drafts/{draft_id}/validate-video/status")
+    def api_validate_video_status(draft_id: int) -> Dict[str, Any]:
+        with video_val_lock:
+            st = video_val_state.get(draft_id)
+            if st and st.get("result") is not None:
+                return st["result"]
+        data = _draft_get(draft_id)
+        if data.get("video_result"):
+            return data["video_result"]
+        return {
+            "video_dir": data.get("video_dir", ""),
+            "ok": False,
+            "running": False,
+            "segments_count": 0,
+            "cameras_count": 0,
+            "segments_first": None,
+            "segments_last": None,
+            "segments_preview": [],
+            "cameras": [],
+            "cameras_preview": [],
+            "json_count": 0,
+            "mp4_count": 0,
+            "nested_files": [],
+            "nested_count": 0,
+            "checks": [
+                {"name": n, "status": "pending", "message": ""}
+                for n in video_check_names
+            ],
+            "error": None,
+        }
 
     @app.get("/api/drafts/{draft_id}/validate-out")
     def api_validate_out(draft_id: int, out_dir: str) -> Dict[str, Any]:
