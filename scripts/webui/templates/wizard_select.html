@@ -4,6 +4,7 @@
 {% set subtitle = "Step 4/5 — Choose segments and run options" %}
 {% set step = 4 %}
 {% set available_pair_map = available_pair_map | default({}) %}
+{% set missing_json_map = missing_json_map | default({}) %}
 
 {% block wizard %}
   <form class="card form" method="post" action="/wizard/{{ draft_id }}/select">
@@ -61,10 +62,11 @@
                 {% set key = seg ~ '::' ~ cam %}
                 {% set is_synced = synced_pair_map.get(key) %}
                 {% set is_present = available_pair_map.get(key) %}
+                {% set missing_json = missing_json_map.get(seg) %}
                 {% set is_selected = key in (selected_pairs or []) %}
                 <td class="center">
-                  <label class="cell{% if is_synced %} synced{% endif %}{% if not is_present %} missing{% endif %}" title="{% if not is_present %}Video missing for this segment/camera.{% elif is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
-                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} {% if not is_present %}disabled{% endif %} />
+                  <label class="cell{% if is_synced %} synced{% endif %}{% if (not is_present) or missing_json %} missing{% endif %}" title="{% if missing_json %}Companion JSON missing for this segment.{% elif not is_present %}Video missing for this segment/camera.{% elif is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
+                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} {% if (not is_present) or missing_json %}disabled{% endif %} />
                     <span class="cellbox"></span>
                   </label>
                 </td>

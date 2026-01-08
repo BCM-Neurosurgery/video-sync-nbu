@@ -947,9 +947,18 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
         video_dir = str(data.get("video_dir", "")).strip()
         pairs_set: set[tuple[str, str]] = set()
+        missing_json_segs: set[str] = set()
         if video_dir:
             try:
                 pairs_set = discover_video_pairs(Path(video_dir).expanduser())
+                json_stems = {
+                    p.stem
+                    for p in Path(video_dir).expanduser().glob("*.json")
+                    if p.is_file()
+                }
+                segs_all = data.get("segments_all")
+                if isinstance(segs_all, list):
+                    missing_json_segs = {s for s in segs_all if s not in json_stems}
             except Exception:
                 pairs_set = set()
         return templates.TemplateResponse(
@@ -981,6 +990,7 @@ def create_app() -> FastAPI:
                 "available_pair_map": {
                     f"{seg}::{cam}": True for seg, cam in pairs_set if seg and cam
                 },
+                "missing_json_map": {s: True for s in missing_json_segs},
                 "synced_pair_map": {
                     f"{p.get('segment', '')}::{p.get('camera', '')}": True
                     for p in discover_synced_pairs(
