@@ -1,5 +1,5 @@
 {% extends "layout.html" %}
-{% set title = "Runs — video-sync-nbu" %}
+{% set title = "Runs — Audio/Video Synchronization" %}
 {% set nav = "runs" %}
 {% block content %}
   <div class="page-head">
@@ -19,7 +19,6 @@
           <th>Title</th>
           <th>Status</th>
           <th>Created</th>
-          <th>Scheduled</th>
           <th>Exit</th>
           <th></th>
         </tr>
@@ -31,7 +30,6 @@
             <td class="mono">{{ r['title'] }}</td>
             <td><span class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
             <td class="mono">{{ r['created_at'] }}</td>
-            <td class="mono">{{ r['scheduled_at'] or "" }}</td>
             <td class="mono">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
             <td class="right">
               <a class="btn" href="/runs/{{ r['id'] }}/logs" target="_blank">Log</a>

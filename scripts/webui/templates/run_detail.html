@@ -1,5 +1,5 @@
 {% extends "layout.html" %}
-{% set title = "Run #" ~ run['id'] ~ " — video-sync-nbu" %}
+{% set title = "Run #" ~ run['id'] ~ " — Audio/Video Synchronization" %}
 {% set nav = "runs" %}
 {% block content %}
   <div class="page-head">
@@ -21,38 +21,35 @@
         {% endif %}
       </div>
     </div>
-      <div class="kv">
-        <div class="k">State</div>
-        <div class="v"><span id="status-pill" class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
-        {% if run['cancel_requested'] %}
-          <div class="k">Cancel</div>
-          <div class="v"><span class="pill running">Requested</span></div>
-        {% endif %}
-        <div class="k">Created</div>
-        <div class="v mono" id="created_at">{{ run['created_at'] }}</div>
-        <div class="k">Started</div>
-        <div class="v mono" id="started_at">{{ run['started_at'] or "" }}</div>
-        <div class="k">Finished</div>
-        <div class="v mono" id="finished_at">{{ run['finished_at'] or "" }}</div>
-        <div class="k">Exit code</div>
-        <div class="v mono" id="exit_code">{{ run['exit_code'] if run['exit_code'] is not none else "" }}</div>
-        <div class="k">PID</div>
-        <div class="v mono" id="pid">{{ run['pid'] if run['pid'] is not none else "" }}</div>
-      </div>
-      {% if run['error'] %}
-        <div class="alert danger mono">{{ run['error'] }}</div>
+    <div class="kv">
+      <div class="k">State</div>
+      <div class="v"><span id="status-pill" class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+      {% if run['cancel_requested'] %}
+        <div class="k">Cancel</div>
+        <div class="v"><span class="pill running">Requested</span></div>
       {% endif %}
-      <div class="actions right" style="margin-top:12px">
-        <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">View logs</a>
-      </div>
-  </div>
-
-  <div class="card">
-    <div class="loghead">
+      <div class="k">Created</div>
+      <div class="v mono" id="created_at">{{ run['created_at'] }}</div>
+      <div class="k">Started</div>
+      <div class="v mono" id="started_at">{{ run['started_at'] or "" }}</div>
+      <div class="k">Finished</div>
+      <div class="v mono" id="finished_at">{{ run['finished_at'] or "" }}</div>
+      <div class="k">Exit code</div>
+      <div class="v mono" id="exit_code">{{ run['exit_code'] if run['exit_code'] is not none else "" }}</div>
+      <div class="k">PID</div>
+      <div class="v mono" id="pid">{{ run['pid'] if run['pid'] is not none else "" }}</div>
+    </div>
+    {% if run['error'] %}
+      <div class="alert danger mono">{{ run['error'] }}</div>
+    {% endif %}
+    <div class="loghead" style="margin-top:14px">
       <h3>Live logs</h3>
       <div class="muted small">Auto-updates while the run is active.</div>
     </div>
     <pre id="log" class="log mono"></pre>
+    <div class="actions right" style="margin-top:12px">
+      <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">View logs</a>
+    </div>
   </div>
 
   <script>
