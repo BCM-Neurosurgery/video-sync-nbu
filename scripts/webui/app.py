@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import subprocess
 import threading
@@ -80,6 +81,83 @@ def _normalize_target_pairs(raw: Optional[List[str]]) -> List[str]:
         seen.add(key)
         pairs.append(key)
     return pairs
+
+
+def _sort_segment_ids(segment_ids: List[str]) -> List[str]:
+    def key(seg: str) -> tuple:
+        match = re.search(r"(\d{8})_(\d{6})", seg)
+        if match:
+            try:
+                return (0, int(match.group(1)), int(match.group(2)), seg)
+            except ValueError:
+                pass
+        return (1, seg)
+
+    return sorted(segment_ids, key=key)
+
+
+def _segment_range_label(args: Dict[str, Any]) -> str:
+    segs: List[str] = []
+    raw_pairs = args.get("target_pairs")
+    if isinstance(raw_pairs, list) and raw_pairs:
+        seen: set[str] = set()
+        for item in raw_pairs:
+            s = str(item).strip()
+            if not s:
+                continue
+            if "::" in s:
+                seg = s.split("::", 1)[0]
+            elif ":" in s:
+                seg = s.split(":", 1)[0]
+            else:
+                continue
+            seg = seg.strip()
+            if seg and seg not in seen:
+                seen.add(seg)
+                segs.append(seg)
+    else:
+        raw = args.get("segments")
+        if isinstance(raw, list):
+            segs = [str(s).strip() for s in raw if str(s).strip()]
+
+    segs = _sort_segment_ids(segs)
+    if not segs:
+        return "Segments: (all)"
+    if len(segs) == 1:
+        return f"Segment: {segs[0]}"
+    return f"Segments: {segs[0]} → {segs[-1]}"
+
+
+def _segment_range_title(args: Dict[str, Any]) -> str:
+    segs: List[str] = []
+    raw_pairs = args.get("target_pairs")
+    if isinstance(raw_pairs, list) and raw_pairs:
+        seen: set[str] = set()
+        for item in raw_pairs:
+            s = str(item).strip()
+            if not s:
+                continue
+            if "::" in s:
+                seg = s.split("::", 1)[0]
+            elif ":" in s:
+                seg = s.split(":", 1)[0]
+            else:
+                continue
+            seg = seg.strip()
+            if seg and seg not in seen:
+                seen.add(seg)
+                segs.append(seg)
+    else:
+        raw = args.get("segments")
+        if isinstance(raw, list):
+            segs = [str(s).strip() for s in raw if str(s).strip()]
+
+    segs = _sort_segment_ids(segs)
+    if not segs:
+        return "All segments"
+    if len(segs) == 1:
+        return segs[0]
+    return f"{segs[0]} → {segs[-1]}"
 
 
 def _draft_create() -> int:
@@ -273,9 +351,18 @@ def create_app() -> FastAPI:
     def runs(request: Request) -> HTMLResponse:
         conn = get_conn()
         items = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 200").fetchall()
+        runs_view: List[Dict[str, Any]] = []
+        for row in items:
+            d = dict(row)
+            try:
+                args = json.loads(d.get("args_json") or "{}")
+            except Exception:
+                args = {}
+            d["display_title"] = _segment_range_title(args)
+            runs_view.append(d)
         return templates.TemplateResponse(
             "runs.html",
-            {"request": request, "runs": items},
+            {"request": request, "runs": runs_view},
         )
 
     @app.post("/runs/clear")
@@ -1189,9 +1276,18 @@ def create_app() -> FastAPI:
         row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            args = json.loads(row["args_json"])
+        except Exception:
+            args = {}
         return templates.TemplateResponse(
             "run_detail.html",
-            {"request": request, "run": row},
+            {
+                "request": request,
+                "run": row,
+                "args": args,
+                "segment_range_label": _segment_range_label(args),
+            },
         )
 
     # (Summary is shown before starting; see /wizard/{draft_id}/summary.)

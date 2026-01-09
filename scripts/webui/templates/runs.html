@@ -27,7 +27,7 @@
         {% for r in runs %}
           <tr>
             <td><a href="/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
-            <td class="mono">{{ r['title'] }}</td>
+            <td class="mono">{{ r.get('display_title') or r.get('title','') }}</td>
             <td><span class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
             <td class="mono">{{ r['created_at'] }}</td>
             <td class="mono">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>

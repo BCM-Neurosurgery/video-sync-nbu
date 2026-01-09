@@ -5,7 +5,7 @@
   <div class="page-head">
     <div>
       <h1>Run #{{ run['id'] }}</h1>
-      <p class="muted">{{ run['title'] }}</p>
+      <p class="muted">{{ segment_range_label }}</p>
     </div>
     <div class="actions"></div>
   </div>
@@ -23,7 +23,12 @@
     </div>
     <div class="kv">
       <div class="k">State</div>
-      <div class="v"><span id="status-pill" class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+      <div class="v mono" id="status-text">{{ run['status'] }}</div>
+      {% set pairs = args.get('target_pairs') or [] %}
+      {% if pairs|length > 0 %}
+        <div class="k">Targets</div>
+        <div class="v mono mono-lines">{{ pairs | join('\n') }}</div>
+      {% endif %}
       {% if run['cancel_requested'] %}
         <div class="k">Cancel</div>
         <div class="v"><span class="pill running">Requested</span></div>
@@ -42,12 +47,42 @@
     {% if run['error'] %}
       <div class="alert danger mono">{{ run['error'] }}</div>
     {% endif %}
+    <hr class="divider" />
+    <h3 style="margin:0 0 10px 0">Inputs</h3>
+    <div class="kv">
+      <div class="k">Audio dir</div>
+      <div class="v mono">{{ args.get('audio_dir','') }}</div>
+      <div class="k">Video dir</div>
+      <div class="v mono">{{ args.get('video_dir','') }}</div>
+      <div class="k">Output dir</div>
+      <div class="v mono">{{ args.get('out_dir','') }}</div>
+      <div class="k">Site</div>
+      <div class="v mono">{{ args.get('site','') }}</div>
+    </div>
+    <hr class="divider" />
+    <h3 style="margin:0 0 10px 0">Options</h3>
+    <div class="kv">
+      <div class="k">Log level</div>
+      <div class="v mono">{{ args.get('log_level','INFO') }}</div>
+      <div class="k">Reuse audio artifacts</div>
+      <div class="v mono">{{ 'Yes' if args.get('skip_decode') else 'No' }}</div>
+      <div class="k">Split</div>
+      <div class="v mono">{{ 'Yes' if args.get('split') else 'No' }}</div>
+      <div class="k">Split overwrite</div>
+      <div class="v mono">{{ 'Yes' if args.get('split_overwrite') else 'No' }}</div>
+      <div class="k">Split clean</div>
+      <div class="v mono">{{ 'Yes' if args.get('split_clean') else 'No' }}</div>
+      <div class="k">Split chunk sec</div>
+      <div class="v mono">{{ args.get('split_chunk_seconds','') }}</div>
+    </div>
+    <hr class="divider" />
     <div class="loghead" style="margin-top:14px">
       <h3>Live logs</h3>
       <div class="muted small">Auto-updates while the run is active.</div>
     </div>
     <pre id="log" class="log mono"></pre>
     <div class="actions right" style="margin-top:12px">
+      <a class="btn" href="/runs">Back</a>
       <a class="btn" href="/runs/{{ run['id'] }}/logs" target="_blank">View logs</a>
     </div>
   </div>
@@ -55,7 +90,7 @@
   <script>
     const runId = {{ run['id'] }};
     const logEl = document.getElementById("log");
-    const statusEl = document.getElementById("status-pill");
+    const statusEl = document.getElementById("status-text");
     const createdEl = document.getElementById("created_at");
     const startedEl = document.getElementById("started_at");
     const finishedEl = document.getElementById("finished_at");
@@ -70,8 +105,7 @@
       try{
         const res = await fetch(`/api/runs/${runId}`);
         const data = await res.json();
-        statusEl.textContent = data.status;
-        statusEl.className = `pill ${data.status}`;
+        if(statusEl){ statusEl.textContent = data.status || ""; }
         if(createdEl){ createdEl.textContent = data.created_at || ""; }
         if(startedEl){ startedEl.textContent = data.started_at || ""; }
         if(finishedEl){ finishedEl.textContent = data.finished_at || ""; }
