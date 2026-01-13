@@ -214,6 +214,7 @@
           if(status === "pass"){ pill = `<span class="pill succeeded">Pass</span>`; }
           if(status === "fail"){ pill = `<span class="pill failed">Fail</span>`; }
           if(status === "running"){ pill = `<span class="pill running">Running</span>`; }
+          if(status === "warn"){ pill = `<span class="pill failed">Warn</span>`; }
           if(status === "pending"){ pill = `<span class="pill">Pending</span>`; }
           if(status === "skipped"){ pill = `<span class="pill">Skipped</span>`; }
           html += `<tr><td><span class="label-row">${name}<span class="help" data-tip="${tip}"></span></span></td><td class="right statuscol">${pill}</td></tr>`;
