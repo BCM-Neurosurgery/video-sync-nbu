@@ -80,6 +80,8 @@
                         <span class="pill succeeded">Pass</span>
                       {% elif c.status == "fail" %}
                         <span class="pill failed">Fail</span>
+                      {% elif c.status == "warn" %}
+                        <span class="pill failed">Warn</span>
                       {% elif c.status == "running" %}
                         <span class="pill running">Running</span>
                       {% elif c.status == "skipped" %}
