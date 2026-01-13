@@ -60,6 +60,8 @@ def build_cli_cmd(args: Dict[str, object]) -> List[str]:
 
     if args.get("skip_decode"):
         cmd.append("--skip-decode")
+    if args.get("overwrite_clips"):
+        cmd.append("--overwrite-clips")
     if args.get("split"):
         cmd.append("--split")
     if args.get("split_overwrite"):

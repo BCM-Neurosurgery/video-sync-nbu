@@ -51,6 +51,7 @@ def _default_args() -> Dict[str, Any]:
         "target_pairs": [],
         "log_level": "INFO",
         "skip_decode": False,
+        "overwrite_clips": False,
         "split": False,
         "split_overwrite": False,
         "split_clean": False,
@@ -1144,6 +1145,21 @@ def create_app() -> FastAPI:
         )
         reuse_enabled = reuse_audio is not None and can_reuse
         data["skip_decode"] = reuse_enabled
+        overwrite_clips = False
+        out_dir = str(data.get("out_dir", "")).strip()
+        if out_dir and picked_pairs:
+            segs = sorted({p.split("::", 1)[0] for p in picked_pairs if "::" in p})
+            cams = sorted({p.split("::", 1)[1] for p in picked_pairs if "::" in p})
+            synced_pairs = discover_synced_pairs(
+                out_dir, segments=segs or None, cameras=cams or None
+            ).get("synced_pairs", [])
+            synced_set = {
+                f"{p.get('segment','')}::{p.get('camera','')}"
+                for p in synced_pairs
+                if p.get("segment") and p.get("camera")
+            }
+            overwrite_clips = any(pair in synced_set for pair in picked_pairs)
+        data["overwrite_clips"] = overwrite_clips
         data["split"] = not reuse_enabled
         data["split_overwrite"] = not reuse_enabled
         data["split_clean"] = False
@@ -1184,6 +1200,7 @@ def create_app() -> FastAPI:
             "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
+            "overwrite_clips": bool(data.get("overwrite_clips", False)),
             "split": bool(data.get("split", False)),
             "split_overwrite": bool(data.get("split_overwrite", False)),
             "split_clean": bool(data.get("split_clean", False)),
@@ -1226,6 +1243,7 @@ def create_app() -> FastAPI:
             "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
+            "overwrite_clips": bool(data.get("overwrite_clips", False)),
             "split": bool(data.get("split", False)),
             "split_overwrite": bool(data.get("split_overwrite", False)),
             "split_clean": bool(data.get("split_clean", False)),
