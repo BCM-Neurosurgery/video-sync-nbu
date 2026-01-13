@@ -28,16 +28,14 @@
           <tr>
             <td><a href="/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
             <td class="mono">{{ r.get('display_title') or r.get('title','') }}</td>
-            <td><span class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
+            <td><span id="status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
             <td class="mono">{{ r['created_at'] }}</td>
-            <td class="mono">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
+            <td class="mono" id="exit-{{ r['id'] }}">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
             <td class="right">
               <a class="btn" href="/runs/{{ r['id'] }}/logs" target="_blank">Log</a>
-              {% if r['status'] != 'running' %}
-                <form class="inline" method="post" action="/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this run from history (also deletes its log file)?')">
-                  <button class="btn danger" type="submit">Remove</button>
-                </form>
-              {% endif %}
+              <form id="remove-{{ r['id'] }}" class="inline{% if r['status'] == 'running' %} hidden{% endif %}" method="post" action="/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this run from history (also deletes its log file)?')">
+                <button class="btn danger" type="submit">Remove</button>
+              </form>
             </td>
           </tr>
         {% endfor %}
@@ -47,4 +45,36 @@
       </tbody>
     </table>
   </div>
+
+  <script>
+    async function refreshStatuses(){
+      try{
+        const res = await fetch("/api/runs");
+        const rows = await res.json();
+        if(!Array.isArray(rows)){ return; }
+        rows.forEach((r) => {
+          const statusEl = document.getElementById(`status-${r.id}`);
+          if(statusEl){
+            const status = r.status || "";
+            statusEl.textContent = status;
+            statusEl.className = `pill ${status}`;
+          }
+          const exitEl = document.getElementById(`exit-${r.id}`);
+          if(exitEl){
+            exitEl.textContent = (r.exit_code === null || r.exit_code === undefined) ? "" : String(r.exit_code);
+          }
+          const removeEl = document.getElementById(`remove-${r.id}`);
+          if(removeEl){
+            if(r.status === "running"){
+              removeEl.classList.add("hidden");
+            }else{
+              removeEl.classList.remove("hidden");
+            }
+          }
+        });
+      }catch(e){}
+    }
+    refreshStatuses();
+    setInterval(refreshStatuses, 3000);
+  </script>
 {% endblock %}

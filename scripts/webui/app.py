@@ -157,7 +157,12 @@ def _segment_range_title(args: Dict[str, Any]) -> str:
         return "All segments"
     if len(segs) == 1:
         return segs[0]
-    return f"{segs[0]} → {segs[-1]}"
+    first = segs[0]
+    last = segs[-1]
+    prefix = first.rsplit("_", 1)[0] if "_" in first else ""
+    if prefix and last.startswith(prefix + "_"):
+        last = last[len(prefix) + 1 :]
+    return f"{first} → {last}"
 
 
 def _draft_create() -> int:
@@ -364,6 +369,14 @@ def create_app() -> FastAPI:
             "runs.html",
             {"request": request, "runs": runs_view},
         )
+
+    @app.get("/api/runs")
+    def api_runs() -> List[Dict[str, Any]]:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT id, status, exit_code FROM runs ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     @app.post("/runs/clear")
     def runs_clear() -> RedirectResponse:
