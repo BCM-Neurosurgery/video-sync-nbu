@@ -195,6 +195,8 @@ def validate_out_dir_progress(
         "synced_segments_count": 0,
         "synced_segments_preview": [],
         "total_segments": None,
+        "synced_pairs": [],
+        "synced_pairs_count": 0,
         "checks": _init_checks(),
         "error": None,
         "checked_at": _now_iso(),
@@ -278,6 +280,11 @@ def validate_out_dir_progress(
 
     sync_stats = _count_synced_segments(p, segments)
     payload.update(sync_stats)
+    synced_pairs = discover_synced_pairs(str(p), segments=segments)
+    payload["synced_pairs"] = synced_pairs.get("synced_pairs", [])
+    payload["synced_pairs_count"] = synced_pairs.get(
+        "synced_pairs_count", len(payload["synced_pairs"])
+    )
 
     payload["ok"] = True
     payload["running"] = False

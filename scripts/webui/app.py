@@ -23,7 +23,6 @@ from scripts.validate.validate_audio_dir import validate_audio_dir
 from scripts.validate.validate_audio_dir import validate_audio_dir_progress
 from scripts.validate.validate_out_dir import discover_synced_pairs, validate_out_dir
 from scripts.validate.validate_video_dir import (
-    discover_video_pairs,
     discover_from_video_dir,
     validate_video_dir,
     validate_video_dir_progress,
@@ -1046,22 +1045,42 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
         if not bool(data.get("out_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
-        video_dir = str(data.get("video_dir", "")).strip()
-        pairs_set: set[tuple[str, str]] = set()
-        missing_json_segs: set[str] = set()
-        if video_dir:
-            try:
-                pairs_set = discover_video_pairs(Path(video_dir).expanduser())
-                json_stems = {
-                    p.stem
-                    for p in Path(video_dir).expanduser().glob("*.json")
-                    if p.is_file()
-                }
-                segs_all = data.get("segments_all")
-                if isinstance(segs_all, list):
-                    missing_json_segs = {s for s in segs_all if s not in json_stems}
-            except Exception:
-                pairs_set = set()
+        video_result = data.get("video_result") or {}
+        out_result = data.get("out_result") or {}
+        available_pair_map: Dict[str, bool] = {}
+        missing_json_map: Dict[str, bool] = {}
+        synced_pair_map: Dict[str, bool] = {}
+        available_pairs = video_result.get("available_pairs")
+        if isinstance(available_pairs, list):
+            for item in available_pairs:
+                if isinstance(item, dict):
+                    seg = item.get("segment")
+                    cam = item.get("camera")
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    seg = item[0]
+                    cam = item[1]
+                else:
+                    continue
+                if seg and cam:
+                    available_pair_map[f"{seg}::{cam}"] = True
+        missing_json_segments = video_result.get("missing_json_segments")
+        if isinstance(missing_json_segments, list):
+            for seg in missing_json_segments:
+                if seg:
+                    missing_json_map[str(seg)] = True
+        synced_pairs = out_result.get("synced_pairs")
+        if isinstance(synced_pairs, list):
+            for item in synced_pairs:
+                if isinstance(item, dict):
+                    seg = item.get("segment")
+                    cam = item.get("camera")
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    seg = item[0]
+                    cam = item[1]
+                else:
+                    continue
+                if seg and cam:
+                    synced_pair_map[f"{seg}::{cam}"] = True
         return templates.TemplateResponse(
             "wizard_select.html",
             {
@@ -1084,31 +1103,11 @@ def create_app() -> FastAPI:
                 "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
                 "run_error": data.get("run_error"),
                 "reuse_audio_available": bool(
-                    (data.get("out_result") or {})
-                    .get("audio_decoded", {})
-                    .get("filtered_csv")
+                    out_result.get("audio_decoded", {}).get("filtered_csv")
                 ),
-                "available_pair_map": {
-                    f"{seg}::{cam}": True for seg, cam in pairs_set if seg and cam
-                },
-                "missing_json_map": {s: True for s in missing_json_segs},
-                "synced_pair_map": {
-                    f"{p.get('segment', '')}::{p.get('camera', '')}": True
-                    for p in discover_synced_pairs(
-                        data.get("out_dir", ""),
-                        segments=(
-                            data.get("segments_all")
-                            if isinstance(data.get("segments_all"), list)
-                            else None
-                        ),
-                        cameras=(
-                            data.get("cameras_all")
-                            if isinstance(data.get("cameras_all"), list)
-                            else None
-                        ),
-                    ).get("synced_pairs", [])
-                    if p.get("segment") and p.get("camera")
-                },
+                "available_pair_map": available_pair_map,
+                "missing_json_map": missing_json_map,
+                "synced_pair_map": synced_pair_map,
                 "error": data.get("select_error"),
             },
         )

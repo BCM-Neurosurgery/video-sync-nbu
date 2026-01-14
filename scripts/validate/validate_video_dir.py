@@ -141,6 +141,9 @@ def validate_video_dir_progress(
         "segments_preview": [],
         "cameras": [],
         "cameras_preview": [],
+        "available_pairs": [],
+        "missing_json_segments": [],
+        "duplicate_json_segments": [],
         "json_count": 0,
         "mp4_count": 0,
         "nested_files": [],
@@ -184,6 +187,7 @@ def validate_video_dir_progress(
     json_stem_counts: Dict[str, int] = {}
     mp4_re = re.compile(r"^(?P<seg>.+)\.(?P<cam>[0-9A-Za-z]+)\.mp4$", re.IGNORECASE)
     mp4_segments: set[str] = set()
+    mp4_pairs: set[tuple[str, str]] = set()
     for c in p.iterdir():
         if not c.is_file():
             continue
@@ -192,12 +196,18 @@ def validate_video_dir_progress(
             mp4_count += 1
             m = mp4_re.match(c.name)
             if m:
-                mp4_segments.add(m.group("seg"))
+                seg = m.group("seg")
+                cam = m.group("cam")
+                mp4_segments.add(seg)
+                mp4_pairs.add((seg, cam))
         elif suf == ".json":
             json_count += 1
             json_stem_counts[c.stem] = json_stem_counts.get(c.stem, 0) + 1
     payload["mp4_count"] = mp4_count
     payload["json_count"] = json_count
+    payload["available_pairs"] = [
+        {"segment": s, "camera": c} for s, c in sorted(mp4_pairs)
+    ]
     emit()
 
     # Helpful hint: users often select a parent folder; surface MP4/JSON in subfolders.
@@ -316,6 +326,8 @@ def validate_video_dir_progress(
         elif cnt > 1:
             dup_json.append(seg)
 
+    payload["missing_json_segments"] = missing_json
+    payload["duplicate_json_segments"] = dup_json
     if missing_json or dup_json:
         parts: List[str] = []
         if missing_json:
