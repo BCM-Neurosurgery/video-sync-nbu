@@ -31,7 +31,7 @@
           {% set preview = preview + ['... (+' ~ (pairs|length - preview|length) ~ ' more)'] %}
         {% endif %}
         <div class="k">Targets</div>
-        <div class="v mono mono-lines targets-box">{{ preview | join('\n') }}</div>
+        <div class="v mono mono-lines">{{ preview | join('\n') }}</div>
       {% endif %}
       {% if run['cancel_requested'] %}
         <div class="k">Cancel</div>
