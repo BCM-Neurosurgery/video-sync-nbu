@@ -24,15 +24,6 @@
     <div class="kv">
       <div class="k">State</div>
       <div class="v mono" id="status-text">{{ run['status'] }}</div>
-      {% set pairs = args.get('target_pairs') or [] %}
-      {% if pairs|length > 0 %}
-        {% set preview = pairs[:200] %}
-        {% if pairs|length > preview|length %}
-          {% set preview = preview + ['... (+' ~ (pairs|length - preview|length) ~ ' more)'] %}
-        {% endif %}
-        <div class="k">Targets</div>
-        <div class="v mono mono-lines">{{ preview | join('\n') }}</div>
-      {% endif %}
       {% if run['cancel_requested'] %}
         <div class="k">Cancel</div>
         <div class="v"><span class="pill running">Requested</span></div>
