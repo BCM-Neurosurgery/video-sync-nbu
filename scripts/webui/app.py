@@ -1057,18 +1057,8 @@ def create_app() -> FastAPI:
                 "site": data.get("site", "nbu_lounge"),
                 "segments": data.get("segments_all", []),
                 "cameras": data.get("cameras_all", []),
-                "selected_segments": data.get("segments", []),
-                "selected_cameras": data.get("cameras", []),
                 "selected_pairs": data.get("target_pairs", []),
-                "all_segments": bool(data.get("all_segments", True)),
-                "all_cameras": bool(data.get("all_cameras", True)),
-                "title_value": data.get("title", ""),
-                "log_level": data.get("log_level", "INFO"),
                 "skip_decode": bool(data.get("skip_decode", False)),
-                "split": bool(data.get("split", False)),
-                "split_overwrite": bool(data.get("split_overwrite", False)),
-                "split_clean": bool(data.get("split_clean", False)),
-                "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
                 "run_error": data.get("run_error"),
                 "reuse_audio_available": bool(
                     out_result.get("audio_decoded", {}).get("filtered_csv")
