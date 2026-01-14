@@ -96,38 +96,6 @@ def _sort_segment_ids(segment_ids: List[str]) -> List[str]:
     return sorted(segment_ids, key=key)
 
 
-def _segment_range_label(args: Dict[str, Any]) -> str:
-    segs: List[str] = []
-    raw_pairs = args.get("target_pairs")
-    if isinstance(raw_pairs, list) and raw_pairs:
-        seen: set[str] = set()
-        for item in raw_pairs:
-            s = str(item).strip()
-            if not s:
-                continue
-            if "::" in s:
-                seg = s.split("::", 1)[0]
-            elif ":" in s:
-                seg = s.split(":", 1)[0]
-            else:
-                continue
-            seg = seg.strip()
-            if seg and seg not in seen:
-                seen.add(seg)
-                segs.append(seg)
-    else:
-        raw = args.get("segments")
-        if isinstance(raw, list):
-            segs = [str(s).strip() for s in raw if str(s).strip()]
-
-    segs = _sort_segment_ids(segs)
-    if not segs:
-        return "Segments: (all)"
-    if len(segs) == 1:
-        return f"Segment: {segs[0]}"
-    return f"Segments: {segs[0]} → {segs[-1]}"
-
-
 def _segment_range_title(args: Dict[str, Any]) -> str:
     segs: List[str] = []
     raw_pairs = args.get("target_pairs")
@@ -1316,7 +1284,6 @@ def create_app() -> FastAPI:
                 "request": request,
                 "run": row,
                 "args": args,
-                "segment_range_label": _segment_range_label(args),
             },
         )
 
