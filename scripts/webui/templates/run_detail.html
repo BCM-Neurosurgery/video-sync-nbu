@@ -103,9 +103,25 @@
     const exitEl = document.getElementById("exit_code");
     const pidEl = document.getElementById("pid");
     const es = new EventSource(`/runs/${runId}/logs/stream`);
-    es.onmessage = (ev) => {
-      if (ev.data !== "") logEl.textContent += ev.data + "\n";
+    const maxLogChars = 200000;
+    const pending = [];
+    let flushTimer = null;
+    function flushLogs(){
+      if(!pending.length){ return; }
+      logEl.textContent += pending.join("\n") + "\n";
+      pending.length = 0;
+      if(logEl.textContent.length > maxLogChars){
+        logEl.textContent = logEl.textContent.slice(-maxLogChars);
+      }
       logEl.scrollTop = logEl.scrollHeight;
+      flushTimer = null;
+    }
+    es.onmessage = (ev) => {
+      if (ev.data === ""){ return; }
+      pending.push(ev.data);
+      if(!flushTimer){
+        flushTimer = setTimeout(flushLogs, 120);
+      }
     };
     async function refreshStatus(){
       try{

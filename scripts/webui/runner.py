@@ -324,10 +324,15 @@ class Runner:
             pass
 
 
-async def tail_log_sse(path: Path, *, poll_interval: float = 0.25) -> Iterable[str]:
+async def tail_log_sse(
+    path: Path, *, poll_interval: float = 0.25, max_bytes: int = 1024 * 512
+) -> Iterable[str]:
     path = Path(path)
     pos = 0
     last_emit = time.time()
+    initialized = False
+    drop_first_line = False
+    notice_line: str | None = None
 
     while True:
         if not path.exists():
@@ -336,6 +341,18 @@ async def tail_log_sse(path: Path, *, poll_interval: float = 0.25) -> Iterable[s
             continue
 
         try:
+            if not initialized:
+                try:
+                    size = path.stat().st_size
+                    if size > max_bytes:
+                        pos = max(0, size - max_bytes)
+                        drop_first_line = pos > 0
+                        notice_line = (
+                            f"... showing last {int(max_bytes / 1024)} KB of log ..."
+                        )
+                except Exception:
+                    pass
+                initialized = True
             with path.open("rb") as f:
                 f.seek(pos)
                 chunk = f.read()
@@ -344,7 +361,14 @@ async def tail_log_sse(path: Path, *, poll_interval: float = 0.25) -> Iterable[s
                     text = chunk.decode("utf-8", errors="replace")
                     # SSE data lines must not contain bare CR; normalize.
                     text = text.replace("\r\n", "\n").replace("\r", "\n")
-                    for line in text.splitlines():
+                    lines = text.splitlines()
+                    if drop_first_line and lines:
+                        lines = lines[1:]
+                        drop_first_line = False
+                    if notice_line:
+                        yield f"data: {notice_line}\n\n"
+                        notice_line = None
+                    for line in lines:
                         # One SSE message per log line.
                         yield f"data: {line}\n\n"
                     last_emit = time.time()
