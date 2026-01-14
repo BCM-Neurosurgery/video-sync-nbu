@@ -1,0 +1,341 @@
+{% extends "wizard_layout.html" %}
+{% set nav = "new" %}
+{% set title = "New run" %}
+{% set subtitle = "Step 3/6 — Select output folder" %}
+{% set step = 3 %}
+
+{% block wizard %}
+  <form class="form" method="post" action="/wizard/{{ draft_id }}/output">
+    <div class="card stack">
+      <div class="card subcard">
+        <label>
+          <span class="label-row">
+            <h3 style="margin:0">Output dir</h3>
+            <span class="help" data-tip="Folder where outputs and logs will be written. Use a new folder per study/session if possible."></span>
+            <span id="out_status" class="pill" style="margin-left:6px">Not checked</span>
+          </span>
+          <div class="input-row">
+            <input id="out_dir" name="out_dir" required value="{{ out_dir or '' }}" placeholder="/path/to/out" />
+            <button class="btn" type="button" onclick="browseDir('out_dir')">Browse</button>
+          </div>
+        </label>
+
+        <div id="out_hint" class="hint" style="margin-top:6px"></div>
+
+        <div class="actions" style="margin-top:12px; justify-content:space-between">
+          <div class="actions">
+            <a class="btn" href="/wizard/{{ draft_id }}/video">Back</a>
+            <a class="btn" href="/runs">Cancel</a>
+          </div>
+          <div class="actions">
+            <button id="btn_recheck" class="btn" type="button" onclick="validateOut(true)">Re-check</button>
+            <button
+              id="btn_continue"
+              class="btn primary"
+              type="button"
+              onclick="location.href='/wizard/{{ draft_id }}/select'"
+              disabled
+              title="Continue is available after the output check passes"
+            >Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="out_result_wrap" class="stack">
+      {% if out_result %}
+        {% set check_tips = {
+          "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
+        } %}
+
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Checks</h3>
+            <div class="muted small">Checked at <span class="mono">{{ out_result.checked_at }}</span></div>
+          </div>
+
+          {% if out_result.checks %}
+            <table class="table checks-table">
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th class="right statuscol">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in out_result.checks %}
+                  <tr>
+                    <td>
+                      <span class="label-row">
+                        {{ c.name }}
+                        <span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the output folder.') }}"></span>
+                      </span>
+                    </td>
+                    <td class="right statuscol">
+                      {% if c.status == "pass" %}
+                        <span class="pill succeeded">Pass</span>
+                      {% elif c.status == "fail" %}
+                        <span class="pill failed">Fail</span>
+                      {% elif c.status == "warn" %}
+                        <span class="pill running">Warn</span>
+                      {% elif c.status == "running" %}
+                        <span class="pill running">Running</span>
+                      {% elif c.status == "skipped" %}
+                        <span class="pill">Skipped</span>
+                      {% elif c.status == "pending" %}
+                        <span class="pill">Pending</span>
+                      {% else %}
+                        <span class="pill">{{ c.status }}</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="muted">No checks run yet.</div>
+          {% endif %}
+        </div>
+
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Summary</h3>
+          </div>
+
+          {% set summary_error = (out_result.error or error) %}
+          {% if (not out_result.ok) and summary_error %}
+            <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+          {% elif out_result.ok %}
+            <div class="kv">
+              <div class="k">Directory</div>
+              <div class="v mono">{% if out_result.will_create %}Will create{% elif out_result.exists %}Exists{% else %}—{% endif %}</div>
+
+              <div class="k">Empty</div>
+              <div class="v mono">{% if out_result.empty is none %}—{% elif out_result.empty %}Yes{% else %}No{% endif %}</div>
+
+              <div class="k">Reuse audio artifacts</div>
+              <div class="v mono">{% if out_result.can_reuse_audio_decoded %}Yes{% else %}No{% endif %}</div>
+
+              <div class="k">Synced segments</div>
+              <div class="v mono">{{ out_result.synced_segments_count }}{% if out_result.total_segments is not none %} / {{ out_result.total_segments }}{% endif %}</div>
+
+              <div class="k">Already synced (preview)</div>
+              <div class="v mono mono-lines">{{ out_result.synced_segments_preview|join('\n') if out_result.synced_segments_preview else "—" }}</div>
+            </div>
+          {% else %}
+            <div class="muted">Summary will appear after checks pass.</div>
+          {% endif %}
+        </div>
+      {% elif error %}
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Summary</h3>
+          </div>
+          <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
+        </div>
+      {% endif %}
+      </div>
+    </div>
+  </form>
+
+  <script>
+    const draftId = {{ draft_id }};
+    const outInput = document.getElementById("out_dir");
+    const statusPill = document.getElementById("out_status");
+    const hintEl = document.getElementById("out_hint");
+    const resultWrap = document.getElementById("out_result_wrap");
+    const continueBtn = document.getElementById("btn_continue");
+    const recheckBtn = document.getElementById("btn_recheck");
+
+    function esc(s){
+      return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      }[c]));
+    }
+
+    function setStatus(kind, text){
+      statusPill.className = "pill";
+      if(kind === "checking"){ statusPill.classList.add("running"); }
+      if(kind === "ok"){ statusPill.classList.add("succeeded"); }
+      if(kind === "fail"){ statusPill.classList.add("failed"); }
+      statusPill.textContent = text;
+    }
+
+    function setContinue(enabled){
+      continueBtn.disabled = !enabled;
+      continueBtn.title = enabled ? "" : "Continue is available after the output check passes";
+    }
+
+    function renderResult(data){
+      if(!data){ return; }
+
+      const checkTips = {
+        "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
+      };
+
+      const ok = !!data.ok;
+      const checkedAt = data.checked_at ? esc(data.checked_at) : "";
+      const err = data.error ? esc(data.error) : "";
+      const exists = !!data.exists;
+      const willCreate = !!data.will_create;
+      const empty = (data.empty === true) ? "Yes" : (data.empty === false ? "No" : "—");
+      const canReuse = !!data.can_reuse_audio_decoded;
+      const synced = Number(data.synced_segments_count || 0);
+      const total = (data.total_segments === null || data.total_segments === undefined) ? null : Number(data.total_segments);
+      const syncedPrev = Array.isArray(data.synced_segments_preview) ? data.synced_segments_preview : [];
+      const checks = Array.isArray(data.checks) ? data.checks : [];
+
+      let html = "";
+
+      // Checks card
+      html += `<div class="card subcard">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Checks</h3>`;
+      html += `<div class="muted small">Checked at <span class="mono">${checkedAt}</span></div>`;
+      html += `</div>`;
+      if(checks.length){
+        html += `<table class="table checks-table"><thead><tr><th>Check</th><th class="right statuscol">Status</th></tr></thead><tbody>`;
+        for(const c of checks){
+          const name = esc(c.name);
+          const status = String(c.status ?? "");
+          const tip = esc(checkTips[String(c.name ?? "")] || "What this check validates in the output folder.");
+          let pill = `<span class="pill">${esc(status)}</span>`;
+          if(status === "pass"){ pill = `<span class="pill succeeded">Pass</span>`; }
+          if(status === "fail"){ pill = `<span class="pill failed">Fail</span>`; }
+          if(status === "warn"){ pill = `<span class="pill running">Warn</span>`; }
+          if(status === "running"){ pill = `<span class="pill running">Running</span>`; }
+          if(status === "pending"){ pill = `<span class="pill">Pending</span>`; }
+          if(status === "skipped"){ pill = `<span class="pill">Skipped</span>`; }
+          html += `<tr><td><span class="label-row">${name}<span class="help" data-tip="${tip}"></span></span></td><td class="right statuscol">${pill}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }else{
+        html += `<div class="muted">No checks run yet.</div>`;
+      }
+      html += `</div>`;
+
+      // Summary card
+      html += `<div class="card subcard">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Summary</h3>`;
+      html += `</div>`;
+
+      if(!ok && err){
+        html += `<div class="danger-text mono" style="margin-top:0">${err}</div>`;
+      }else if(ok){
+        const dirLabel = willCreate ? "Will create" : (exists ? "Exists" : "—");
+        const syncedLabel = total !== null ? `${synced} / ${total}` : `${synced}`;
+        html += `<div class="kv">`;
+        html += `<div class="k">Directory</div><div class="v mono">${esc(dirLabel)}</div>`;
+        html += `<div class="k">Empty</div><div class="v mono">${esc(empty)}</div>`;
+        html += `<div class="k">Reuse audio artifacts</div><div class="v mono">${canReuse ? "Yes" : "No"}</div>`;
+        html += `<div class="k">Synced segments</div><div class="v mono">${esc(syncedLabel)}</div>`;
+        html += `<div class="k">Already synced (preview)</div><div class="v mono mono-lines">${syncedPrev.length ? syncedPrev.map(esc).join("\n") : "—"}</div>`;
+        html += `</div>`;
+      }else{
+        html += `<div class="muted">Summary will appear after checks pass.</div>`;
+      }
+      html += `</div>`;
+
+      resultWrap.innerHTML = html;
+      hintEl.textContent = "";
+    }
+
+    let validateTimer = null;
+    let pollTimer = null;
+    async function validateOut(force){
+      const dir = (outInput.value || "").trim();
+      if(!dir){
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        hintEl.textContent = "";
+        return;
+      }
+
+      if(recheckBtn) recheckBtn.disabled = true;
+      setStatus("checking", "Checking…");
+      setContinue(false);
+      try{
+        const res = await fetch(`/api/drafts/${draftId}/validate-out/start?out_dir=${encodeURIComponent(dir)}`);
+        const data = await res.json();
+        renderResult(data);
+
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        pollTimer = setInterval(async () => {
+          try{
+            const r = await fetch(`/api/drafts/${draftId}/validate-out/status`);
+            const d = await r.json();
+            renderResult(d);
+            if(d && d.running){
+              setStatus("checking", "Checking…");
+              setContinue(false);
+              if(recheckBtn) recheckBtn.disabled = true;
+            }else if(d && d.ok){
+              setStatus("ok", "Passed");
+              setContinue(true);
+              if(recheckBtn) recheckBtn.disabled = false;
+              if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+            }else{
+              setStatus("fail", "Failed");
+              setContinue(false);
+              if(recheckBtn) recheckBtn.disabled = false;
+              if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+            }
+          }catch(e){
+            // ignore transient polling errors
+          }
+        }, 350);
+      }catch(e){
+        setStatus("fail", "Failed");
+        setContinue(false);
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        resultWrap.innerHTML = `<div class="card subcard"><div class="actions" style="justify-content:space-between; margin-bottom:10px"><h3 style="margin:0">Summary</h3></div><div class="danger-text mono" style="margin-top:0">Failed to validate output folder.</div></div>`;
+      }finally{
+        if(recheckBtn && !pollTimer) recheckBtn.disabled = false;
+      }
+    }
+
+    function scheduleValidate(){
+      if(validateTimer) clearTimeout(validateTimer);
+      validateTimer = setTimeout(() => validateOut(false), 450);
+    }
+    outInput.addEventListener("input", scheduleValidate);
+
+    async function browseDir(inputId){
+      const input = document.getElementById(inputId);
+      const initial = input?.value || "";
+      const btn = document.activeElement;
+      const prevText = (btn && btn.tagName === "BUTTON") ? btn.textContent : null;
+      try{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = true; btn.textContent = "Opening…"; }
+        const res = await fetch(`/api/pick-dir?initial=${encodeURIComponent(initial)}`);
+        const data = await res.json();
+        if(data && data.path){
+          input.value = data.path;
+          input.dispatchEvent(new Event("input"));
+        }else if(data && data.error){
+          alert(data.error);
+        }
+      }catch(e){
+        alert("Directory picker is not available in this environment.");
+      }finally{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = false; if(prevText!==null) btn.textContent = prevText; }
+      }
+    }
+
+    (function init(){
+      const ok = {{ "true" if out_ok else "false" }};
+      if(ok){
+        setStatus("ok", "Passed");
+        setContinue(true);
+      }else if((outInput.value || "").trim()){
+        scheduleValidate();
+      }else{
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+      }
+    })();
+  </script>
+{% endblock %}

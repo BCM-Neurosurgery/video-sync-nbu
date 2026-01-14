@@ -1,0 +1,355 @@
+{% extends "wizard_layout.html" %}
+{% set nav = "new" %}
+{% set title = "New run" %}
+{% set subtitle = "Step 2/6 — Select video folder" %}
+{% set step = 2 %}
+
+{% block wizard %}
+  <form class="form" method="post" action="/wizard/{{ draft_id }}/video">
+    <div class="card stack">
+      <div class="card subcard">
+        <label>
+          <span class="label-row">
+            <h3 style="margin:0">Video dir</h3>
+            <span class="help" data-tip="Folder containing the segment JSON and camera MP4 files (e.g., <SEG>.json and <SEG>.<CAM>.mp4)."></span>
+            <span id="video_status" class="pill" style="margin-left:6px">Not checked</span>
+          </span>
+          <div class="input-row">
+            <input id="video_dir" name="video_dir" required value="{{ video_dir or '' }}" placeholder="/path/to/video" />
+            <button class="btn" type="button" onclick="browseDir('video_dir')">Browse</button>
+          </div>
+        </label>
+
+        <div id="video_hint" class="hint" style="margin-top:6px"></div>
+
+        <div class="actions" style="margin-top:12px; justify-content:space-between">
+          <div class="actions">
+            <a class="btn" href="/wizard/{{ draft_id }}/audio">Back</a>
+            <a class="btn" href="/runs">Cancel</a>
+          </div>
+          <div class="actions">
+            <button id="btn_recheck" class="btn" type="button" onclick="validateVideo(true)">Re-check</button>
+            <button
+              id="btn_continue"
+              class="btn primary"
+              type="button"
+              onclick="location.href='/wizard/{{ draft_id }}/output'"
+              disabled
+              title="Continue is available after the video check passes"
+            >Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="video_result_wrap" class="stack">
+      {% if video_result %}
+	        {% set check_tips = {
+	          "Segment JSON present": "Checks there are segment JSON files (<SEG>.json) in the selected folder.",
+	          "Camera MP4 present": "Checks there are camera MP4 files named <SEG>.<CAM>.mp4 in the selected folder.",
+	          "Segments discovered": "Parses filenames to discover unique segment IDs.",
+	          "Companion JSON per segment": "For each segment discovered from MP4 filenames, checks there is exactly one matching <SEG>.json file.",
+	          "Cameras discovered": "Parses filenames to discover unique camera IDs.",
+	          "Discovery": "Scans the folder for expected files and naming patterns.",
+	        } %}
+
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Checks</h3>
+            <div class="muted small">Checked at <span class="mono">{{ video_result.checked_at }}</span></div>
+          </div>
+
+          {% if video_result.checks %}
+            <table class="table checks-table">
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th class="right statuscol">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in video_result.checks %}
+                  <tr>
+                    <td>
+                      <span class="label-row">
+                        {{ c.name }}
+                        <span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the video folder.') }}"></span>
+                      </span>
+                    </td>
+                    <td class="right statuscol">
+                      {% if c.status == "pass" %}
+                        <span class="pill succeeded">Pass</span>
+                      {% elif c.status == "fail" %}
+                        <span class="pill failed">Fail</span>
+                      {% elif c.status == "warn" %}
+                        <span class="pill failed">Warn</span>
+                      {% elif c.status == "running" %}
+                        <span class="pill running">Running</span>
+                      {% elif c.status == "skipped" %}
+                        <span class="pill">Skipped</span>
+                      {% elif c.status == "pending" %}
+                        <span class="pill">Pending</span>
+                      {% else %}
+                        <span class="pill">{{ c.status }}</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="muted">No checks run yet.</div>
+          {% endif %}
+        </div>
+
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Summary</h3>
+          </div>
+
+          {% set summary_error = (video_result.error or error) %}
+          {% if (not video_result.ok) and summary_error %}
+            <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+          {% elif video_result.ok %}
+            <div class="kv">
+              <div class="k">Top-level JSON files</div>
+              <div class="v mono">{{ video_result.json_count }}</div>
+              <div class="k">Top-level MP4 files</div>
+              <div class="v mono">{{ video_result.mp4_count }}</div>
+              <div class="k">Segments</div>
+              <div class="v mono">{{ video_result.segments_count }}</div>
+              <div class="k">First segment</div>
+              <div class="v mono">{{ video_result.segments_first or "—" }}</div>
+              <div class="k">Last segment</div>
+	              <div class="v mono">{{ video_result.segments_last or "—" }}</div>
+	              <div class="k">Cameras</div>
+	              {% set cams = (video_result.cameras or video_result.cameras_preview or []) %}
+	              <div class="v mono camera-lines">{{ cams|join('\n') if cams else "—" }}</div>
+	            </div>
+	          {% else %}
+	            <div class="muted">Summary will appear after checks pass.</div>
+	          {% endif %}
+        </div>
+      {% elif error %}
+        <div class="card subcard">
+          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+            <h3 style="margin:0">Summary</h3>
+          </div>
+          <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
+        </div>
+      {% endif %}
+      </div>
+    </div>
+  </form>
+
+  <script>
+    const draftId = {{ draft_id }};
+    const videoInput = document.getElementById("video_dir");
+    const statusPill = document.getElementById("video_status");
+    const hintEl = document.getElementById("video_hint");
+    const resultWrap = document.getElementById("video_result_wrap");
+    const continueBtn = document.getElementById("btn_continue");
+    const recheckBtn = document.getElementById("btn_recheck");
+
+    function esc(s){
+      return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      }[c]));
+    }
+
+    function setStatus(kind, text){
+      statusPill.className = "pill";
+      if(kind === "checking"){ statusPill.classList.add("running"); }
+      if(kind === "ok"){ statusPill.classList.add("succeeded"); }
+      if(kind === "fail"){ statusPill.classList.add("failed"); }
+      statusPill.textContent = text;
+    }
+
+    function setContinue(enabled){
+      continueBtn.disabled = !enabled;
+      if(enabled){
+        continueBtn.title = "";
+      }else{
+        continueBtn.title = "Continue is available after the video check passes";
+      }
+    }
+
+    function renderResult(data){
+      if(!data){ return; }
+
+	      const checkTips = {
+	        "Segment JSON present": "Checks there are segment JSON files (<SEG>.json) in the selected folder.",
+	        "Camera MP4 present": "Checks there are camera MP4 files named <SEG>.<CAM>.mp4 in the selected folder.",
+	        "Segments discovered": "Parses filenames to discover unique segment IDs.",
+	        "Companion JSON per segment": "For each segment discovered from MP4 filenames, checks there is exactly one matching <SEG>.json file.",
+	        "Cameras discovered": "Parses filenames to discover unique camera IDs.",
+	        "Discovery": "Scans the folder for expected files and naming patterns.",
+	      };
+
+      const ok = !!data.ok;
+      const checkedAt = data.checked_at ? esc(data.checked_at) : "";
+      const err = data.error ? esc(data.error) : "";
+      const jsonCount = Number(data.json_count || 0);
+      const mp4Count = Number(data.mp4_count || 0);
+      const segCount = Number(data.segments_count || 0);
+      const segFirst = (data.segments_first != null) ? String(data.segments_first) : "";
+      const segLast = (data.segments_last != null) ? String(data.segments_last) : "";
+      const segPrev = Array.isArray(data.segments_preview) ? data.segments_preview : [];
+      const cams = Array.isArray(data.cameras) ? data.cameras : (Array.isArray(data.cameras_preview) ? data.cameras_preview : []);
+      const checks = Array.isArray(data.checks) ? data.checks : [];
+
+      let html = "";
+      // Checks card
+      html += `<div class="card subcard">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Checks</h3>`;
+      html += `<div class="muted small">Checked at <span class="mono">${checkedAt}</span></div>`;
+      html += `</div>`;
+      if(checks.length){
+        html += `<table class="table checks-table"><thead><tr><th>Check</th><th class="right statuscol">Status</th></tr></thead><tbody>`;
+        for(const c of checks){
+          const name = esc(c.name);
+          const status = String(c.status ?? "");
+          const tip = esc(checkTips[String(c.name ?? "")] || "What this check validates in the video folder.");
+          let pill = `<span class="pill">${esc(status)}</span>`;
+          if(status === "pass"){ pill = `<span class="pill succeeded">Pass</span>`; }
+          if(status === "fail"){ pill = `<span class="pill failed">Fail</span>`; }
+          if(status === "running"){ pill = `<span class="pill running">Running</span>`; }
+          if(status === "warn"){ pill = `<span class="pill failed">Warn</span>`; }
+          if(status === "pending"){ pill = `<span class="pill">Pending</span>`; }
+          if(status === "skipped"){ pill = `<span class="pill">Skipped</span>`; }
+          html += `<tr><td><span class="label-row">${name}<span class="help" data-tip="${tip}"></span></span></td><td class="right statuscol">${pill}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }else{
+        html += `<div class="muted">No checks run yet.</div>`;
+      }
+      html += `</div>`;
+
+      // Summary card
+      html += `<div class="card subcard">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Summary</h3>`;
+      html += `</div>`;
+
+      if(!ok && err){
+        html += `<div class="danger-text mono" style="margin-top:0">${err}</div>`;
+      }else if(ok){
+        const first = segFirst || (segPrev.length ? String(segPrev[0]) : "");
+        const last = segLast || (segPrev.length ? String(segPrev[segPrev.length - 1]) : "");
+
+        html += `<div class="kv">`;
+        html += `<div class="k">Top-level JSON files</div><div class="v mono">${jsonCount}</div>`;
+        html += `<div class="k">Top-level MP4 files</div><div class="v mono">${mp4Count}</div>`;
+        html += `<div class="k">Segments</div><div class="v mono">${segCount}</div>`;
+        html += `<div class="k">First segment</div><div class="v mono">${esc(first || "—")}</div>`;
+        html += `<div class="k">Last segment</div><div class="v mono">${esc(last || "—")}</div>`;
+        html += `<div class="k">Cameras</div><div class="v mono camera-lines">${cams.length ? cams.map(esc).join("\n") : "—"}</div>`;
+        html += `</div>`;
+      }else{
+        html += `<div class="muted">Summary will appear after checks pass.</div>`;
+      }
+      html += `</div>`;
+
+      resultWrap.innerHTML = html;
+      hintEl.textContent = "";
+    }
+
+    let validateTimer = null;
+    let pollTimer = null;
+    async function validateVideo(force){
+      const dir = (videoInput.value || "").trim();
+      if(!dir){
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        hintEl.textContent = "";
+        return;
+      }
+
+      if(recheckBtn) recheckBtn.disabled = true;
+      setStatus("checking", "Checking…");
+      setContinue(false);
+      try{
+        const res = await fetch(`/api/drafts/${draftId}/validate-video/start?video_dir=${encodeURIComponent(dir)}`);
+        const data = await res.json();
+        renderResult(data);
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        pollTimer = setInterval(async () => {
+          try{
+            const r = await fetch(`/api/drafts/${draftId}/validate-video/status`);
+            const d = await r.json();
+            renderResult(d);
+            if(d && d.running){
+              setStatus("checking", "Checking…");
+              setContinue(false);
+              if(recheckBtn) recheckBtn.disabled = true;
+            }else if(d && d.ok){
+              setStatus("ok", "Passed");
+              setContinue(true);
+              if(recheckBtn) recheckBtn.disabled = false;
+              if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+            }else{
+              setStatus("fail", "Failed");
+              setContinue(false);
+              if(recheckBtn) recheckBtn.disabled = false;
+              if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+            }
+          }catch(e){
+            // ignore transient polling errors
+          }
+        }, 350);
+      }catch(e){
+        setStatus("fail", "Failed");
+        setContinue(false);
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+        resultWrap.innerHTML = `<div class="card subcard"><div class="actions" style="justify-content:space-between; margin-bottom:10px"><h3 style="margin:0">Summary</h3></div><div class="danger-text mono" style="margin-top:0">Failed to validate video folder.</div></div>`;
+      }finally{
+        if(recheckBtn && !pollTimer) recheckBtn.disabled = false;
+      }
+    }
+
+    function scheduleValidate(){
+      if(validateTimer) clearTimeout(validateTimer);
+      validateTimer = setTimeout(() => validateVideo(false), 450);
+    }
+
+    videoInput.addEventListener("input", scheduleValidate);
+
+    async function browseDir(inputId){
+      const input = document.getElementById(inputId);
+      const initial = input?.value || "";
+      const btn = document.activeElement;
+      const prevText = (btn && btn.tagName === "BUTTON") ? btn.textContent : null;
+      try{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = true; btn.textContent = "Opening…"; }
+        const res = await fetch(`/api/pick-dir?initial=${encodeURIComponent(initial)}`);
+        const data = await res.json();
+        if(data && data.path){
+          input.value = data.path;
+          input.dispatchEvent(new Event("input"));
+        }else if(data && data.error){
+          alert(data.error);
+        }
+      }catch(e){
+        alert("Directory picker is not available in this environment.");
+      }finally{
+        if(btn && btn.tagName === "BUTTON"){ btn.disabled = false; if(prevText!==null) btn.textContent = prevText; }
+      }
+    }
+
+    (function init(){
+      const ok = {{ "true" if video_ok else "false" }};
+      if(ok){
+        setStatus("ok", "Passed");
+        setContinue(true);
+      }else if((videoInput.value || "").trim()){
+        scheduleValidate();
+      }else{
+        setStatus("idle", "Not checked");
+        setContinue(false);
+        if(recheckBtn) recheckBtn.disabled = true;
+      }
+    })();
+  </script>
+{% endblock %}

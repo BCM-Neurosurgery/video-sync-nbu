@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>{{ title }}</h1>
+      {% if subtitle %}<p class="muted">{{ subtitle }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div class="steps">
+      <div class="step {% if step >= 1 %}on{% endif %}">1 <span>Audio</span></div>
+      <div class="step {% if step >= 2 %}on{% endif %}">2 <span>Video</span></div>
+      <div class="step {% if step >= 3 %}on{% endif %}">3 <span>Output</span></div>
+      <div class="step {% if step >= 4 %}on{% endif %}">4 <span>Select</span></div>
+      <div class="step {% if step >= 5 %}on{% endif %}">5 <span>Summary</span></div>
+    </div>
+  </div>
+
+  {% block wizard %}{% endblock %}
+{% endblock %}
