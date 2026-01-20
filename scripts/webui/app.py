@@ -380,6 +380,7 @@ def create_app() -> FastAPI:
     out_val_state: Dict[int, Dict[str, Any]] = {}
     out_check_names = [
         "Directory empty",
+        "Audio metadata present",
     ]
 
     @app.get("/api/video-index")
@@ -395,6 +396,34 @@ def create_app() -> FastAPI:
                 status_code=400, detail=f"Failed to scan video_dir: {e}"
             )
         return {"video_dir": str(p), **data}
+
+    @app.get("/api/audio-metadata")
+    def api_audio_metadata(out_dir: str) -> Dict[str, Any]:
+        out_dir = (out_dir or "").strip()
+        if not out_dir:
+            raise HTTPException(status_code=400, detail="out_dir is required")
+        base = Path(out_dir).expanduser()
+        path = base / "audio_metadata" / "audio_abs_start.json"
+        if not path.exists():
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": "audio_abs_start.json not found",
+            }
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": f"Failed to read JSON: {exc}",
+            }
+        max_chars = 200000
+        truncated = False
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... (truncated)"
+            truncated = True
+        return {"ok": True, "path": str(path), "text": text, "truncated": truncated}
 
     @app.get("/api/pick-dir")
     def api_pick_dir(initial: str = "") -> Dict[str, Any]:
@@ -1073,6 +1102,10 @@ def create_app() -> FastAPI:
             "can_reuse_audio_decoded": False,
             "split_decoded_count": 0,
             "serial_chunks_count": 0,
+            "audio_metadata": {
+                "exists": False,
+                "abs_json": False,
+            },
             "synced_segments_count": 0,
             "synced_segments_preview": [],
             "total_segments": None,
@@ -1195,13 +1228,18 @@ def create_app() -> FastAPI:
         if not bool(data.get("video_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
         mode = str(data.get("mode") or "sync")
+        template_name = (
+            "wizard_output_timestamp.html"
+            if mode == "audio_timestamp"
+            else "wizard_output_sync.html"
+        )
         continue_url = (
             f"/wizard/{draft_id}/select"
             if mode == "audio_timestamp"
             else f"/wizard/{draft_id}/select"
         )
         return templates.TemplateResponse(
-            "wizard_output.html",
+            template_name,
             {
                 "request": request,
                 "draft_id": draft_id,

@@ -21,6 +21,7 @@
         </label>
 
         <div id="out_hint" class="hint" style="margin-top:6px"></div>
+        {% block output_extra_hint %}{% endblock %}
 
         <div class="actions" style="margin-top:12px; justify-content:space-between">
           <div class="actions">
@@ -45,6 +46,7 @@
       {% if out_result %}
         {% set check_tips = {
           "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
+          "Audio metadata present": "Checks whether audio_metadata/audio_abs_start.json is already present.",
         } %}
 
         <div class="card subcard">
@@ -96,35 +98,48 @@
           {% endif %}
         </div>
 
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Summary</h3>
-          </div>
-
-          {% set summary_error = (out_result.error or error) %}
-          {% if (not out_result.ok) and summary_error %}
-            <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
-          {% elif out_result.ok %}
-            <div class="kv">
-              <div class="k">Directory</div>
-              <div class="v mono">{% if out_result.will_create %}Will create{% elif out_result.exists %}Exists{% else %}—{% endif %}</div>
-
-              <div class="k">Empty</div>
-              <div class="v mono">{% if out_result.empty is none %}—{% elif out_result.empty %}Yes{% else %}No{% endif %}</div>
-
-              <div class="k">Reuse audio artifacts</div>
-              <div class="v mono">{% if out_result.can_reuse_audio_decoded %}Yes{% else %}No{% endif %}</div>
-
-              <div class="k">Synced segments</div>
-              <div class="v mono">{{ out_result.synced_segments_count }}{% if out_result.total_segments is not none %} / {{ out_result.total_segments }}{% endif %}</div>
-
-              <div class="k">Already synced (preview)</div>
-              <div class="v mono mono-lines">{{ out_result.synced_segments_preview|join('\n') if out_result.synced_segments_preview else "—" }}</div>
+        {% block output_summary %}
+          <div class="card subcard">
+            <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+              <h3 style="margin:0">Summary</h3>
             </div>
-          {% else %}
-            <div class="muted">Summary will appear after checks pass.</div>
-          {% endif %}
-        </div>
+
+            {% set summary_error = (out_result.error or error) %}
+            {% if (not out_result.ok) and summary_error %}
+              <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+            {% elif out_result.ok %}
+              <div class="kv">
+                <div class="k">Directory</div>
+                <div class="v mono">{% if out_result.will_create %}Will create{% elif out_result.exists %}Exists{% else %}—{% endif %}</div>
+
+                <div class="k">Empty</div>
+                <div class="v mono">{% if out_result.empty is none %}—{% elif out_result.empty %}Yes{% else %}No{% endif %}</div>
+
+                <div class="k">Reuse audio artifacts</div>
+                <div class="v mono">{% if out_result.can_reuse_audio_decoded %}Yes{% else %}No{% endif %}</div>
+
+                <div class="k">Synced segments</div>
+                <div class="v mono">{{ out_result.synced_segments_count }}{% if out_result.total_segments is not none %} / {{ out_result.total_segments }}{% endif %}</div>
+
+                <div class="k">Audio metadata</div>
+                <div class="v mono">
+                  {% if out_result.audio_metadata and out_result.audio_metadata.abs_json %}
+                    audio_abs_start.json found
+                  {% elif out_result.audio_metadata and out_result.audio_metadata.exists %}
+                    audio_metadata/ present (no audio_abs_start.json)
+                  {% else %}
+                    No metadata detected
+                  {% endif %}
+                </div>
+
+                <div class="k">Already synced (preview)</div>
+                <div class="v mono mono-lines">{{ out_result.synced_segments_preview|join('\n') if out_result.synced_segments_preview else "—" }}</div>
+              </div>
+            {% else %}
+              <div class="muted">Summary will appear after checks pass.</div>
+            {% endif %}
+          </div>
+        {% endblock %}
       {% elif error %}
         <div class="card subcard">
           <div class="actions" style="justify-content:space-between; margin-bottom:10px">
@@ -142,6 +157,7 @@
     const outInput = document.getElementById("out_dir");
     const statusPill = document.getElementById("out_status");
     const hintEl = document.getElementById("out_hint");
+    const metaHintEl = document.getElementById("out_meta_hint");
     const resultWrap = document.getElementById("out_result_wrap");
     const continueBtn = document.getElementById("btn_continue");
     const recheckBtn = document.getElementById("btn_recheck");
@@ -165,15 +181,9 @@
       continueBtn.title = enabled ? "" : "Continue is available after the output check passes";
     }
 
-    function renderResult(data){
-      if(!data){ return; }
-
-      const checkTips = {
-        "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
-      };
-
+    function renderSummary(data){
+      if(!data){ return ""; }
       const ok = !!data.ok;
-      const checkedAt = data.checked_at ? esc(data.checked_at) : "";
       const err = data.error ? esc(data.error) : "";
       const exists = !!data.exists;
       const willCreate = !!data.will_create;
@@ -182,6 +192,57 @@
       const synced = Number(data.synced_segments_count || 0);
       const total = (data.total_segments === null || data.total_segments === undefined) ? null : Number(data.total_segments);
       const syncedPrev = Array.isArray(data.synced_segments_preview) ? data.synced_segments_preview : [];
+      const meta = data.audio_metadata || {};
+
+      let html = "";
+      html += `<div class="card subcard">`;
+      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
+      html += `<h3 style="margin:0">Summary</h3>`;
+      html += `</div>`;
+      if(!ok && err){
+        html += `<div class="danger-text mono" style="margin-top:0">${err}</div>`;
+      }else if(ok){
+        const dirLabel = willCreate ? "Will create" : (exists ? "Exists" : "—");
+        const syncedLabel = total !== null ? `${synced} / ${total}` : `${synced}`;
+        html += `<div class="kv">`;
+        html += `<div class="k">Directory</div><div class="v mono">${esc(dirLabel)}</div>`;
+        html += `<div class="k">Empty</div><div class="v mono">${esc(empty)}</div>`;
+        html += `<div class="k">Reuse audio artifacts</div><div class="v mono">${canReuse ? "Yes" : "No"}</div>`;
+        html += `<div class="k">Synced segments</div><div class="v mono">${esc(syncedLabel)}</div>`;
+        if(meta && (meta.abs_json || meta.exists)){
+          const metaLabel = meta.abs_json ? "audio_abs_start.json found" : "audio_metadata/ present (no audio_abs_start.json)";
+          html += `<div class="k">Audio metadata</div><div class="v mono">${esc(metaLabel)}</div>`;
+        }else{
+          html += `<div class="k">Audio metadata</div><div class="v mono">No metadata detected</div>`;
+        }
+        html += `<div class="k">Already synced (preview)</div><div class="v mono mono-lines">${syncedPrev.length ? syncedPrev.map(esc).join("\n") : "—"}</div>`;
+        html += `</div>`;
+      }else{
+        html += `<div class="muted">Summary will appear after checks pass.</div>`;
+      }
+      html += `</div>`;
+      return html;
+    }
+
+    function updateMetaHint(_data){
+      if(metaHintEl){
+        metaHintEl.textContent = "";
+      }
+    }
+
+    function postRender(_data){
+      // Hook for mode-specific post-render work.
+    }
+
+    function renderResult(data){
+      if(!data){ return; }
+
+      const checkTips = {
+        "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
+        "Audio metadata present": "Checks whether audio_metadata/audio_abs_start.json is already present.",
+      };
+
+      const checkedAt = data.checked_at ? esc(data.checked_at) : "";
       const checks = Array.isArray(data.checks) ? data.checks : [];
 
       let html = "";
@@ -213,31 +274,12 @@
       }
       html += `</div>`;
 
-      // Summary card
-      html += `<div class="card subcard">`;
-      html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
-      html += `<h3 style="margin:0">Summary</h3>`;
-      html += `</div>`;
-
-      if(!ok && err){
-        html += `<div class="danger-text mono" style="margin-top:0">${err}</div>`;
-      }else if(ok){
-        const dirLabel = willCreate ? "Will create" : (exists ? "Exists" : "—");
-        const syncedLabel = total !== null ? `${synced} / ${total}` : `${synced}`;
-        html += `<div class="kv">`;
-        html += `<div class="k">Directory</div><div class="v mono">${esc(dirLabel)}</div>`;
-        html += `<div class="k">Empty</div><div class="v mono">${esc(empty)}</div>`;
-        html += `<div class="k">Reuse audio artifacts</div><div class="v mono">${canReuse ? "Yes" : "No"}</div>`;
-        html += `<div class="k">Synced segments</div><div class="v mono">${esc(syncedLabel)}</div>`;
-        html += `<div class="k">Already synced (preview)</div><div class="v mono mono-lines">${syncedPrev.length ? syncedPrev.map(esc).join("\n") : "—"}</div>`;
-        html += `</div>`;
-      }else{
-        html += `<div class="muted">Summary will appear after checks pass.</div>`;
-      }
-      html += `</div>`;
+      html += renderSummary(data);
 
       resultWrap.innerHTML = html;
       hintEl.textContent = "";
+      updateMetaHint(data);
+      postRender(data);
     }
 
     let validateTimer = null;
@@ -250,6 +292,7 @@
         if(recheckBtn) recheckBtn.disabled = true;
         if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
         hintEl.textContent = "";
+        updateMetaHint(null);
         return;
       }
 
@@ -324,7 +367,13 @@
       }
     }
 
+    {% block output_summary_js %}{% endblock %}
+
     (function init(){
+      const initialResult = {{ out_result|tojson if out_result is not none else "null" }};
+      if(initialResult){
+        renderResult(initialResult);
+      }
       const ok = {{ "true" if out_ok else "false" }};
       if(ok){
         setStatus("ok", "Passed");
