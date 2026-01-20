@@ -1,0 +1,23 @@
+{% extends "layout.html" %}
+{% set title = "Find Audio Timestamp — Audio/Video Synchronization" %}
+{% set nav = "home" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Find audio timestamp</h1>
+      <p class="muted">UI integration for the timestamp tool is coming next.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Current option</h3>
+    <p class="muted">
+      Run the existing script directly for now:
+      <span class="mono">python -m scripts.time.find_audio_abs_time</span>
+    </p>
+    <div class="actions" style="margin-top:12px">
+      <a class="btn" href="/">Back to home</a>
+      <a class="btn" href="/runs">Go to runs</a>
+    </div>
+  </div>
+{% endblock %}

@@ -317,8 +317,8 @@ def create_app() -> FastAPI:
         return {"path": "", "canceled": True}
 
     @app.get("/", response_class=HTMLResponse)
-    def home() -> RedirectResponse:
-        return RedirectResponse(url="/runs")
+    def home(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse("home.html", {"request": request})
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs(request: Request) -> HTMLResponse:
@@ -371,6 +371,13 @@ def create_app() -> FastAPI:
     def runs_new() -> RedirectResponse:
         draft_id = _draft_create()
         return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+
+    @app.get("/tools/audio-timestamp", response_class=HTMLResponse)
+    def tools_audio_timestamp(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            "tool_audio_timestamp.html",
+            {"request": request, "nav": "home"},
+        )
 
     @app.get("/api/drafts/{draft_id}/validate-audio")
     def api_validate_audio(draft_id: int, audio_dir: str) -> Dict[str, Any]:
