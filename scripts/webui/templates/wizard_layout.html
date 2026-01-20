@@ -1,4 +1,4 @@
-{% extends "layout_nbu.html" %}
+{% extends base_layout %}
 {% block content %}
   <div class="page-head">
     <div>
@@ -9,11 +9,10 @@
 
   <div class="card" style="margin-bottom:12px">
     <div class="steps">
-      <div class="step {% if step >= 1 %}on{% endif %}">1 <span>Audio</span></div>
-      <div class="step {% if step >= 2 %}on{% endif %}">2 <span>Video</span></div>
-      <div class="step {% if step >= 3 %}on{% endif %}">3 <span>Output</span></div>
-      <div class="step {% if step >= 4 %}on{% endif %}">4 <span>Select</span></div>
-      <div class="step {% if step >= 5 %}on{% endif %}">5 <span>Summary</span></div>
+      {% set steps = flow_steps or ["Audio", "Video", "Output", "Select", "Summary"] %}
+      {% for label in steps %}
+        <div class="step {% if step >= loop.index %}on{% endif %}">{{ loop.index }} <span>{{ label }}</span></div>
+      {% endfor %}
     </div>
   </div>
 

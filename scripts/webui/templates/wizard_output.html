@@ -1,7 +1,7 @@
 {% extends "wizard_layout.html" %}
-{% set nav = "new" %}
-{% set title = "New run" %}
-{% set subtitle = "Step 3/6 — Select output folder" %}
+{% set nav = flow_nav or "new" %}
+{% set title = flow_title or "New run" %}
+{% set subtitle = flow_subtitle or "Step 3/6 — Select output folder" %}
 {% set step = 3 %}
 
 {% block wizard %}
@@ -25,7 +25,7 @@
         <div class="actions" style="margin-top:12px; justify-content:space-between">
           <div class="actions">
             <a class="btn" href="/wizard/{{ draft_id }}/video">Back</a>
-            <a class="btn" href="/runs">Cancel</a>
+            <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
           </div>
           <div class="actions">
             <button id="btn_recheck" class="btn" type="button" onclick="validateOut(true)">Re-check</button>
@@ -33,7 +33,7 @@
               id="btn_continue"
               class="btn primary"
               type="button"
-              onclick="location.href='/wizard/{{ draft_id }}/select'"
+              onclick="location.href='{{ continue_url or ('/wizard/' ~ draft_id ~ '/select') }}'"
               disabled
               title="Continue is available after the output check passes"
             >Continue</button>

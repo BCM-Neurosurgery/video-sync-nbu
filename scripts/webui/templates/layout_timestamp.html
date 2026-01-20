@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "Audio/Video Synchronization" }}</title>
+    <link rel="stylesheet" href="/static/app.css?v={{ static_v }}" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="container topbar-inner">
+        <div class="brand">
+          <a href="/">Audio/Video Synchronization</a>
+          <a class="toplink" href="https://github.com/BCM-Neurosurgery/video-sync-nbu" target="_blank" rel="noopener">GitHub</a>
+          <a class="toplink" href="https://bcm-neurosurgery.github.io/video-sync-nbu/" target="_blank" rel="noopener">Docs</a>
+        </div>
+        <nav class="nav">
+          <a href="/" class="{% if nav=='home' %}active{% endif %}">Home</a>
+          <a href="/audio-timestamp/runs" class="{% if nav=='timestamp_history' %}active{% endif %}">History</a>
+          <a href="/tools/audio-timestamp/new" class="{% if nav=='timestamp_new' %}active{% endif %}">New run</a>
+        </nav>
+      </div>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

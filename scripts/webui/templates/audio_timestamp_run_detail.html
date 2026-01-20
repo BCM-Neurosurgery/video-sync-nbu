@@ -1,0 +1,79 @@
+{% extends "layout_timestamp.html" %}
+{% set title = "Audio Timestamp Run #" ~ run['id'] ~ " — Audio/Video Synchronization" %}
+{% set nav = "timestamp_history" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Audio timestamp #{{ run['id'] }}</h1>
+    </div>
+  </div>
+
+  {% if run['error'] %}
+    <div class="alert danger mono">{{ run['error'] }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Status</h3>
+    <div class="kv">
+      <div class="k">State</div>
+      <div class="v mono" id="status_pill"><span class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+      <div class="k">Created</div>
+      <div class="v mono" id="created_at">{{ run['created_at'] }}</div>
+      <div class="k">Started</div>
+      <div class="v mono" id="started_at">{{ run['started_at'] or "" }}</div>
+      <div class="k">Finished</div>
+      <div class="v mono" id="finished_at">{{ run['finished_at'] or "" }}</div>
+      <div class="k">Records</div>
+      <div class="v mono" id="records_count">{{ run['records_count'] if run['records_count'] is not none else "" }}</div>
+    </div>
+
+    <hr class="divider" />
+
+    <h3>Inputs</h3>
+    <div class="kv">
+      <div class="k">Audio dir</div><div class="v mono">{{ args.get('audio_dir','') }}</div>
+      <div class="k">Video dir</div><div class="v mono">{{ args.get('video_dir','') }}</div>
+      <div class="k">Output dir</div><div class="v mono">{{ args.get('out_dir','') }}</div>
+      <div class="k">Site</div><div class="v mono">{{ args.get('site','') }}</div>
+      <div class="k">Timezone</div><div class="v mono">{{ args.get('timezone','') }}</div>
+    </div>
+
+    {% if run['output_path'] %}
+      <hr class="divider" />
+      <h3>Result JSON</h3>
+      <div class="muted small">Saved to <span class="mono">{{ run['output_path'] }}</span></div>
+      {% if json_text %}
+        <pre class="json-box mono" style="margin-top:10px">{{ json_text }}</pre>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <script>
+    const runId = {{ run['id'] }};
+    const statusText = document.getElementById("status_text");
+    const statusPill = document.getElementById("status_pill");
+    const startedEl = document.getElementById("started_at");
+    const finishedEl = document.getElementById("finished_at");
+    const recordsEl = document.getElementById("records_count");
+    async function refresh(){
+      try{
+        const resp = await fetch(`/api/audio-timestamp/runs/${runId}`);
+        if(!resp.ok){ return; }
+        const data = await resp.json();
+        if(statusText){ statusText.textContent = data.status || ""; }
+        if(statusPill){
+          statusPill.innerHTML = `<span class="pill ${data.status}">${data.status}</span>`;
+        }
+        if(startedEl){ startedEl.textContent = data.started_at || ""; }
+        if(finishedEl){ finishedEl.textContent = data.finished_at || ""; }
+        if(recordsEl){ recordsEl.textContent = data.records_count == null ? "" : data.records_count; }
+        if(data.status === "succeeded" || data.status === "failed"){
+          window.location.reload();
+        }
+      }catch(err){ /* ignore */ }
+    }
+    if("{{ run['status'] }}" === "running"){
+      setInterval(refresh, 3000);
+    }
+  </script>
+{% endblock %}
