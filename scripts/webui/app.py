@@ -220,6 +220,30 @@ def _wizard_flow_context(data: Dict[str, Any], *, step: int) -> Dict[str, Any]:
     }
 
 
+def _default_timestamp_output_path(data: Dict[str, Any]) -> str:
+    out_dir = str(data.get("out_dir", "")).strip()
+    if not out_dir:
+        return ""
+    try:
+        return str(OutputLayout(Path(out_dir)).default_metadata_path)
+    except Exception:
+        return ""
+
+
+def _resolve_timestamp_output_path(
+    data: Dict[str, Any], *, override: Optional[str] = None
+) -> str:
+    raw = (override or "").strip()
+    if not raw:
+        raw = str(data.get("timestamp_output_path") or "").strip()
+    if raw:
+        try:
+            return str(Path(raw).expanduser())
+        except Exception:
+            return raw
+    return _default_timestamp_output_path(data)
+
+
 def _create_timestamp_run(
     args: Dict[str, Any], *, output_path: Optional[str] = None
 ) -> int:
@@ -275,15 +299,11 @@ def _update_timestamp_run(
 def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
     def worker() -> None:
         data = _draft_get(draft_id)
-        data["timestamp_status"] = "running"
-        data["timestamp_error"] = None
-        _draft_set(draft_id, data)
         try:
             audio_dir = Path(str(data.get("audio_dir", "")).strip()).expanduser()
             video_dir = Path(str(data.get("video_dir", "")).strip()).expanduser()
             out_dir = Path(str(data.get("out_dir", "")).strip()).expanduser()
             site = str(data.get("site") or "nbu_lounge")
-            target_pairs = data.get("target_pairs") or []
 
             records = compute_audio_start_records(
                 audio_dir=audio_dir,
@@ -291,22 +311,17 @@ def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
                 out_dir=out_dir,
                 local_tz=DEFAULT_TZ,
                 site=site,
-                target_pairs=target_pairs,
             )
             payload = [_record_to_payload(rec) for rec in records]
-            output_path_raw = str(data.get("timestamp_output_path") or "").strip()
-            if output_path_raw:
-                output_path = Path(output_path_raw).expanduser()
-            else:
-                output_path = OutputLayout(out_dir).default_metadata_path
+            output_path_raw = _resolve_timestamp_output_path(data)
+            if not output_path_raw:
+                raise RuntimeError("Output JSON path is required.")
+            output_path = Path(output_path_raw)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
             data = _draft_get(draft_id)
-            data["timestamp_status"] = "succeeded"
-            data["timestamp_error"] = None
             data["timestamp_output_path"] = str(output_path)
-            data["timestamp_records_count"] = len(payload)
             _draft_set(draft_id, data)
             _update_timestamp_run(
                 run_id,
@@ -316,10 +331,6 @@ def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
                 records_count=len(payload),
             )
         except Exception as exc:
-            data = _draft_get(draft_id)
-            data["timestamp_status"] = "failed"
-            data["timestamp_error"] = str(exc)
-            _draft_set(draft_id, data)
             _update_timestamp_run(
                 run_id,
                 status="failed",
@@ -622,10 +633,7 @@ def create_app() -> FastAPI:
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
-            data.pop("timestamp_status", None)
-            data.pop("timestamp_error", None)
             data.pop("timestamp_output_path", None)
-            data.pop("timestamp_records_count", None)
             data.pop("timestamp_run_id", None)
         data["audio_dir"] = audio_dir
         _draft_set(draft_id, data)
@@ -1158,10 +1166,7 @@ def create_app() -> FastAPI:
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
-            data.pop("timestamp_status", None)
-            data.pop("timestamp_error", None)
             data.pop("timestamp_output_path", None)
-            data.pop("timestamp_records_count", None)
             data.pop("timestamp_run_id", None)
 
         data["video_dir"] = video_dir
@@ -1215,10 +1220,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("out_dir") != out_dir:
             data.pop("target_pairs", None)
-            data.pop("timestamp_status", None)
-            data.pop("timestamp_error", None)
             data.pop("timestamp_output_path", None)
-            data.pop("timestamp_records_count", None)
             data.pop("timestamp_run_id", None)
         data["out_dir"] = out_dir
         segments = data.get("segments_all")
@@ -1247,16 +1249,7 @@ def create_app() -> FastAPI:
                 return RedirectResponse(
                     url=f"/wizard/{draft_id}/output", status_code=303
                 )
-            output_json = data.get("timestamp_output_path")
-            if not output_json:
-                out_dir = str(data.get("out_dir", "")).strip()
-                if out_dir:
-                    try:
-                        output_json = str(
-                            OutputLayout(Path(out_dir)).default_metadata_path
-                        )
-                    except Exception:
-                        output_json = ""
+            output_json = _resolve_timestamp_output_path(data)
             return templates.TemplateResponse(
                 "wizard_timestamp_select.html",
                 {
@@ -1355,20 +1348,14 @@ def create_app() -> FastAPI:
         data["select_error"] = None
         data["run_error"] = None
         if mode == "audio_timestamp":
-            out_dir = str(data.get("out_dir", "")).strip()
-            out_path = (output_json or "").strip()
-            if not out_path and out_dir:
-                try:
-                    out_path = str(OutputLayout(Path(out_dir)).default_metadata_path)
-                except Exception:
-                    out_path = ""
+            out_path = _resolve_timestamp_output_path(data, override=output_json)
             if not out_path:
                 data["select_error"] = "Output JSON path is required."
                 _draft_set(draft_id, data)
                 return RedirectResponse(
                     url=f"/wizard/{draft_id}/select", status_code=303
                 )
-            data["timestamp_output_path"] = str(Path(out_path).expanduser())
+            data["timestamp_output_path"] = out_path
             data["target_pairs"] = []
             data["log_level"] = log_level
             data["skip_decode"] = False
@@ -1378,10 +1365,6 @@ def create_app() -> FastAPI:
             data["split_clean"] = False
             data["split_chunk_seconds"] = 3600
             data["schedule_at"] = ""
-            data["timestamp_status"] = None
-            data["timestamp_error"] = None
-            data["timestamp_output_path"] = None
-            data["timestamp_records_count"] = None
             data["timestamp_run_id"] = None
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/summary", status_code=303)
@@ -1460,16 +1443,7 @@ def create_app() -> FastAPI:
             "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
         }
         if mode == "audio_timestamp":
-            output_path = str(data.get("timestamp_output_path") or "").strip()
-            if not output_path:
-                out_dir = str(args.get("out_dir", "")).strip()
-                if out_dir:
-                    try:
-                        output_path = str(
-                            OutputLayout(Path(out_dir)).default_metadata_path
-                        )
-                    except Exception:
-                        output_path = ""
+            output_path = _resolve_timestamp_output_path(data)
             return templates.TemplateResponse(
                 "wizard_timestamp_summary.html",
                 {
@@ -1515,28 +1489,17 @@ def create_app() -> FastAPI:
                 return RedirectResponse(
                     url=f"/audio-timestamp/runs/{existing_run_id}", status_code=303
                 )
-            output_path = str(data.get("timestamp_output_path") or "").strip()
-            if not output_path:
-                out_dir = str(data.get("out_dir", "")).strip()
-                if out_dir:
-                    try:
-                        output_path = str(
-                            OutputLayout(Path(out_dir)).default_metadata_path
-                        )
-                    except Exception:
-                        output_path = ""
+            output_path = _resolve_timestamp_output_path(data)
             args: Dict[str, Any] = {
                 "audio_dir": data.get("audio_dir", ""),
                 "video_dir": data.get("video_dir", ""),
                 "out_dir": data.get("out_dir", ""),
                 "site": data.get("site", "nbu_lounge"),
-                "target_pairs": data.get("target_pairs", []),
                 "timezone": DEFAULT_TZ.key,
                 "output_json": output_path,
             }
             run_id = _create_timestamp_run(args, output_path=output_path or None)
             data["timestamp_run_id"] = run_id
-            data["timestamp_status"] = "running"
             _draft_set(draft_id, data)
             _start_audio_timestamp_job(draft_id, run_id=run_id)
             return RedirectResponse(
