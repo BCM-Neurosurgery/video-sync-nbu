@@ -1,7 +1,7 @@
 {% extends "wizard_layout.html" %}
-{% set nav = "new" %}
-{% set title = "New run" %}
-{% set subtitle = "Step 5/5 — Summary" %}
+{% set nav = flow_nav or "new" %}
+{% set title = flow_title or "New run" %}
+{% set subtitle = flow_subtitle or "Step 5/5 — Summary" %}
 {% set step = 5 %}
 
 {% block wizard %}
@@ -57,8 +57,8 @@
 
     <div class="actions" style="margin-top:14px; justify-content:space-between">
       <div class="actions">
-        <a class="btn" href="/wizard/{{ draft_id }}/select">Back</a>
-        <a class="btn" href="/runs">Cancel</a>
+        <a class="btn" href="{{ back_url or ('/wizard/' ~ draft_id ~ '/select') }}">Back</a>
+        <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
       </div>
       <form method="post" action="/wizard/{{ draft_id }}/start" class="inline">
         <button class="btn primary" type="submit">Start run</button>

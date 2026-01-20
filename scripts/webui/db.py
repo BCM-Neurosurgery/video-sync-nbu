@@ -68,6 +68,22 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_drafts_updated
           ON drafts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS timestamp_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          status TEXT NOT NULL,
+          args_json TEXT NOT NULL,
+          output_path TEXT,
+          records_count INTEGER,
+          error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_timestamp_runs_created
+          ON timestamp_runs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_timestamp_runs_status
+          ON timestamp_runs(status);
         """
     )
     conn.commit()

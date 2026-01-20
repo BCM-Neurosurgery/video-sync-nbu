@@ -19,6 +19,7 @@ Check = Dict[str, Any]
 def _init_checks() -> List[Check]:
     return [
         {"name": "Directory empty", "status": "pending", "message": ""},
+        {"name": "Audio metadata present", "status": "pending", "message": ""},
     ]
 
 
@@ -197,6 +198,10 @@ def validate_out_dir_progress(
         "total_segments": None,
         "synced_pairs": [],
         "synced_pairs_count": 0,
+        "audio_metadata": {
+            "exists": False,
+            "abs_json": False,
+        },
         "checks": _init_checks(),
         "error": None,
         "checked_at": _now_iso(),
@@ -211,6 +216,12 @@ def validate_out_dir_progress(
     if not out_dir:
         payload["error"] = "Output dir is required."
         _set_check(payload["checks"], "Directory empty", "fail", payload["error"])
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "skipped",
+            "Output dir not set",
+        )
         payload["running"] = False
         emit()
         return payload
@@ -218,6 +229,12 @@ def validate_out_dir_progress(
     if p.exists() and not p.is_dir():
         payload["error"] = f"Output dir is not a directory: {p}"
         _set_check(payload["checks"], "Directory empty", "fail", payload["error"])
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "skipped",
+            "Output dir is not a directory",
+        )
         payload["running"] = False
         emit()
         return payload
@@ -229,6 +246,12 @@ def validate_out_dir_progress(
         _set_check(
             payload["checks"], "Directory empty", "pass", "Will be created (empty)"
         )
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "skipped",
+            "Output dir not created yet",
+        )
         payload["ok"] = True
         payload["running"] = False
         emit()
@@ -238,6 +261,7 @@ def validate_out_dir_progress(
     payload["will_create"] = False
 
     _set_check(payload["checks"], "Directory empty", "running")
+    _set_check(payload["checks"], "Audio metadata present", "running")
     emit()
     entries = _list_nontrivial_entries(p)
     payload["entries_count"] = len(entries)
@@ -277,6 +301,32 @@ def validate_out_dir_progress(
             payload["serial_chunks_count"] = len(list(serial_chunks.glob("*.wav")))
         except Exception:
             payload["serial_chunks_count"] = 0
+
+    metadata_dir = p / "audio_metadata"
+    abs_json = metadata_dir / "audio_abs_start.json"
+    payload["audio_metadata"]["exists"] = metadata_dir.is_dir()
+    payload["audio_metadata"]["abs_json"] = abs_json.is_file()
+    if payload["audio_metadata"]["abs_json"]:
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "pass",
+            "audio_abs_start.json found",
+        )
+    elif payload["audio_metadata"]["exists"]:
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "warn",
+            "audio_metadata/ present (no audio_abs_start.json)",
+        )
+    else:
+        _set_check(
+            payload["checks"],
+            "Audio metadata present",
+            "warn",
+            "audio_metadata/ not found",
+        )
 
     sync_stats = _count_synced_segments(p, segments)
     payload.update(sync_stats)

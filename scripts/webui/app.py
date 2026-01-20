@@ -27,6 +27,12 @@ from scripts.validate.validate_video_dir import (
     validate_video_dir,
     validate_video_dir_progress,
 )
+from scripts.time.find_audio_abs_time import (
+    OutputLayout,
+    compute_audio_start_records,
+    _record_to_payload,
+)
+from scripts.index.common import DEFAULT_TZ
 
 
 ROOT = Path(__file__).resolve().parent
@@ -133,13 +139,16 @@ def _segment_range_title(args: Dict[str, Any]) -> str:
     return f"{first} → {last}"
 
 
-def _draft_create() -> int:
+def _draft_create(*, mode: str = "sync") -> int:
     conn = get_conn()
     now = utc_now_iso()
+    data = {"mode": mode}
+    if mode == "audio_timestamp":
+        data["site"] = "nbu_lounge"
     with tx(conn):
         cur = conn.execute(
             "INSERT INTO drafts(created_at, updated_at, data_json) VALUES(?, ?, ?)",
-            (now, now, json.dumps({})),
+            (now, now, json.dumps(data)),
         )
         return int(cur.lastrowid)
 
@@ -171,6 +180,167 @@ def _draft_delete(draft_id: int) -> None:
     conn = get_conn()
     with tx(conn):
         conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+
+
+def _wizard_flow_context(data: Dict[str, Any], *, step: int) -> Dict[str, Any]:
+    mode = str(data.get("mode") or "sync")
+    if mode == "audio_timestamp":
+        flow_steps = ["Audio", "Video", "Output", "Select", "Summary"]
+        subtitles = {
+            1: "Step 1/5 — Select audio folder",
+            2: "Step 2/5 — Select video folder",
+            3: "Step 3/5 — Select output folder",
+            4: "Step 4/5 — Configure output",
+            5: "Step 5/5 — Summary",
+        }
+        return {
+            "mode": mode,
+            "base_layout": "layout_timestamp.html",
+            "flow_title": "Find audio timestamp",
+            "flow_subtitle": subtitles.get(step),
+            "flow_nav": "timestamp_new",
+            "cancel_url": "/",
+            "flow_steps": flow_steps,
+            "select_hint": (
+                "Select segment-camera pairs to use as reference anchors. "
+                "-- = missing video. Click a segment or camera header to toggle its row/column."
+            ),
+            "show_reuse_audio": False,
+        }
+    return {
+        "mode": mode,
+        "base_layout": "layout_nbu.html",
+        "flow_title": "New run",
+        "flow_subtitle": None,
+        "flow_nav": "new",
+        "cancel_url": "/runs",
+        "flow_steps": ["Audio", "Video", "Output", "Select", "Summary"],
+        "select_hint": None,
+        "show_reuse_audio": True,
+    }
+
+
+def _default_timestamp_output_path(data: Dict[str, Any]) -> str:
+    out_dir = str(data.get("out_dir", "")).strip()
+    if not out_dir:
+        return ""
+    try:
+        return str(OutputLayout(Path(out_dir)).default_metadata_path)
+    except Exception:
+        return ""
+
+
+def _resolve_timestamp_output_path(
+    data: Dict[str, Any], *, override: Optional[str] = None
+) -> str:
+    raw = (override or "").strip()
+    if not raw:
+        raw = str(data.get("timestamp_output_path") or "").strip()
+    if raw:
+        try:
+            return str(Path(raw).expanduser())
+        except Exception:
+            return raw
+    return _default_timestamp_output_path(data)
+
+
+def _create_timestamp_run(
+    args: Dict[str, Any], *, output_path: Optional[str] = None
+) -> int:
+    now = utc_now_iso()
+    conn = get_conn()
+    with tx(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO timestamp_runs(created_at, started_at, status, args_json, output_path)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (now, now, "running", json.dumps(args), output_path),
+        )
+        return int(cur.lastrowid)
+
+
+def _update_timestamp_run(
+    run_id: int,
+    *,
+    status: Optional[str] = None,
+    finished_at: Optional[str] = None,
+    output_path: Optional[str] = None,
+    records_count: Optional[int] = None,
+    error: Optional[str] = None,
+) -> None:
+    fields = []
+    values: List[Any] = []
+    if status is not None:
+        fields.append("status=?")
+        values.append(status)
+    if finished_at is not None:
+        fields.append("finished_at=?")
+        values.append(finished_at)
+    if output_path is not None:
+        fields.append("output_path=?")
+        values.append(output_path)
+    if records_count is not None:
+        fields.append("records_count=?")
+        values.append(records_count)
+    if error is not None:
+        fields.append("error=?")
+        values.append(error)
+    if not fields:
+        return
+    values.append(run_id)
+    conn = get_conn()
+    with tx(conn):
+        conn.execute(
+            f"UPDATE timestamp_runs SET {', '.join(fields)} WHERE id=?", values
+        )
+
+
+def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
+    def worker() -> None:
+        data = _draft_get(draft_id)
+        try:
+            audio_dir = Path(str(data.get("audio_dir", "")).strip()).expanduser()
+            video_dir = Path(str(data.get("video_dir", "")).strip()).expanduser()
+            out_dir = Path(str(data.get("out_dir", "")).strip()).expanduser()
+            site = str(data.get("site") or "nbu_lounge")
+
+            records = compute_audio_start_records(
+                audio_dir=audio_dir,
+                video_dir=video_dir,
+                out_dir=out_dir,
+                local_tz=DEFAULT_TZ,
+                site=site,
+            )
+            payload = [_record_to_payload(rec) for rec in records]
+            output_path_raw = _resolve_timestamp_output_path(data)
+            if not output_path_raw:
+                raise RuntimeError("Output JSON path is required.")
+            output_path = Path(output_path_raw)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            data = _draft_get(draft_id)
+            data["timestamp_output_path"] = str(output_path)
+            _draft_set(draft_id, data)
+            _update_timestamp_run(
+                run_id,
+                status="succeeded",
+                finished_at=utc_now_iso(),
+                output_path=str(output_path),
+                records_count=len(payload),
+            )
+        except Exception as exc:
+            _update_timestamp_run(
+                run_id,
+                status="failed",
+                finished_at=utc_now_iso(),
+                error=str(exc),
+            )
+
+    threading.Thread(
+        target=worker, name=f"audio-timestamp-{draft_id}", daemon=True
+    ).start()
 
 
 def create_app() -> FastAPI:
@@ -210,6 +380,7 @@ def create_app() -> FastAPI:
     out_val_state: Dict[int, Dict[str, Any]] = {}
     out_check_names = [
         "Directory empty",
+        "Audio metadata present",
     ]
 
     @app.get("/api/video-index")
@@ -225,6 +396,34 @@ def create_app() -> FastAPI:
                 status_code=400, detail=f"Failed to scan video_dir: {e}"
             )
         return {"video_dir": str(p), **data}
+
+    @app.get("/api/audio-metadata")
+    def api_audio_metadata(out_dir: str) -> Dict[str, Any]:
+        out_dir = (out_dir or "").strip()
+        if not out_dir:
+            raise HTTPException(status_code=400, detail="out_dir is required")
+        base = Path(out_dir).expanduser()
+        path = base / "audio_metadata" / "audio_abs_start.json"
+        if not path.exists():
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": "audio_abs_start.json not found",
+            }
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": f"Failed to read JSON: {exc}",
+            }
+        max_chars = 200000
+        truncated = False
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... (truncated)"
+            truncated = True
+        return {"ok": True, "path": str(path), "text": text, "truncated": truncated}
 
     @app.get("/api/pick-dir")
     def api_pick_dir(initial: str = "") -> Dict[str, Any]:
@@ -317,8 +516,8 @@ def create_app() -> FastAPI:
         return {"path": "", "canceled": True}
 
     @app.get("/", response_class=HTMLResponse)
-    def home() -> RedirectResponse:
-        return RedirectResponse(url="/runs")
+    def home(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse("home.html", {"request": request})
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs(request: Request) -> HTMLResponse:
@@ -338,11 +537,44 @@ def create_app() -> FastAPI:
             {"request": request, "runs": runs_view},
         )
 
+    @app.get("/audio-timestamp/runs", response_class=HTMLResponse)
+    def audio_timestamp_runs(request: Request) -> HTMLResponse:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT * FROM timestamp_runs ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        runs_view: List[Dict[str, Any]] = []
+        for row in rows:
+            d = dict(row)
+            try:
+                args = json.loads(d.get("args_json") or "{}")
+            except Exception:
+                args = {}
+            d["site"] = args.get("site", "")
+            runs_view.append(d)
+        return templates.TemplateResponse(
+            "audio_timestamp_runs.html",
+            {"request": request, "runs": runs_view},
+        )
+
     @app.get("/api/runs")
     def api_runs() -> List[Dict[str, Any]]:
         conn = get_conn()
         rows = conn.execute(
             "SELECT id, status, exit_code FROM runs ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/audio-timestamp/runs")
+    def api_audio_timestamp_runs() -> List[Dict[str, Any]]:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT id, status, finished_at, records_count
+            FROM timestamp_runs
+            ORDER BY id DESC
+            LIMIT 200
+            """
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -369,7 +601,17 @@ def create_app() -> FastAPI:
 
     @app.get("/runs/new", response_class=HTMLResponse)
     def runs_new() -> RedirectResponse:
-        draft_id = _draft_create()
+        draft_id = _draft_create(mode="sync")
+        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+
+    @app.get("/tools/audio-timestamp")
+    def tools_audio_timestamp() -> RedirectResponse:
+        draft_id = _draft_create(mode="audio_timestamp")
+        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+
+    @app.get("/tools/audio-timestamp/new")
+    def tools_audio_timestamp_new() -> RedirectResponse:
+        draft_id = _draft_create(mode="audio_timestamp")
         return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
 
     @app.get("/api/drafts/{draft_id}/validate-audio")
@@ -420,6 +662,8 @@ def create_app() -> FastAPI:
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            data.pop("timestamp_output_path", None)
+            data.pop("timestamp_run_id", None)
         data["audio_dir"] = audio_dir
         _draft_set(draft_id, data)
 
@@ -858,6 +1102,10 @@ def create_app() -> FastAPI:
             "can_reuse_audio_decoded": False,
             "split_decoded_count": 0,
             "serial_chunks_count": 0,
+            "audio_metadata": {
+                "exists": False,
+                "abs_json": False,
+            },
             "synced_segments_count": 0,
             "synced_segments_preview": [],
             "total_segments": None,
@@ -879,6 +1127,7 @@ def create_app() -> FastAPI:
                 "audio_ok": bool(data.get("audio_ok", False)),
                 "audio_result": data.get("audio_result"),
                 "error": data.get("audio_error"),
+                **_wizard_flow_context(data, step=1),
             },
         )
 
@@ -929,6 +1178,7 @@ def create_app() -> FastAPI:
                 "video_ok": bool(data.get("video_ok", False)),
                 "video_result": data.get("video_result"),
                 "error": data.get("video_error"),
+                **_wizard_flow_context(data, step=2),
             },
         )
 
@@ -949,6 +1199,8 @@ def create_app() -> FastAPI:
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            data.pop("timestamp_output_path", None)
+            data.pop("timestamp_run_id", None)
 
         data["video_dir"] = video_dir
         result = validate_video_dir(video_dir)
@@ -975,8 +1227,19 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
         if not bool(data.get("video_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        mode = str(data.get("mode") or "sync")
+        template_name = (
+            "wizard_output_timestamp.html"
+            if mode == "audio_timestamp"
+            else "wizard_output_sync.html"
+        )
+        continue_url = (
+            f"/wizard/{draft_id}/select"
+            if mode == "audio_timestamp"
+            else f"/wizard/{draft_id}/select"
+        )
         return templates.TemplateResponse(
-            "wizard_output.html",
+            template_name,
             {
                 "request": request,
                 "draft_id": draft_id,
@@ -984,6 +1247,8 @@ def create_app() -> FastAPI:
                 "out_ok": bool(data.get("out_ok", False)),
                 "out_result": data.get("out_result"),
                 "error": data.get("out_error"),
+                "continue_url": continue_url,
+                **_wizard_flow_context(data, step=3),
             },
         )
 
@@ -993,6 +1258,8 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("out_dir") != out_dir:
             data.pop("target_pairs", None)
+            data.pop("timestamp_output_path", None)
+            data.pop("timestamp_run_id", None)
         data["out_dir"] = out_dir
         segments = data.get("segments_all")
         if not isinstance(segments, list):
@@ -1007,6 +1274,31 @@ def create_app() -> FastAPI:
     @app.get("/wizard/{draft_id}/select", response_class=HTMLResponse)
     def wizard_select(request: Request, draft_id: int) -> HTMLResponse:
         data = _draft_get(draft_id)
+        if str(data.get("mode") or "sync") == "audio_timestamp":
+            if not bool(data.get("audio_ok", False)):
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/audio", status_code=303
+                )
+            if not bool(data.get("video_ok", False)):
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/video", status_code=303
+                )
+            if not bool(data.get("out_ok", False)):
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/output", status_code=303
+                )
+            output_json = _resolve_timestamp_output_path(data)
+            return templates.TemplateResponse(
+                "wizard_timestamp_select.html",
+                {
+                    "request": request,
+                    "draft_id": draft_id,
+                    "site": data.get("site", "nbu_lounge"),
+                    "output_json": output_json or "",
+                    "error": data.get("select_error"),
+                    **_wizard_flow_context(data, step=4),
+                },
+            )
         if not bool(data.get("audio_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
         if not bool(data.get("video_ok", False)):
@@ -1067,6 +1359,7 @@ def create_app() -> FastAPI:
                 "missing_json_map": missing_json_map,
                 "synced_pair_map": synced_pair_map,
                 "error": data.get("select_error"),
+                **_wizard_flow_context(data, step=4),
             },
         )
 
@@ -1077,8 +1370,10 @@ def create_app() -> FastAPI:
         target_pairs: Optional[List[str]] = Form(default=None),
         log_level: str = Form(default="INFO"),
         reuse_audio: Optional[str] = Form(default=None),
+        output_json: Optional[str] = Form(default=None),
     ) -> RedirectResponse:
         data = _draft_get(draft_id)
+        mode = str(data.get("mode") or "sync")
         data["site"] = site
         picked_pairs = _normalize_target_pairs(target_pairs)
 
@@ -1090,6 +1385,27 @@ def create_app() -> FastAPI:
 
         data["select_error"] = None
         data["run_error"] = None
+        if mode == "audio_timestamp":
+            out_path = _resolve_timestamp_output_path(data, override=output_json)
+            if not out_path:
+                data["select_error"] = "Output JSON path is required."
+                _draft_set(draft_id, data)
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/select", status_code=303
+                )
+            data["timestamp_output_path"] = out_path
+            data["target_pairs"] = []
+            data["log_level"] = log_level
+            data["skip_decode"] = False
+            data["overwrite_clips"] = False
+            data["split"] = False
+            data["split_overwrite"] = False
+            data["split_clean"] = False
+            data["split_chunk_seconds"] = 3600
+            data["schedule_at"] = ""
+            data["timestamp_run_id"] = None
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/summary", status_code=303)
         if not picked_pairs:
             data["select_error"] = "Select at least one segment/camera pair."
             _draft_set(draft_id, data)
@@ -1137,6 +1453,7 @@ def create_app() -> FastAPI:
     @app.get("/wizard/{draft_id}/summary", response_class=HTMLResponse)
     def wizard_draft_summary(request: Request, draft_id: int) -> HTMLResponse:
         data = _draft_get(draft_id)
+        mode = str(data.get("mode") or "sync")
         if not bool(data.get("audio_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
         if not bool(data.get("video_ok", False)):
@@ -1163,14 +1480,27 @@ def create_app() -> FastAPI:
             "split_clean": bool(data.get("split_clean", False)),
             "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
         }
+        if mode == "audio_timestamp":
+            output_path = _resolve_timestamp_output_path(data)
+            return templates.TemplateResponse(
+                "wizard_timestamp_summary.html",
+                {
+                    "request": request,
+                    "draft_id": draft_id,
+                    "args": args,
+                    "output_path": output_path,
+                    **_wizard_flow_context(data, step=5),
+                    "back_url": f"/wizard/{draft_id}/select",
+                },
+            )
         return templates.TemplateResponse(
             "wizard_summary.html",
             {
                 "request": request,
                 "draft_id": draft_id,
                 "args": args,
-                "title_value": data.get("title", ""),
-                "schedule_at": data.get("schedule_at", ""),
+                **_wizard_flow_context(data, step=5),
+                "back_url": f"/wizard/{draft_id}/select",
             },
         )
 
@@ -1178,6 +1508,7 @@ def create_app() -> FastAPI:
     def wizard_start(draft_id: int) -> RedirectResponse:
         data = _draft_get(draft_id)
         data["run_error"] = None
+        mode = str(data.get("mode") or "sync")
 
         if not bool(data.get("audio_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
@@ -1189,6 +1520,29 @@ def create_app() -> FastAPI:
             data["run_error"] = "Output dir is required."
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        if mode == "audio_timestamp":
+            existing_run_id = data.get("timestamp_run_id")
+            if isinstance(existing_run_id, int):
+                return RedirectResponse(
+                    url=f"/audio-timestamp/runs/{existing_run_id}", status_code=303
+                )
+            output_path = _resolve_timestamp_output_path(data)
+            args: Dict[str, Any] = {
+                "audio_dir": data.get("audio_dir", ""),
+                "video_dir": data.get("video_dir", ""),
+                "out_dir": data.get("out_dir", ""),
+                "site": data.get("site", "nbu_lounge"),
+                "timezone": DEFAULT_TZ.key,
+                "output_json": output_path,
+            }
+            run_id = _create_timestamp_run(args, output_path=output_path or None)
+            data["timestamp_run_id"] = run_id
+            _draft_set(draft_id, data)
+            _start_audio_timestamp_job(draft_id, run_id=run_id)
+            return RedirectResponse(
+                url=f"/audio-timestamp/runs/{run_id}", status_code=303
+            )
 
         args: Dict[str, Any] = {
             "audio_dir": data.get("audio_dir", ""),
@@ -1277,6 +1631,49 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/audio-timestamp/runs/{run_id}", response_class=HTMLResponse)
+    def audio_timestamp_run_detail(request: Request, run_id: int) -> HTMLResponse:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT * FROM timestamp_runs WHERE id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            args = json.loads(row["args_json"])
+        except Exception:
+            args = {}
+        json_text: Optional[str] = None
+        output_path = row["output_path"]
+        if output_path:
+            try:
+                json_text = Path(output_path).read_text(encoding="utf-8")
+            except Exception:
+                json_text = None
+        return templates.TemplateResponse(
+            "audio_timestamp_run_detail.html",
+            {
+                "request": request,
+                "run": row,
+                "args": args,
+                "json_text": json_text,
+            },
+        )
+
+    @app.post("/audio-timestamp/runs/{run_id}/delete")
+    def audio_timestamp_run_delete(run_id: int) -> RedirectResponse:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT status FROM timestamp_runs WHERE id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if str(row["status"]) == "running":
+            raise HTTPException(status_code=400, detail="Cannot delete a running run")
+        with tx(conn):
+            conn.execute("DELETE FROM timestamp_runs WHERE id=?", (run_id,))
+        return RedirectResponse(url="/audio-timestamp/runs", status_code=303)
+
     # (Summary is shown before starting; see /wizard/{draft_id}/summary.)
 
     @app.post("/runs/{run_id}/cancel")
@@ -1353,6 +1750,23 @@ def create_app() -> FastAPI:
         d = dict(row)
         # don't return huge blobs
         return d
+
+    @app.get("/api/audio-timestamp/runs/{run_id}")
+    def api_audio_timestamp_run(run_id: int) -> Dict[str, Any]:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT * FROM timestamp_runs WHERE id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "records_count": row["records_count"],
+            "error": row["error"],
+        }
 
     return app
 

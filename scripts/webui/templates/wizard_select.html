@@ -1,7 +1,7 @@
 {% extends "wizard_layout.html" %}
-{% set nav = "new" %}
-{% set title = "New run" %}
-{% set subtitle = "Step 4/5 — Choose segments and run options" %}
+{% set nav = flow_nav or "new" %}
+{% set title = flow_title or "New run" %}
+{% set subtitle = flow_subtitle or "Step 4/5 — Choose segments and run options" %}
 {% set step = 4 %}
 {% set available_pair_map = available_pair_map | default({}) %}
 {% set missing_json_map = missing_json_map | default({}) %}
@@ -20,20 +20,22 @@
       </select>
     </div>
 
-    <div class="input-row check{% if not reuse_audio_available %} disabled{% endif %}" style="margin-top:8px">
-      <div class="label-row field-label">
-        Reuse audio artifacts
-        <span class="help" data-tip="Reuse existing decoded audio artifacts in the output directory and skip serial decoding."></span>
+    {% if show_reuse_audio is not defined or show_reuse_audio %}
+      <div class="input-row check{% if not reuse_audio_available %} disabled{% endif %}" style="margin-top:8px">
+        <div class="label-row field-label">
+          Reuse audio artifacts
+          <span class="help" data-tip="Reuse existing decoded audio artifacts in the output directory and skip serial decoding."></span>
+        </div>
+        <span class="checkbox">
+          <input type="checkbox" name="reuse_audio" {% if skip_decode %}checked{% endif %} {% if not reuse_audio_available %}disabled{% endif %} />
+        </span>
       </div>
-      <span class="checkbox">
-        <input type="checkbox" name="reuse_audio" {% if skip_decode %}checked{% endif %} {% if not reuse_audio_available %}disabled{% endif %} />
-      </span>
-    </div>
+    {% endif %}
 
     <hr class="divider" />
 
     <div class="hint" style="margin-top:6px">
-      Select segment-camera pairs to sync. OK = already synced. GO = selected. RE = re-sync. -- = missing video. Click a segment or camera header to toggle its row/column.
+      {{ select_hint or "Select segment-camera pairs to sync. OK = already synced. GO = selected. RE = re-sync. -- = missing video. Click a segment or camera header to toggle its row/column." }}
     </div>
 
     <div class="matrix-wrap" style="margin-top:8px">
@@ -88,7 +90,7 @@
     <div class="actions" style="margin-top:12px; justify-content:space-between">
       <div class="actions">
         <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
-        <a class="btn" href="/runs">Cancel</a>
+        <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
       </div>
       <button class="btn primary" type="submit" id="continue_btn">Continue</button>
     </div>

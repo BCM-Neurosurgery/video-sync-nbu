@@ -1,0 +1,49 @@
+{% extends "wizard_layout.html" %}
+{% set nav = flow_nav or "timestamp_new" %}
+{% set title = flow_title or "Find audio timestamp" %}
+{% set subtitle = flow_subtitle or "Step 4/5 — Configure output" %}
+{% set step = 4 %}
+
+{% block wizard %}
+  <form class="form" method="post" action="/wizard/{{ draft_id }}/select">
+    <div class="card stack">
+      <div class="card subcard">
+        <label>
+          <span class="label-row">
+            <h3 style="margin:0">Site</h3>
+            <span class="help" data-tip="Select the decoder preset for serial audio."></span>
+          </span>
+          <div class="input-row">
+            <select name="site" class="narrow-select">
+              {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
+                <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </label>
+
+        <label style="margin-top:12px">
+          <span class="label-row">
+            <h3 style="margin:0">Output JSON</h3>
+            <span class="help" data-tip="Where the computed timestamps JSON will be written."></span>
+          </span>
+          <div class="input-row">
+            <input name="output_json" required value="{{ output_json or '' }}" placeholder="/path/to/audio_abs_start.json" />
+          </div>
+        </label>
+
+        <div class="actions" style="margin-top:12px; justify-content:space-between">
+          <div class="actions">
+            <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
+            <a class="btn" href="{{ cancel_url or '/' }}">Cancel</a>
+          </div>
+          <button class="btn primary" type="submit">Continue</button>
+        </div>
+      </div>
+
+      {% if error %}
+        <div class="alert danger mono">{{ error }}</div>
+      {% endif %}
+    </div>
+  </form>
+{% endblock %}

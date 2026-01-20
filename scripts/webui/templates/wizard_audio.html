@@ -1,7 +1,7 @@
 {% extends "wizard_layout.html" %}
-{% set nav = "new" %}
-{% set title = "New run" %}
-{% set subtitle = "Step 1/6 — Select audio folder" %}
+{% set nav = flow_nav or "new" %}
+{% set title = flow_title or "New run" %}
+{% set subtitle = flow_subtitle or "Step 1/6 — Select audio folder" %}
 {% set step = 1 %}
 
 {% block wizard %}
@@ -23,7 +23,7 @@
         <div id="audio_hint" class="hint" style="margin-top:6px"></div>
 
         <div class="actions" style="margin-top:12px; justify-content:space-between">
-          <a class="btn" href="/runs">Cancel</a>
+          <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
           <div class="actions">
             <button id="btn_recheck" class="btn" type="button" onclick="validateAudio(true)">Re-check</button>
             <button

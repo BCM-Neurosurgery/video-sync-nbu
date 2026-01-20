@@ -1,0 +1,62 @@
+{% extends "layout_timestamp.html" %}
+{% set title = "Audio Timestamp Runs — Audio/Video Synchronization" %}
+{% set nav = "timestamp_history" %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Audio timestamp runs</h1>
+      <p class="muted">Latest 200 timestamp computations.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Status</th>
+          <th>Site</th>
+          <th>Created</th>
+          <th>Finished</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+          <tr>
+            <td><a href="/audio-timestamp/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
+            <td><span id="ts-status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
+            <td class="mono">{{ r.get('site','') }}</td>
+            <td class="mono">{{ r['created_at'] }}</td>
+            <td class="mono" id="ts-finished-{{ r['id'] }}">{{ r['finished_at'] or "" }}</td>
+            <td class="right">
+              <form class="inline" method="post" action="/audio-timestamp/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this timestamp run from history?')">
+                <button class="btn danger" type="submit">Remove</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    async function refreshStatus(){
+      try{
+        const resp = await fetch("/api/audio-timestamp/runs");
+        if(!resp.ok){ return; }
+        const rows = await resp.json();
+        rows.forEach((r) => {
+          const statusEl = document.getElementById(`ts-status-${r.id}`);
+          if(statusEl){
+            statusEl.textContent = r.status;
+            statusEl.className = `pill ${r.status}`;
+          }
+          const finishedEl = document.getElementById(`ts-finished-${r.id}`);
+          if(finishedEl){ finishedEl.textContent = r.finished_at || ""; }
+        });
+      }catch(err){ /* ignore */ }
+    }
+    setInterval(refreshStatus, 3000);
+  </script>
+{% endblock %}
