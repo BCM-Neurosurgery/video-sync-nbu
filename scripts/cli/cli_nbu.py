@@ -134,7 +134,12 @@ from scripts.analysis.anchor_analysis import analyze_anchors_file
 from scripts.analysis.video_analysis import analyze_video
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
-from scripts.filter.timerangefilter import filter_by_time_range, TimeRangeFilterError
+from scripts.filter.timerangefilter import (
+    filter_by_time_range,
+    filter_by_audio_sample_range,
+    TimeRangeFilterError,
+    AudioSampleRangeFilterError,
+)
 from scripts.align.collect_anchors import save_anchors_for_camera
 from scripts.clip.audiocsvclipper import clip_with_anchors
 from scripts.clip.audioclip import clip_from_csv
@@ -447,6 +452,45 @@ def build_targets(
     return targets
 
 
+def _filter_targets_by_affected_segments(
+    targets: dict[str, list[str]],
+    affected_segments: dict[str, list[str]] | None,
+) -> dict[str, list[str]]:
+    """
+    Keep only (segment, camera) entries that overlap the affected-segment mapping.
+    """
+    if not affected_segments:
+        return targets
+
+    filtered_targets: dict[str, list[str]] = {}
+    for seg_id, cam_list in targets.items():
+        if seg_id not in affected_segments:
+            continue
+        affected_cams = set(affected_segments[seg_id])
+        keep_cams = [cam for cam in cam_list if cam in affected_cams]
+        if keep_cams:
+            filtered_targets[seg_id] = keep_cams
+    return filtered_targets
+
+
+def _restrict_ordered_targets(
+    ordered_targets: list[tuple[str, list[str]]],
+    allowed_targets: dict[str, list[str]],
+) -> list[tuple[str, list[str]]]:
+    """
+    Restrict `ordered_targets` (already resume-aware) to `allowed_targets`.
+    """
+    out: list[tuple[str, list[str]]] = []
+    for seg_id, cam_list in ordered_targets:
+        allowed_cams = set(allowed_targets.get(seg_id, []))
+        if not allowed_cams:
+            continue
+        keep_cams = [cam for cam in cam_list if cam in allowed_cams]
+        if keep_cams:
+            out.append((seg_id, keep_cams))
+    return out
+
+
 def run_pipeline(
     audio_dir: Path,
     video_dir: Path,
@@ -468,6 +512,8 @@ def run_pipeline(
     time_start: str | None = None,
     time_end: str | None = None,
     time_zone: str = "UTC",
+    audio_sample_start: int | None = None,
+    audio_sample_end: int | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -483,19 +529,60 @@ def run_pipeline(
         )
         return 5
 
-    # Creates time-range-specific output folder if time range is specified
-    if time_start and time_end:
+    has_time_args = bool(time_start or time_end)
+    has_sample_args = (audio_sample_start is not None) or (audio_sample_end is not None)
+    time_mode = bool(time_start and time_end)
+    sample_mode = (audio_sample_start is not None) and (audio_sample_end is not None)
+
+    if has_time_args and has_sample_args:
+        logger.error(
+            "Choose one filter mode only: --time-start/--time-end or "
+            "--audio-sample-start/--audio-sample-end."
+        )
+        return 3
+
+    # Create range-specific output subfolder when a range filter is used.
+    if time_mode:
         from datetime import datetime
 
-        # Parse times to create folder name (using user's timezone format)
-        start_dt = datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
-        end_dt = datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
-        # Adding current timestamp to make each run unique
+        try:
+            start_dt = datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            logger.error(
+                "Invalid time format. Use 'YYYY-MM-DD HH:MM:SS' for --time-start/--time-end."
+            )
+            return 3
+
         run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        time_range_folder = f"{start_dt.strftime('%Y%m%d_%H%M%S')}-{end_dt.strftime('%Y%m%d_%H%M%S')}_run_at_{run_timestamp}"
+        time_range_folder = (
+            f"{start_dt.strftime('%Y%m%d_%H%M%S')}-"
+            f"{end_dt.strftime('%Y%m%d_%H%M%S')}_run_at_{run_timestamp}"
+        )
         out_dir = out_dir / time_range_folder
         out_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output directory for time range: %s", out_dir)
+    elif sample_mode:
+        if audio_sample_start < 0 or audio_sample_end < 0:
+            logger.error("Audio sample range must be non-negative.")
+            return 3
+        if audio_sample_end < audio_sample_start:
+            logger.error(
+                "--audio-sample-end (%d) must be >= --audio-sample-start (%d).",
+                audio_sample_end,
+                audio_sample_start,
+            )
+            return 3
+
+        from datetime import datetime
+
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sample_range_folder = (
+            f"samples_{audio_sample_start}-{audio_sample_end}_run_at_{run_timestamp}"
+        )
+        out_dir = out_dir / sample_range_folder
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Output directory for sample range: %s", out_dir)
 
     # Discover audio group once (shared across segments/cams)
     try:
@@ -556,9 +643,9 @@ def run_pipeline(
         logger.error("Unexpected error preparing audio: %s", e)
         return 4
 
-    # Time-range filter if entered by user
+    # Optional serial-csv range filter (time or audio sample mode)
     affected_segments_dict = None
-    if time_start and time_end:
+    if time_mode:
         logger.info(
             "Applying time-range filter: %s to %s (%s)", time_start, time_end, time_zone
         )
@@ -571,40 +658,59 @@ def run_pipeline(
                 user_timezone=time_zone,
             )
             logger.info("Time-range filter applied successfully")
-
-            # Update targets to only include affected segments/cameras
-            if affected_segments_dict:
-                new_targets = {}
-                for seg_id, cam_list in targets.items():
-                    if seg_id in affected_segments_dict:
-                        # Filter cameras to only those with data in time range
-                        affected_cams = set(affected_segments_dict[seg_id])
-                        filtered_cams = [c for c in cam_list if c in affected_cams]
-                        if filtered_cams:
-                            new_targets[seg_id] = filtered_cams
-
-                if not new_targets:
-                    logger.warning(
-                        "Time-range filter resulted in no segments to process"
-                    )
-                    return 0
-
-                targets = new_targets
-                logger.info(
-                    "Targets filtered by time range: %d segment(s), %d total camera(s)",
-                    len(targets),
-                    sum(len(cams) for cams in targets.values()),
-                )
-        except TimeRangeFilterError as e:
+        except (TimeRangeFilterError, AudioSampleRangeFilterError) as e:
             logger.error("Time-range filter failed: %s", e)
             return 4
         except Exception as e:
             logger.error("Unexpected error in time-range filter: %s", e)
             return 4
-    elif time_start or time_end:
+    elif sample_mode:
+        logger.info(
+            "Applying audio-sample filter: %d to %d",
+            audio_sample_start,
+            audio_sample_end,
+        )
+        try:
+            filtered_csv, affected_segments_dict = filter_by_audio_sample_range(
+                serial_csv=filtered_csv,
+                video_dir=video_dir,
+                audio_sample_start=audio_sample_start,
+                audio_sample_end=audio_sample_end,
+            )
+            logger.info("Audio-sample filter applied successfully")
+        except (TimeRangeFilterError, AudioSampleRangeFilterError) as e:
+            logger.error("Audio-sample filter failed: %s", e)
+            return 4
+        except Exception as e:
+            logger.error("Unexpected error in audio-sample filter: %s", e)
+            return 4
+    elif has_time_args:
         logger.warning(
             "Both --time-start and --time-end must be specified for time-range filtering. Ignoring."
         )
+    elif has_sample_args:
+        logger.warning(
+            "Both --audio-sample-start and --audio-sample-end must be specified for sample-range filtering. Ignoring."
+        )
+
+    if affected_segments_dict:
+        targets = _filter_targets_by_affected_segments(targets, affected_segments_dict)
+        if not targets:
+            logger.warning("Range filter resulted in no segments to process")
+            return 0
+        logger.info(
+            "Targets filtered by range: %d segment(s), %d total camera(s)",
+            len(targets),
+            sum(len(cams) for cams in targets.values()),
+        )
+
+    # Keep original ordering/resume behavior but restrict by any range filter output.
+    ordered_targets = _restrict_ordered_targets(ordered_targets, targets)
+    if not ordered_targets:
+        logger.warning("No targets to process after applying filters.")
+        return 0
+
+    targets_for_processing = {seg_id: cams for seg_id, cams in ordered_targets}
 
     failures = 0
     for seg_id, cam_list in ordered_targets:
@@ -625,19 +731,23 @@ def run_pipeline(
         else:
             logger.info("segment %s: done!", seg_id)
 
-    # Concatenate segments if time-range filter was used and multiple segments were processed
-    if time_start and time_end and len(targets) > 1:
-        logger.info("Concatenating videos across %d segments", len(targets))
+    # Concatenate segments when range mode is used and multiple segments were processed.
+    if (time_mode or sample_mode) and len(targets_for_processing) > 1:
+        logger.info(
+            "Concatenating videos across %d segments", len(targets_for_processing)
+        )
 
         # Group cameras across all segments
         all_cameras = set()
-        for cam_list in targets.values():
+        for cam_list in targets_for_processing.values():
             all_cameras.update(cam_list)
 
         for cam_serial in sorted(all_cameras):
             # Find which segments have this camera
             segments_with_cam = [
-                seg_id for seg_id, cam_list in targets.items() if cam_serial in cam_list
+                seg_id
+                for seg_id, cam_list in targets_for_processing.items()
+                if cam_serial in cam_list
             ]
 
             if len(segments_with_cam) > 1:
@@ -1223,6 +1333,16 @@ if __name__ == "__main__":
         default="UTC",
         help="Timezone for time-start and time-end (IANA format, e.g., 'America/Chicago', 'US/Central'). Default: UTC.",
     )
+    parser.add_argument(
+        "--audio-sample-start",
+        type=int,
+        help="Start sample index for sample-range filter (inclusive).",
+    )
+    parser.add_argument(
+        "--audio-sample-end",
+        type=int,
+        help="End sample index for sample-range filter (inclusive).",
+    )
 
     args = parser.parse_args()
 
@@ -1248,5 +1368,7 @@ if __name__ == "__main__":
         time_start=args.time_start,
         time_end=args.time_end,
         time_zone=args.time_zone,
+        audio_sample_start=args.audio_sample_start,
+        audio_sample_end=args.audio_sample_end,
     )
     raise SystemExit(rc)
