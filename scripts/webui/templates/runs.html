@@ -32,7 +32,9 @@
               <span id="status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span>
             </td>
             <td class="mono">{{ r['created_at'] }}</td>
-            <td class="mono" id="exit-{{ r['id'] }}">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
+            <td class="mono" id="exit-{{ r['id'] }}">
+              {{ r['exit_code'] if r['exit_code'] is not none else "" }}
+            </td>
             <td class="right">
               <a class="btn" href="/runs/{{ r['id'] }}/logs" target="_blank">Log</a>
               <form id="remove-{{ r['id'] }}"

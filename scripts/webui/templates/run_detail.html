@@ -35,7 +35,9 @@
       <div class="k">Finished</div>
       <div class="v mono" id="finished_at">{{ run['finished_at'] or "" }}</div>
       <div class="k">Exit code</div>
-      <div class="v mono" id="exit_code">{{ run['exit_code'] if run['exit_code'] is not none else "" }}</div>
+      <div class="v mono" id="exit_code">
+        {{ run['exit_code'] if run['exit_code'] is not none else "" }}
+      </div>
       <div class="k">PID</div>
       <div class="v mono" id="pid">{{ run['pid'] if run['pid'] is not none else "" }}</div>
     </div>

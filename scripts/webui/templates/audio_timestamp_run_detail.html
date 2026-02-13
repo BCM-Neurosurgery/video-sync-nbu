@@ -22,7 +22,9 @@
       <div class="k">Finished</div>
       <div class="v mono" id="finished_at">{{ run['finished_at'] or "" }}</div>
       <div class="k">Records</div>
-      <div class="v mono" id="records_count">{{ run['records_count'] if run['records_count'] is not none else "" }}</div>
+      <div class="v mono" id="records_count">
+        {{ run['records_count'] if run['records_count'] is not none else "" }}
+      </div>
     </div>
     <hr class="divider" />
     <h3>Inputs</h3>
@@ -44,7 +46,9 @@
       <div class="muted small">
         Saved to <span class="mono">{{ run['output_path'] }}</span>
       </div>
-      {% if json_text %}<pre class="json-box mono" style="margin-top:10px">{{ json_text }}</pre>{% endif %}
+      {% if json_text %}
+        <pre class="json-box mono" style="margin-top:10px">{{ json_text }}</pre>
+      {% endif %}
     {% endif %}
   </div>
   <script>

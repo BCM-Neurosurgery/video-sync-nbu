@@ -378,18 +378,9 @@ def _build_range_catalog(
 
 def _default_range_config(cameras: List[str]) -> Dict[str, Any]:
     return {
-        "global": {
-            "mode": "manual",
-            "time_start": "",
-            "time_end": "",
-            "time_zone": WEBUI_DEFAULT_TIME_ZONE,
-            "sample_start": "",
-            "sample_end": "",
-        },
         "cameras": {
             str(cam): {
                 "enabled": True,
-                "use_global": True,
                 "mode": "manual",
                 "time_start": "",
                 "time_end": "",
@@ -407,20 +398,6 @@ def _coerce_range_config(raw: object, cameras: List[str]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return cfg
 
-    global_raw = raw.get("global")
-    if isinstance(global_raw, dict):
-        cfg["global"]["mode"] = _normalize_range_mode(global_raw.get("mode"))
-        cfg["global"]["time_start"] = _normalize_time_text(global_raw.get("time_start"))
-        cfg["global"]["time_end"] = _normalize_time_text(global_raw.get("time_end"))
-        cfg["global"]["time_zone"] = (
-            str(global_raw.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
-            or WEBUI_DEFAULT_TIME_ZONE
-        )
-        s0 = _parse_int_or_none(global_raw.get("sample_start"))
-        s1 = _parse_int_or_none(global_raw.get("sample_end"))
-        cfg["global"]["sample_start"] = "" if s0 is None else str(s0)
-        cfg["global"]["sample_end"] = "" if s1 is None else str(s1)
-
     cameras_raw = raw.get("cameras")
     if isinstance(cameras_raw, dict):
         for cam in cameras:
@@ -429,7 +406,6 @@ def _coerce_range_config(raw: object, cameras: List[str]) -> Dict[str, Any]:
                 continue
             cur = cfg["cameras"][cam]
             cur["enabled"] = bool(cam_raw.get("enabled", True))
-            cur["use_global"] = bool(cam_raw.get("use_global", True))
             cur["mode"] = _normalize_range_mode(cam_raw.get("mode"))
             cur["time_start"] = _normalize_time_text(cam_raw.get("time_start"))
             cur["time_end"] = _normalize_time_text(cam_raw.get("time_end"))
@@ -446,11 +422,8 @@ def _coerce_range_config(raw: object, cameras: List[str]) -> Dict[str, Any]:
 
 
 def _resolve_camera_rule(range_config: Dict[str, Any], cam: str) -> Dict[str, Any]:
-    global_rule = dict(range_config.get("global") or {})
     cam_rules = range_config.get("cameras") or {}
-    local_rule = dict(cam_rules.get(str(cam)) or {})
-    use_global = bool(local_rule.get("use_global", True))
-    base = global_rule if use_global else local_rule
+    base = dict(cam_rules.get(str(cam)) or {})
     return {
         "mode": _normalize_range_mode(base.get("mode")),
         "time_start": _normalize_time_text(base.get("time_start")),
@@ -461,8 +434,7 @@ def _resolve_camera_rule(range_config: Dict[str, Any], cam: str) -> Dict[str, An
         ),
         "sample_start": _parse_int_or_none(base.get("sample_start")),
         "sample_end": _parse_int_or_none(base.get("sample_end")),
-        "enabled": bool(local_rule.get("enabled", True)),
-        "use_global": use_global,
+        "enabled": bool(base.get("enabled", True)),
     }
 
 
@@ -561,8 +533,8 @@ def _build_sync_run_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         cameras = sorted({p.split("::", 1)[1] for p in selected_pairs if "::" in p})
     range_config = _coerce_range_config(data.get("range_config"), cameras)
 
-    grouped: Dict[Tuple[str, str, str, str, str], List[str]] = {}
-    order: List[Tuple[str, str, str, str, str]] = []
+    grouped: Dict[Tuple[str, str, str, str], List[str]] = {}
+    order: List[Tuple[str, str, str, str]] = []
 
     for pair in sorted(selected_pairs):
         cam = pair.split("::", 1)[1] if "::" in pair else ""
@@ -574,7 +546,6 @@ def _build_sync_run_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 str(rule.get("time_start") or ""),
                 str(rule.get("time_end") or ""),
                 str(rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE),
-                "",
             )
         elif mode == "sample":
             key = (
@@ -582,10 +553,9 @@ def _build_sync_run_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 str(rule.get("sample_start") or ""),
                 str(rule.get("sample_end") or ""),
                 "",
-                "",
             )
         else:
-            key = ("manual", "", "", "", "")
+            key = ("manual", "", "", "")
 
         if key not in grouped:
             grouped[key] = []
@@ -594,7 +564,7 @@ def _build_sync_run_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     runs: List[Dict[str, Any]] = []
     for key in order:
-        mode, a, b, c, _ = key
+        mode, a, b, c = key
         entry: Dict[str, Any] = {
             "mode": mode,
             "target_pairs": grouped[key],
@@ -1934,7 +1904,6 @@ def create_app() -> FastAPI:
                 rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
             else:
                 rule["enabled"] = True
-            rule["use_global"] = False
             if selection_mode == "segments":
                 rule["mode"] = "manual"
                 rule["time_start"] = _normalize_time_text(prev_rule.get("time_start"))
