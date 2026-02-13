@@ -3,26 +3,25 @@
 {% set title = flow_title or "Find audio timestamp" %}
 {% set subtitle = flow_subtitle or "Step 5/5 — Summary" %}
 {% set step = 5 %}
-
 {% block wizard %}
   <div class="card">
     <div>
       <h3 style="margin:0">Review</h3>
       <div class="muted small">The timestamp computation will start after you click “Start”.</div>
     </div>
-
     <hr class="divider" />
-
     <h3>Inputs</h3>
     <div class="kv">
-      <div class="k">Audio dir</div><div class="v mono">{{ args.get('audio_dir','') }}</div>
-      <div class="k">Video dir</div><div class="v mono">{{ args.get('video_dir','') }}</div>
-      <div class="k">Output dir</div><div class="v mono">{{ args.get('out_dir','') }}</div>
-      <div class="k">Site</div><div class="v mono">{{ args.get('site','') }}</div>
+      <div class="k">Audio dir</div>
+      <div class="v mono">{{ args.get('audio_dir', '') }}</div>
+      <div class="k">Video dir</div>
+      <div class="v mono">{{ args.get('video_dir', '') }}</div>
+      <div class="k">Output dir</div>
+      <div class="v mono">{{ args.get('out_dir', '') }}</div>
+      <div class="k">Site</div>
+      <div class="v mono">{{ args.get('site', '') }}</div>
     </div>
-
     <hr class="divider" />
-
     {% if output_path %}
       <h3>Output</h3>
       <div class="kv">
@@ -30,10 +29,12 @@
         <div class="v mono">{{ output_path }}</div>
       </div>
     {% endif %}
-
-    <div class="actions" style="margin-top:14px; justify-content:space-between">
+    <div class="actions"
+         style="margin-top:14px;
+                justify-content:space-between">
       <div class="actions">
-        <a class="btn" href="{{ back_url or ('/wizard/' ~ draft_id ~ '/select') }}">Back</a>
+        <a class="btn"
+           href="{{ back_url or ('/wizard/' ~ draft_id ~ '/select') }}">Back</a>
         <a class="btn" href="{{ cancel_url or '/' }}">Cancel</a>
       </div>
       <form method="post" action="/wizard/{{ draft_id }}/start" class="inline">

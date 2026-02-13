@@ -6,15 +6,15 @@
       {% if subtitle %}<p class="muted">{{ subtitle }}</p>{% endif %}
     </div>
   </div>
-
   <div class="card" style="margin-bottom:12px">
     <div class="steps">
       {% set steps = flow_steps or ["Audio", "Video", "Output", "Select", "Summary"] %}
       {% for label in steps %}
-        <div class="step {% if step >= loop.index %}on{% endif %}">{{ loop.index }} <span>{{ label }}</span></div>
+        <div class="step {% if step >= loop.index %}on{% endif %}">
+          {{ loop.index }} <span>{{ label }}</span>
+        </div>
       {% endfor %}
     </div>
   </div>
-
   {% block wizard %}{% endblock %}
 {% endblock %}

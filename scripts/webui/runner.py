@@ -73,6 +73,22 @@ def build_cli_cmd(args: Dict[str, object]) -> List[str]:
     if split_chunk_seconds:
         cmd.extend(["--split-chunk-seconds", str(int(split_chunk_seconds))])
 
+    time_start = args.get("time_start")
+    time_end = args.get("time_end")
+    if (time_start is not None and str(time_start).strip() != "") or (
+        time_end is not None and str(time_end).strip() != ""
+    ):
+        add("--time-start", time_start)
+        add("--time-end", time_end)
+        add("--time-zone", args.get("time_zone") or "America/Chicago")
+
+    audio_sample_start = args.get("audio_sample_start")
+    if audio_sample_start is not None and str(audio_sample_start).strip() != "":
+        cmd.extend(["--audio-sample-start", str(int(audio_sample_start))])
+    audio_sample_end = args.get("audio_sample_end")
+    if audio_sample_end is not None and str(audio_sample_end).strip() != "":
+        cmd.extend(["--audio-sample-end", str(int(audio_sample_end))])
+
     return cmd
 
 

@@ -3,7 +3,6 @@
 {% set title = flow_title or "New run" %}
 {% set subtitle = flow_subtitle or "Step 1/6 — Select audio folder" %}
 {% set step = 1 %}
-
 {% block wizard %}
   <form class="form" method="post" action="/wizard/{{ draft_id }}/audio">
     <div class="card stack">
@@ -11,134 +10,133 @@
         <label>
           <span class="label-row">
             <h3 style="margin:0">Audio dir</h3>
-            <span class="help" data-tip="Folder containing the channelized audio files (e.g., ...-01.mp3, ...-02.mp3, ...-03.mp3)."></span>
+            <span class="help"
+                  data-tip="Folder containing the channelized audio files (e.g., ...-01.mp3, ...-02.mp3, ...-03.mp3)."></span>
             <span id="audio_status" class="pill" style="margin-left:6px">Not checked</span>
           </span>
           <div class="input-row">
-            <input id="audio_dir" name="audio_dir" required value="{{ audio_dir or '' }}" placeholder="/path/to/audio" />
+            <input id="audio_dir"
+                   name="audio_dir"
+                   required
+                   value="{{ audio_dir or '' }}"
+                   placeholder="/path/to/audio" />
             <button class="btn" type="button" onclick="browseDir('audio_dir')">Browse</button>
           </div>
         </label>
-
         <div id="audio_hint" class="hint" style="margin-top:6px"></div>
-
-        <div class="actions" style="margin-top:12px; justify-content:space-between">
+        <div class="actions"
+             style="margin-top:12px;
+                    justify-content:space-between">
           <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
           <div class="actions">
-            <button id="btn_recheck" class="btn" type="button" onclick="validateAudio(true)">Re-check</button>
-            <button
-              id="btn_continue"
-              class="btn primary"
-              type="button"
-              onclick="location.href='/wizard/{{ draft_id }}/video'"
-              disabled
-              title="Continue is available after the audio check passes"
-            >Continue</button>
+            <button id="btn_recheck"
+                    class="btn"
+                    type="button"
+                    onclick="validateAudio(true)">Re-check</button>
+            <button id="btn_continue"
+                    class="btn primary"
+                    type="button"
+                    onclick="location.href='/wizard/{{ draft_id }}/video'"
+                    disabled
+                    title="Continue is available after the audio check passes">Continue</button>
           </div>
         </div>
       </div>
-
       <div id="audio_result_wrap" class="stack">
-      {% if error and not audio_result %}
-        <div class="alert danger mono">{{ error }}</div>
-      {% endif %}
-
-      {% if audio_result %}
-        {% set check_tips = {
-          "Find audio files": "Finds .wav/.mp3 files in the selected folder.",
-          "Naming pattern": "Validates filenames match <prefix>-<chan>.<ext> with chan=01/02/03 and ext wav/mp3.",
-          "Serial channel present": "Ensures exactly one serial channel file (typically -03) is present.",
-          "Program channel present": "Requires at least one program channel (-01 or -02); warns if one is missing.",
-          "Sample rate detected": "Reads WAV headers or uses ffprobe for MP3 to determine sample rate; must be > 0.",
-          "Duration detected": "Determines duration for each audio file (WAV: header; MP3: ffprobe); must be > 0.",
-        } %}
-
-        <div class="card subcard">
-            <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-              <h3 style="margin:0">Checks</h3>
-              <div class="muted small">Checked at <span class="mono">{{ audio_result.checked_at }}</span></div>
-            </div>
-
-            {% if audio_result.checks %}
-              <table class="table checks-table">
-                <thead>
-                  <tr>
-                    <th>Check</th>
-                    <th class="right statuscol">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for c in audio_result.checks %}
-                    <tr>
-                      <td>
-                        <span class="label-row">
-                          {{ c.name }}
-                          <span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the audio folder.') }}"></span>
-                        </span>
-                      </td>
-                      <td class="right statuscol">
-                        {% if c.status == "pass" %}
-                          <span class="pill succeeded">Pass</span>
-                        {% elif c.status == "fail" %}
-                          <span class="pill failed">Fail</span>
-                        {% elif c.status == "running" %}
-	                          <span class="pill running">Running</span>
-	                        {% elif c.status == "warn" %}
-	                          <span class="pill running">Warn</span>
-	                        {% elif c.status == "skipped" %}
-	                          <span class="pill">Skipped</span>
-	                        {% elif c.status == "pending" %}
-	                          <span class="pill">Pending</span>
-	                        {% else %}
-	                          <span class="pill">{{ c.status }}</span>
-	                        {% endif %}
-	                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% else %}
-              <div class="muted">No checks run yet.</div>
-            {% endif %}
-        </div>
-
-        <div class="card subcard">
-            <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-              <h3 style="margin:0">Summary</h3>
-            </div>
-
-            {% set summary_error = (audio_result.error or error) %}
-            {% if (not audio_result.ok) and summary_error %}
-              <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
-            {% elif audio_result.ok and audio_result.files %}
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th class="right">Sample rate</th>
-                    <th class="right">Duration</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for f in audio_result.files %}
-                    <tr>
-                      <td class="mono">{{ f.name }}</td>
-                      <td class="mono right">{{ f.sample_rate }}</td>
-                      <td class="mono right">{{ f.duration }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% else %}
-              <div class="muted">Summary will appear after checks pass.</div>
-            {% endif %}
-        </div>
-      {% endif %}
-      </div>
-    </div>
-  </form>
-
-  <script>
+        {% if error and not audio_result %}<div class="alert danger mono">{{ error }}</div>{% endif %}
+        {% if audio_result %}
+          {% set check_tips = {
+            "Find audio files": "Finds .wav/.mp3 files in the selected folder.",
+            "Naming pattern": "Validates filenames match <prefix>-<chan>.<ext> with chan=01/02/03 and ext wav/mp3.",
+            "Serial channel present": "Ensures exactly one serial channel file (typically -03) is present.",
+            "Program channel present": "Requires at least one program channel (-01 or -02); warns if one is missing.",
+            "Sample rate detected": "Reads WAV headers or uses ffprobe for MP3 to determine sample rate; must be > 0.",
+            "Duration detected": "Determines duration for each audio file (WAV: header; MP3: ffprobe); must be > 0."
+          } %}
+<div class="card subcard">
+<div class="actions" style="justify-content:space-between; margin-bottom:10px">
+<h3 style="margin:0">Checks</h3>
+<div class="muted small">
+Checked at <span class="mono">{{ audio_result.checked_at }}</span>
+</div>
+</div>
+{% if audio_result.checks %}
+<table class="table checks-table">
+<thead>
+<tr>
+<th>Check</th>
+<th class="right statuscol">Status</th>
+</tr>
+</thead>
+<tbody>
+{% for c in audio_result.checks %}
+<tr>
+<td>
+<span class="label-row">
+{{ c.name }}
+<span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the audio folder.') }}"></span>
+</span>
+</td>
+<td class="right statuscol">
+{% if c.status == "pass" %}
+<span class="pill succeeded">Pass</span>
+{% elif c.status == "fail" %}
+<span class="pill failed">Fail</span>
+{% elif c.status == "running" %}
+<span class="pill running">Running</span>
+{% elif c.status == "warn" %}
+<span class="pill running">Warn</span>
+{% elif c.status == "skipped" %}
+<span class="pill">Skipped</span>
+{% elif c.status == "pending" %}
+<span class="pill">Pending</span>
+{% else %}
+<span class="pill">{{ c.status }}</span>
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<div class="muted">No checks run yet.</div>
+{% endif %}
+</div>
+<div class="card subcard">
+<div class="actions" style="justify-content:space-between; margin-bottom:10px">
+<h3 style="margin:0">Summary</h3>
+</div>
+{% set summary_error = (audio_result.error or error) %}
+{% if (not audio_result.ok) and summary_error %}
+<div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+{% elif audio_result.ok and audio_result.files %}
+<table class="table">
+<thead>
+<tr>
+<th>File</th>
+<th class="right">Sample rate</th>
+<th class="right">Duration</th>
+</tr>
+</thead>
+<tbody>
+{% for f in audio_result.files %}
+<tr>
+<td class="mono">{{ f.name }}</td>
+<td class="mono right">{{ f.sample_rate }}</td>
+<td class="mono right">{{ f.duration }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<div class="muted">Summary will appear after checks pass.</div>
+{% endif %}
+</div>
+{% endif %}
+</div>
+</div>
+</form>
+<script>
     const draftId = {{ draft_id }};
     const audioInput = document.getElementById("audio_dir");
     const statusPill = document.getElementById("audio_status");
@@ -149,7 +147,7 @@
 
     function esc(s){
       return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+        "&":"&amp;","<":"&lt ;",">":"&gt;","\"":"&quot;","'":"&#39;"
       }[c]));
     }
 
@@ -343,5 +341,5 @@
         if(recheckBtn) recheckBtn.disabled = true;
       }
     })();
-  </script>
+</script>
 {% endblock %}

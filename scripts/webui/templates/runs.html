@@ -7,10 +7,8 @@
       <h1>Runs</h1>
       <p class="muted">Latest 200 runs. Click a run to view status and logs.</p>
     </div>
-    <div class="actions">
-    </div>
+    <div class="actions"></div>
   </div>
-
   <div class="card">
     <table class="table">
       <thead>
@@ -26,26 +24,35 @@
       <tbody>
         {% for r in runs %}
           <tr>
-            <td><a href="/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
-            <td class="mono">{{ r.get('display_title') or r.get('title','') }}</td>
-            <td><span id="status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
+            <td>
+              <a href="/runs/{{ r['id'] }}">#{{ r['id'] }}</a>
+            </td>
+            <td class="mono">{{ r.get("display_title") or r.get('title','') }}</td>
+            <td>
+              <span id="status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span>
+            </td>
             <td class="mono">{{ r['created_at'] }}</td>
             <td class="mono" id="exit-{{ r['id'] }}">{{ r['exit_code'] if r['exit_code'] is not none else "" }}</td>
             <td class="right">
               <a class="btn" href="/runs/{{ r['id'] }}/logs" target="_blank">Log</a>
-              <form id="remove-{{ r['id'] }}" class="inline{% if r['status'] == 'running' %} hidden{% endif %}" method="post" action="/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this run from history (also deletes its log file)?')">
+              <form id="remove-{{ r['id'] }}"
+                    class="inline{% if r['status'] == 'running' %} hidden{% endif %}"
+                    method="post"
+                    action="/runs/{{ r['id'] }}/delete"
+                    onsubmit="return confirm('Remove this run from history (also deletes its log file)?')">
                 <button class="btn danger" type="submit">Remove</button>
               </form>
             </td>
           </tr>
         {% endfor %}
         {% if runs|length == 0 %}
-          <tr><td colspan="7" class="muted">No runs yet.</td></tr>
+          <tr>
+            <td colspan="7" class="muted">No runs yet.</td>
+          </tr>
         {% endif %}
       </tbody>
     </table>
   </div>
-
   <script>
     async function refreshStatuses(){
       try{

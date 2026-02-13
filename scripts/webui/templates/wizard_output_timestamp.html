@@ -1,15 +1,12 @@
 {% extends "wizard_output_base.html" %}
-
-{% block output_extra_hint %}
-  <div id="out_meta_hint" class="hint" style="margin-top:4px"></div>
-{% endblock %}
-
+{% block output_extra_hint %}<div id="out_meta_hint" class="hint" style="margin-top:4px"></div>{% endblock %}
 {% block output_summary %}
   <div class="card subcard">
-    <div class="actions" style="justify-content:space-between; margin-bottom:10px">
+    <div class="actions"
+         style="justify-content:space-between;
+                margin-bottom:10px">
       <h3 style="margin:0">Summary</h3>
     </div>
-
     {% set summary_error = (out_result.error or error) %}
     {% if (not out_result.ok) and summary_error %}
       <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
@@ -28,84 +25,98 @@
     {% endif %}
   </div>
 {% endblock %}
-
 {% block output_summary_js %}
   let metaLoadedFor = null;
-
   function renderSummary(data){
-    if(!data){ return ""; }
-    const ok = !!data.ok;
-    const err = data.error ? esc(data.error) : "";
-    const meta = data.audio_metadata || {};
-
-    let html = "";
-    html += `<div class="card subcard">`;
-    html += `<div class="actions" style="justify-content:space-between; margin-bottom:10px">`;
-    html += `<h3 style="margin:0">Summary</h3>`;
-    html += `</div>`;
-
+  if(!data){ return ""; }
+  const ok = !!data.ok;
+  const err = data.error ? esc(data.error) : "";
+  const meta = data.audio_metadata || {};
+  let html = "";
+  html += `
+  <div class="card subcard">
+    `;
+    html += `
+    <div class="actions"
+         style="justify-content:space-between;
+                margin-bottom:10px">
+      `;
+      html += `
+      <h3 style="margin:0">Summary</h3>
+      `;
+      html += `
+    </div>
+    `;
     if(!ok && err){
-      html += `<div class="danger-text mono" style="margin-top:0">${err}</div>`;
+    html += `
+    <div class="danger-text mono" style="margin-top:0">${err}</div>
+    `;
     }else if(ok){
-      if(meta.abs_json){
-        html += `<div class="muted small">Audio metadata JSON found in this output folder.</div>`;
-        html += `<pre id="meta_json" class="json-box mono" style="margin-top:10px">Loading...</pre>`;
-      }else if(meta.exists){
-        html += `<div class="muted">Audio metadata folder exists but no audio_abs_start.json yet.</div>`;
-      }else{
-        html += `<div class="muted">No audio metadata JSON found in this output folder.</div>`;
-      }
-    }else{
-      html += `<div class="muted">Summary will appear after checks pass.</div>`;
-    }
-
-    html += `</div>`;
-    return html;
-  }
-
-  function updateMetaHint(data){
-    if(!metaHintEl){
-      return;
-    }
-    const meta = (data && data.audio_metadata) ? data.audio_metadata : {};
     if(meta.abs_json){
-      metaHintEl.textContent = "Audio metadata JSON already exists in this output folder.";
+    html += `
+    <div class="muted small">Audio metadata JSON found in this output folder.</div>
+    `;
+    html += `<pre id="meta_json" class="json-box mono" style="margin-top:10px">Loading...</pre>`;
     }else if(meta.exists){
-      metaHintEl.textContent = "Audio metadata folder exists but no audio_abs_start.json yet.";
+    html += `
+    <div class="muted">Audio metadata folder exists but no audio_abs_start.json yet.</div>
+    `;
     }else{
-      metaHintEl.textContent = "No audio metadata JSON found in this output folder.";
+    html += `
+    <div class="muted">No audio metadata JSON found in this output folder.</div>
+    `;
     }
+    }else{
+    html += `
+    <div class="muted">Summary will appear after checks pass.</div>
+    `;
+    }
+    html += `
+  </div>
+  `;
+  return html;
   }
-
+  function updateMetaHint(data){
+  if(!metaHintEl){
+  return;
+  }
+  const meta = (data && data.audio_metadata) ? data.audio_metadata : {};
+  if(meta.abs_json){
+  metaHintEl.textContent = "Audio metadata JSON already exists in this output folder.";
+  }else if(meta.exists){
+  metaHintEl.textContent = "Audio metadata folder exists but no audio_abs_start.json yet.";
+  }else{
+  metaHintEl.textContent = "No audio metadata JSON found in this output folder.";
+  }
+  }
   function postRender(data){
-    const meta = data && data.audio_metadata ? data.audio_metadata : {};
-    if(data && data.ok && meta.abs_json){
-      loadMetadataJson(data.out_dir);
-    }
+  const meta = data && data.audio_metadata ? data.audio_metadata : {};
+  if(data && data.ok && meta.abs_json){
+  loadMetadataJson(data.out_dir);
   }
-
+  }
   async function loadMetadataJson(outDir){
-    const dir = (outDir || "").trim();
-    if(!dir || metaLoadedFor === dir){
-      return;
-    }
-    const pre = document.getElementById("meta_json");
-    if(!pre){
-      return;
-    }
-    try{
-      const res = await fetch(`/api/audio-metadata?out_dir=${encodeURIComponent(dir)}`);
-      const data = await res.json();
-      if(!data || !data.ok){
-        pre.textContent = data && data.error ? data.error : "Audio metadata JSON not found.";
-        metaLoadedFor = null;
-        return;
-      }
-      pre.textContent = data.text || "";
-      metaLoadedFor = dir;
-    }catch(e){
-      pre.textContent = "Failed to load audio metadata JSON.";
-      metaLoadedFor = null;
-    }
+  const dir = (outDir || "").trim();
+  if(!dir || metaLoadedFor === dir){
+  return;
+  }
+  const pre = document.getElementById("meta_json");
+  if(!pre){
+  return;
+  }
+  try{
+  const res = await fetch(`/api/audio-metadata?out_dir=${encodeURIComponent(dir)}`);
+  const data = await res.json();
+  if(!data || !data.ok){
+  pre.textContent = data && data.error ? data.error : "Audio metadata JSON not found.";
+  metaLoadedFor = null;
+  return;
+  }
+  pre.textContent = data.text || "";
+  metaLoadedFor = dir;
+  }catch(e){
+  pre.textContent = "Failed to load audio metadata JSON.";
+  metaLoadedFor = null;
+  }
   }
 {% endblock %}

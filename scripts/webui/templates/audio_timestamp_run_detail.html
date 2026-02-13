@@ -7,16 +7,14 @@
       <h1>Audio timestamp #{{ run['id'] }}</h1>
     </div>
   </div>
-
-  {% if run['error'] %}
-    <div class="alert danger mono">{{ run['error'] }}</div>
-  {% endif %}
-
+  {% if run['error'] %}<div class="alert danger mono">{{ run['error'] }}</div>{% endif %}
   <div class="card">
     <h3>Status</h3>
     <div class="kv">
       <div class="k">State</div>
-      <div class="v mono" id="status_pill"><span class="pill {{ run['status'] }}">{{ run['status'] }}</span></div>
+      <div class="v mono" id="status_pill">
+        <span class="pill {{ run['status'] }}">{{ run['status'] }}</span>
+      </div>
       <div class="k">Created</div>
       <div class="v mono" id="created_at">{{ run['created_at'] }}</div>
       <div class="k">Started</div>
@@ -26,28 +24,29 @@
       <div class="k">Records</div>
       <div class="v mono" id="records_count">{{ run['records_count'] if run['records_count'] is not none else "" }}</div>
     </div>
-
     <hr class="divider" />
-
     <h3>Inputs</h3>
     <div class="kv">
-      <div class="k">Audio dir</div><div class="v mono">{{ args.get('audio_dir','') }}</div>
-      <div class="k">Video dir</div><div class="v mono">{{ args.get('video_dir','') }}</div>
-      <div class="k">Output dir</div><div class="v mono">{{ args.get('out_dir','') }}</div>
-      <div class="k">Site</div><div class="v mono">{{ args.get('site','') }}</div>
-      <div class="k">Timezone</div><div class="v mono">{{ args.get('timezone','') }}</div>
+      <div class="k">Audio dir</div>
+      <div class="v mono">{{ args.get('audio_dir', '') }}</div>
+      <div class="k">Video dir</div>
+      <div class="v mono">{{ args.get('video_dir', '') }}</div>
+      <div class="k">Output dir</div>
+      <div class="v mono">{{ args.get('out_dir', '') }}</div>
+      <div class="k">Site</div>
+      <div class="v mono">{{ args.get('site', '') }}</div>
+      <div class="k">Timezone</div>
+      <div class="v mono">{{ args.get('timezone', '') }}</div>
     </div>
-
     {% if run['output_path'] %}
       <hr class="divider" />
       <h3>Result JSON</h3>
-      <div class="muted small">Saved to <span class="mono">{{ run['output_path'] }}</span></div>
-      {% if json_text %}
-        <pre class="json-box mono" style="margin-top:10px">{{ json_text }}</pre>
-      {% endif %}
+      <div class="muted small">
+        Saved to <span class="mono">{{ run['output_path'] }}</span>
+      </div>
+      {% if json_text %}<pre class="json-box mono" style="margin-top:10px">{{ json_text }}</pre>{% endif %}
     {% endif %}
   </div>
-
   <script>
     const runId = {{ run['id'] }};
     const statusText = document.getElementById("status_text");
