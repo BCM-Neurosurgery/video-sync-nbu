@@ -11,6 +11,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -34,6 +35,7 @@ from scripts.time.find_audio_abs_time import (
     _record_to_payload,
 )
 from scripts.index.common import DEFAULT_TZ
+from scripts.parsers.jsonfileparser import JsonParser
 
 
 ROOT = Path(__file__).resolve().parent
@@ -190,6 +192,23 @@ def _parse_time_text(raw: object) -> Optional[datetime]:
         return None
 
 
+def _parse_time_text_in_utc(raw: object, source_tz: str = "UTC") -> Optional[datetime]:
+    """
+    Parse wall-clock text and convert to naive UTC datetime for internal comparison.
+    """
+    dt = _parse_time_text(raw)
+    if dt is None:
+        return None
+    tz_name = str(source_tz or "UTC").strip() or "UTC"
+    if tz_name == "UTC":
+        return dt
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except Exception:
+        return None
+    return dt.replace(tzinfo=tzinfo).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _extract_available_pair_map(video_result: Mapping[str, Any]) -> Dict[str, bool]:
     out: Dict[str, bool] = {}
     available_pairs = video_result.get("available_pairs")
@@ -280,27 +299,25 @@ def _build_range_catalog(
         if not json_path.exists():
             continue
         try:
-            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            jp = JsonParser(str(json_path))
+            payload = jp.dic
         except Exception:
             continue
 
         real_times = payload.get("real_times") or []
-        time_start = _normalize_time_text(real_times[0]) if real_times else ""
-        time_end = _normalize_time_text(real_times[-1]) if real_times else ""
+        segment_time_start = _normalize_time_text(real_times[0]) if real_times else ""
+        segment_time_end = _normalize_time_text(real_times[-1]) if real_times else ""
 
-        serials = [str(s).strip() for s in (payload.get("serials") or [])]
-        chunk_serial_data = payload.get("chunk_serial_data") or []
-        if not isinstance(chunk_serial_data, list):
-            chunk_serial_data = []
-
-        for cam_idx, cam in enumerate(serials):
+        serials_raw = payload.get("serials") or []
+        for cam_serial_raw in serials_raw:
+            cam = str(cam_serial_raw).strip()
             key = f"{seg_id}::{cam}"
             if key not in available_pair_map:
                 continue
 
             pair_info: Dict[str, Any] = {
-                "time_start": time_start,
-                "time_end": time_end,
+                "time_start": "" if sample_ready else segment_time_start,
+                "time_end": "" if sample_ready else segment_time_end,
                 "sample_start": None,
                 "sample_end": None,
             }
@@ -308,35 +325,56 @@ def _build_range_catalog(
             if sample_ready:
                 sample_min: Optional[int] = None
                 sample_max: Optional[int] = None
-                for row in chunk_serial_data:
-                    if not isinstance(row, list) or cam_idx >= len(row):
+                matched_start_idx: Optional[int] = None
+                matched_end_idx: Optional[int] = None
+                try:
+                    fixed_serials = jp.get_fixed_chunk_serial_list(cam_serial_raw)
+                except Exception:
+                    fixed_serials = []
+
+                for frame_idx, serial_val_raw in enumerate(fixed_serials):
+                    if frame_idx >= len(real_times):
                         continue
                     try:
-                        serial_val = int(row[cam_idx])
+                        serial_val = int(serial_val_raw)
                     except Exception:
                         continue
                     rng = serial_sample_map.get(serial_val)
                     if rng is None:
                         continue
+
                     s0, s1 = rng
                     sample_min = s0 if sample_min is None else min(sample_min, s0)
                     sample_max = s1 if sample_max is None else max(sample_max, s1)
+                    if matched_start_idx is None:
+                        matched_start_idx = frame_idx
+                    matched_end_idx = frame_idx
+
                 if sample_min is not None and sample_max is not None:
                     pair_info["sample_start"] = int(sample_min)
                     pair_info["sample_end"] = int(sample_max)
+                if matched_start_idx is not None and matched_end_idx is not None:
+                    pair_info["time_start"] = _normalize_time_text(
+                        real_times[matched_start_idx]
+                    )
+                    pair_info["time_end"] = _normalize_time_text(
+                        real_times[matched_end_idx]
+                    )
 
             pairs[key] = pair_info
             pairs_by_camera.setdefault(cam, []).append(key)
 
-            if time_start and time_end:
+            t0 = pair_info.get("time_start")
+            t1 = pair_info.get("time_end")
+            if isinstance(t0, str) and isinstance(t1, str) and t0 and t1:
                 cur = camera_time_bounds.get(cam)
                 if cur is None:
-                    camera_time_bounds[cam] = {"start": time_start, "end": time_end}
+                    camera_time_bounds[cam] = {"start": t0, "end": t1}
                 else:
-                    if time_start < cur["start"]:
-                        cur["start"] = time_start
-                    if time_end > cur["end"]:
-                        cur["end"] = time_end
+                    if t0 < cur["start"]:
+                        cur["start"] = t0
+                    if t1 > cur["end"]:
+                        cur["end"] = t1
 
             s0 = pair_info.get("sample_start")
             s1 = pair_info.get("sample_end")
@@ -441,8 +479,9 @@ def _resolve_camera_rule(range_config: Dict[str, Any], cam: str) -> Dict[str, An
 def _pair_matches_rule(pair_meta: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     mode = rule.get("mode")
     if mode == "time":
-        t0 = _parse_time_text(rule.get("time_start"))
-        t1 = _parse_time_text(rule.get("time_end"))
+        rule_tz = str(rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip() or "UTC"
+        t0 = _parse_time_text_in_utc(rule.get("time_start"), rule_tz)
+        t1 = _parse_time_text_in_utc(rule.get("time_end"), rule_tz)
         p0 = _parse_time_text(pair_meta.get("time_start"))
         p1 = _parse_time_text(pair_meta.get("time_end"))
         if not t0 or not t1 or not p0 or not p1:

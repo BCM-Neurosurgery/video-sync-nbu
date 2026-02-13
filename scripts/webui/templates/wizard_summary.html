@@ -38,16 +38,16 @@
       {% elif mode == 'time' %}
         <div class="k">Per-camera ranges</div>
         <div class="v mono mono-lines">
-          {% for cam, rule in camera_rules|dictsort %}
-            {{ cam }}: {{ rule.get('time_start', '') }} -> {{ rule.get('time_end', '') }} ({{ rule.get('time_zone', 'America/Chicago') }})
-          {% endfor %}
+          {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('time_start', '') }} -> {{ rule.get('time_end', '') }} ({{ rule.get('time_zone', 'America/Chicago') }})
+            {% if not loop.last %}<br />{% endif %}
+          {%- endfor -%}
         </div>
       {% elif mode == 'sample' %}
         <div class="k">Per-camera ranges</div>
         <div class="v mono mono-lines">
-          {% for cam, rule in camera_rules|dictsort %}
-            {{ cam }}: {{ rule.get('sample_start', '') }} -> {{ rule.get('sample_end', '') }}
-          {% endfor %}
+          {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('sample_start', '') }} -> {{ rule.get('sample_end', '') }}
+            {% if not loop.last %}<br />{% endif %}
+          {%- endfor -%}
         </div>
       {% endif %}
     </div>
@@ -60,15 +60,11 @@
       {% if groups|length > 0 %}
         <div class="k">Groups</div>
         <div class="v mono mono-lines">
-          {% for g in groups %}
-            {% if g.get('mode') == 'time' %}
-              {{ loop.index }}. time | {{ g.get('time_start', '') }} -> {{ g.get('time_end', '') }} ({{ g.get('time_zone', 'America/Chicago') }}) | {{ (g.get("target_pairs") or [])|length }} pair(s)
-            {% elif g.get('mode') == 'sample' %}
-              {{ loop.index }}. sample | {{ g.get('audio_sample_start', '') }} -> {{ g.get('audio_sample_end', '') }} | {{ (g.get("target_pairs") or [])|length }} pair(s)
-            {% else %}
-              {{ loop.index }}. segments | {{ (g.get("target_pairs") or [])|length }} pair(s)
-            {% endif %}
-          {% endfor %}
+          {%- for g in groups -%}{%- if g.get('mode') == 'time' -%}{{ loop.index }}. time | {{ g.get('time_start', '') }} -> {{ g.get('time_end', '') }} ({{ g.get('time_zone', 'America/Chicago') }}) | {{ (g.get("target_pairs") or [])|length }} pair(s){%- elif g.get('mode') == 'sample' -%}{{ loop.index }}. sample | {{ g.get('audio_sample_start', '') }} -> {{ g.get('audio_sample_end', '') }} | {{ (g.get("target_pairs") or [])|length }} pair(s){%- else -%}{{ loop.index }}. segments | {{ (g.get("target_pairs") or [])|length }} pair(s){%- endif -%}
+            {% if not loop.last %}
+              <br />
+            {% endif -%}
+          {%- endfor -%}
         </div>
       {% endif %}
     </div>
