@@ -789,6 +789,13 @@ def run_pipeline(
 
     # Keep original ordering/resume behavior but restrict by any range filter output.
     ordered_targets = _restrict_ordered_targets(ordered_targets, targets)
+    if not ordered_targets:
+        logger.warning(
+            "No targets to process after applying filters "
+            "(range/resume may have removed all selected pairs)."
+        )
+        return 0
+
     try:
         run_folder_id, run_root = _allocate_run_dir(artifact_root, preferred_id=run_id)
     except (ValueError, FileExistsError) as e:
@@ -809,10 +816,6 @@ def run_pipeline(
         source_filtered_csv=filtered_csv,
         artifact_root=artifact_root,
     )
-
-    if not ordered_targets:
-        logger.warning("No targets to process after applying filters.")
-        return 0
 
     targets_for_processing = {seg_id: cams for seg_id, cams in ordered_targets}
 
