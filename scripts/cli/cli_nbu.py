@@ -43,7 +43,7 @@ input_dir structure
 Output folder layout (what this tool writes)
 --------------------------------------------
 output_dir structure
-- parent_out
+- out_dir
     - serial_audio_splitted (if --split used)
         - TRBD002_08062025-03-001.wav
         - TRBD002_08062025-03-002.wav
@@ -60,53 +60,57 @@ output_dir structure
         - raw-gapfilled.txt
         - raw-gapfilled-filtered.csv
         - raw-gapfilled-filtered.txt
-    - <segment_id> (e.g. TRBD002_20250806_104707)
-        - <camera_serial1> (e.g. 23512909)
-            - work (intermediate artifacts)
-                - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
-                - gapfilled-filtered-anchors.txt
+    - runs
+        - run0001
+            - run_manifest.json
+            - <segment_id> (e.g. TRBD002_20250806_104707)
+                - <camera_serial1> (e.g. 23512909)
+                    - work (intermediate artifacts)
+                        - gapfilled-filtered-anchors.json             (anchors from filtered CSV)
+                        - gapfilled-filtered-anchors.txt
 
-                - gapfilled-filtered-clipped.csv              (CSV clipped to video window)
-                - gapfilled-filtered-clipped.txt
+                        - gapfilled-filtered-clipped.csv              (CSV clipped to video window)
+                        - gapfilled-filtered-clipped.txt
 
-                - gapfilled-filtered-clipped-local.csv        (clipped, localized to audio dir)
-                - gapfilled-filtered-clipped-local.txt
+                        - gapfilled-filtered-clipped-local.csv        (clipped, localized to audio dir)
+                        - gapfilled-filtered-clipped-local.txt
 
-                - gapfilled-filtered-clipped-local-editplan.json
-                - gapfilled-filtered-clipped-local-padded.csv
-                - gapfilled-filtered-clipped-local-padded.txt
+                        - gapfilled-filtered-clipped-local-editplan.json
+                        - gapfilled-filtered-clipped-local-padded.csv
+                        - gapfilled-filtered-clipped-local-padded.txt
 
-                - gapfilled-filtered-padded-anchors.json      (anchors after padding)
-                - gapfilled-filtered-padded-anchors.txt
+                        - gapfilled-filtered-padded-anchors.json      (anchors after padding)
+                        - gapfilled-filtered-padded-anchors.txt
 
-                - TRBD002_20250806_103745.24253448.txt
-                - TRBD002_20250806_103745.24253448-frameid.txt
-                - TRBD002_20250806_103745.24253448-frameid.json
-                - TRBD002_20250806_103745.24253448-frameid-padplan.json
+                        - TRBD002_20250806_103745.24253448.txt
+                        - TRBD002_20250806_103745.24253448-frameid.txt
+                        - TRBD002_20250806_103745.24253448-frameid.json
+                        - TRBD002_20250806_103745.24253448-frameid-padplan.json
 
-            - audio_clipped
-                - TRBD002_08062025-clipped-01.mp3
-                - TRBD002_08062025-clipped-03.mp3
-            - audio_padded
-                - TRBD002_08062025-clipped-padded-01.mp3
-                - TRBD002_08062025-clipped-padded-03.mp3
-            - video_padded (TODO)
-                - TRBD002_20250806_103745.24253448.mp4
-                - TRBD002_20250806_103745.json
-            - synced_audio
-            - synced_video  (final synced videos)
-            - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
+                    - audio_clipped
+                        - TRBD002_08062025-clipped-01.mp3
+                        - TRBD002_08062025-clipped-03.mp3
+                    - audio_padded
+                        - TRBD002_08062025-clipped-padded-01.mp3
+                        - TRBD002_08062025-clipped-padded-03.mp3
+                    - video_padded (TODO)
+                        - TRBD002_20250806_103745.24253448.mp4
+                        - TRBD002_20250806_103745.json
+                    - synced_audio
+                    - synced_video  (final synced videos)
+                    - sync.log  ← per-camera rotating log (5MB x 3 backups), stamped with [seg/cam]
 
-        - <camera_serial2>
-        ...
-    - <segment_id> (e.g. TRBD002_20250806_105724)
-
+                - <camera_serial2>
+                ...
+            - <segment_id> (e.g. TRBD002_20250806_105724)
+        - run0002
+            - ...
 Logging (clean + consistent)
 ----------------------------
 - Console        : one handler, unified format → "[LEVEL] [seg/cam] message"
 - Run log        : <out_dir>/sync-run.log (rotating, 5MB x 3), format:
                    "%(asctime)s %(levelname)s [%(seg)s/%(cam)s] %(name)s: %(message)s"
-- Per-camera log : <out_dir>/<segment>/<camera>/sync.log (rotating, 5MB x 3), same format;
+- Per-camera log : <out_dir>/runs/runNNNN/<segment>/<camera>/sync.log (rotating, 5MB x 3), same format;
                    stamped with correct [seg/cam] even for logs from other modules.
 
 Return codes
@@ -120,9 +124,11 @@ Return codes
 
 from __future__ import annotations
 
-from pathlib import Path
 import argparse
+from datetime import datetime
+import json
 import logging
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -182,6 +188,93 @@ logger = logging.getLogger("cli")
 
 SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
 UPSIDE_DOWN_CAMERAS: set[str] = {"24253458"}
+
+
+def _allocate_run_dir(
+    out_dir: Path, *, preferred_id: int | None = None
+) -> tuple[str, Path]:
+    """Create a run directory under <out_dir>/runs as runNNNN."""
+    runs_dir = out_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    if preferred_id is not None:
+        if preferred_id <= 0:
+            raise ValueError(f"run-id must be positive, got {preferred_id}")
+        run_id = f"run{preferred_id:04d}"
+        run_root = runs_dir / run_id
+        try:
+            run_root.mkdir(parents=True, exist_ok=False)
+            return run_id, run_root
+        except FileExistsError as e:
+            raise FileExistsError(
+                f"Requested run folder already exists: {run_root}"
+            ) from e
+
+    max_id = 0
+    for entry in runs_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        m = re.fullmatch(r"run(\d+)", entry.name)
+        if not m:
+            continue
+        max_id = max(max_id, int(m.group(1)))
+
+    next_id = max_id + 1
+    while True:
+        run_id = f"run{next_id:04d}"
+        run_root = runs_dir / run_id
+        try:
+            run_root.mkdir(parents=True, exist_ok=False)
+            return run_id, run_root
+        except FileExistsError:
+            next_id += 1
+
+
+def _flatten_target_pairs(targets: list[tuple[str, list[str]]]) -> list[str]:
+    out: list[str] = []
+    for seg_id, cams in targets:
+        for cam in cams:
+            out.append(f"{seg_id}::{cam}")
+    return out
+
+
+def _to_rel_or_abs(path: Path, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except Exception:
+        return str(path.resolve())
+
+
+def _write_run_manifest(
+    *,
+    run_root: Path,
+    run_id: str,
+    mode: str,
+    time_zone: str,
+    time_start: str | None,
+    time_end: str | None,
+    audio_sample_start: int | None,
+    audio_sample_end: int | None,
+    target_pairs: list[str],
+    source_filtered_csv: Path,
+    artifact_root: Path,
+) -> None:
+    manifest = {
+        "run_id": run_id,
+        "mode": mode,
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "time_zone": time_zone,
+        "time_start": time_start if mode == "time_range" else None,
+        "time_end": time_end if mode == "time_range" else None,
+        "audio_sample_start": audio_sample_start if mode == "audio_sample" else None,
+        "audio_sample_end": audio_sample_end if mode == "audio_sample" else None,
+        "target_pairs": target_pairs,
+        "source_filtered_csv": _to_rel_or_abs(source_filtered_csv, artifact_root),
+        "segments_selected": len({p.split("::", 1)[0] for p in target_pairs}),
+        "cameras_selected": len({p.split("::", 1)[1] for p in target_pairs}),
+    }
+    manifest_path = run_root / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
 def list_segments(video_dir: Path) -> list[str]:
@@ -312,7 +405,7 @@ def concatenate_segments_for_camera(
             f.write(f"file '{abs_path}'\n")
 
     # Output concatenated video
-    output_path = concat_dir / f"camera_{cam_serial}_concatenated.mp4"
+    output_path = concat_dir / f"{cam_serial}_synced_concat.mp4"
     if output_path.exists():
         output_path.unlink()
 
@@ -514,6 +607,7 @@ def run_pipeline(
     time_zone: str = "UTC",
     audio_sample_start: int | None = None,
     audio_sample_end: int | None = None,
+    run_id: int | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -541,28 +635,16 @@ def run_pipeline(
         )
         return 3
 
-    # Create range-specific output subfolder when a range filter is used.
     if time_mode:
-        from datetime import datetime
-
         try:
-            start_dt = datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
-            end_dt = datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
+            datetime.strptime(time_start, "%Y-%m-%d %H:%M:%S")
+            datetime.strptime(time_end, "%Y-%m-%d %H:%M:%S")
         except ValueError:
             logger.error(
                 "Invalid time format. Use 'YYYY-MM-DD HH:MM:SS' for --time-start/--time-end."
             )
             return 3
-
-        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        time_range_folder = (
-            f"{start_dt.strftime('%Y%m%d_%H%M%S')}-"
-            f"{end_dt.strftime('%Y%m%d_%H%M%S')}_run_at_{run_timestamp}"
-        )
-        out_dir = out_dir / time_range_folder
-        out_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Output directory for time range: %s", out_dir)
-    elif sample_mode:
+    if sample_mode:
         if audio_sample_start < 0 or audio_sample_end < 0:
             logger.error("Audio sample range must be non-negative.")
             return 3
@@ -574,15 +656,16 @@ def run_pipeline(
             )
             return 3
 
-        from datetime import datetime
+    run_mode = "segments"
+    if time_mode:
+        run_mode = "time_range"
+    elif sample_mode:
+        run_mode = "audio_sample"
 
-        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sample_range_folder = (
-            f"samples_{audio_sample_start}-{audio_sample_end}_run_at_{run_timestamp}"
-        )
-        out_dir = out_dir / sample_range_folder
-        out_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Output directory for sample range: %s", out_dir)
+    artifact_root = out_dir
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    logger.info("Run mode=%s", run_mode)
+    logger.info("Artifact root: %s", artifact_root)
 
     # Discover audio group once (shared across segments/cams)
     try:
@@ -627,7 +710,7 @@ def run_pipeline(
     try:
         filtered_csv = prepare_serial_audio(
             audiogroup=ag,
-            parent_out=out_dir,
+            artifact_root=artifact_root,
             site=site,
             skip_decode=skip_decode,
             do_split=do_split,
@@ -695,17 +778,38 @@ def run_pipeline(
 
     if affected_segments_dict:
         targets = _filter_targets_by_affected_segments(targets, affected_segments_dict)
-        if not targets:
+        if targets:
+            logger.info(
+                "Targets filtered by range: %d segment(s), %d total camera(s)",
+                len(targets),
+                sum(len(cams) for cams in targets.values()),
+            )
+        else:
             logger.warning("Range filter resulted in no segments to process")
-            return 0
-        logger.info(
-            "Targets filtered by range: %d segment(s), %d total camera(s)",
-            len(targets),
-            sum(len(cams) for cams in targets.values()),
-        )
 
     # Keep original ordering/resume behavior but restrict by any range filter output.
     ordered_targets = _restrict_ordered_targets(ordered_targets, targets)
+    try:
+        run_folder_id, run_root = _allocate_run_dir(artifact_root, preferred_id=run_id)
+    except (ValueError, FileExistsError) as e:
+        logger.error("Unable to allocate run output folder: %s", e)
+        return 3
+    logger.info("Run %s output root: %s", run_folder_id, run_root)
+    selected_pairs = _flatten_target_pairs(ordered_targets)
+    _write_run_manifest(
+        run_root=run_root,
+        run_id=run_folder_id,
+        mode=run_mode,
+        time_zone=time_zone,
+        time_start=time_start,
+        time_end=time_end,
+        audio_sample_start=audio_sample_start,
+        audio_sample_end=audio_sample_end,
+        target_pairs=selected_pairs,
+        source_filtered_csv=filtered_csv,
+        artifact_root=artifact_root,
+    )
+
     if not ordered_targets:
         logger.warning("No targets to process after applying filters.")
         return 0
@@ -718,7 +822,7 @@ def run_pipeline(
             video_in=video_dir,
             audio_in=audio_dir,
             seg_id=seg_id,
-            parent_out=out_dir,
+            parent_out=run_root,
             cam_serials=cam_list,
             filtered_csv=filtered_csv,
             overwrite_clips=overwrite_clips,
@@ -755,7 +859,7 @@ def run_pipeline(
                     concat_path = concatenate_segments_for_camera(
                         cam_serial=cam_serial,
                         segments=segments_with_cam,
-                        parent_out=out_dir,
+                        parent_out=run_root,
                         log=logger,
                     )
                     if concat_path:
@@ -772,7 +876,7 @@ def run_pipeline(
 
 def prepare_serial_audio(
     audiogroup: AudioGroup,
-    parent_out: Path,
+    artifact_root: Path,
     site: str,
     *,
     skip_decode: bool = False,
@@ -782,8 +886,8 @@ def prepare_serial_audio(
     split_clean: bool = False,
     split_outdir: Path | None = None,
 ) -> Path:
-    """Decode/gapfill/filter the serial audio once per run and return filtered CSV."""
-    audio_decoded_dir = parent_out / "audio_decoded"
+    """Decode/gapfill/filter serial audio once and return filtered CSV path."""
+    audio_decoded_dir = artifact_root / "audio_decoded"
     audio_decoded_dir.mkdir(parents=True, exist_ok=True)
 
     with log_context(seg="-", cam="-"):
@@ -815,7 +919,7 @@ def prepare_serial_audio(
 
         if do_split:
             serial_mp3 = Path(audiogroup.serial_audio.path)
-            chunks_dir = split_outdir or (parent_out / "serial_audio_splitted")
+            chunks_dir = split_outdir or (artifact_root / "serial_audio_splitted")
             chunks_dir.mkdir(parents=True, exist_ok=True)
 
             logger.info(
@@ -839,7 +943,7 @@ def prepare_serial_audio(
                 logger.warning("Manifest not found: %s", _name(manifest_path))
                 manifest_path = None
 
-            split_csv_dir = parent_out / "split_decoded"
+            split_csv_dir = artifact_root / "split_decoded"
             split_csv_dir.mkdir(parents=True, exist_ok=True)
 
             decode_split_dir_to_csvs(
@@ -1343,6 +1447,12 @@ if __name__ == "__main__":
         type=int,
         help="End sample index for sample-range filter (inclusive).",
     )
+    parser.add_argument(
+        "--run-id",
+        type=int,
+        default=None,
+        help="Optional external run identifier (used by WebUI to align output folder naming).",
+    )
 
     args = parser.parse_args()
 
@@ -1370,5 +1480,6 @@ if __name__ == "__main__":
         time_zone=args.time_zone,
         audio_sample_start=args.audio_sample_start,
         audio_sample_end=args.audio_sample_end,
+        run_id=args.run_id,
     )
     raise SystemExit(rc)

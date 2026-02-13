@@ -47,6 +47,9 @@ def build_cli_cmd(args: Dict[str, object]) -> List[str]:
     add("--out-dir", args.get("out_dir"))
     add("--site", args.get("site"))
     add("--log-level", args.get("log_level") or "INFO")
+    run_id = args.get("run_id")
+    if run_id is not None and str(run_id).strip() != "":
+        cmd.extend(["--run-id", str(int(run_id))])
 
     target_pairs = args.get("target_pairs") or []
     if target_pairs:
@@ -341,7 +344,11 @@ class Runner:
 
 
 async def tail_log_sse(
-    path: Path, *, poll_interval: float = 0.25, max_bytes: int = 1024 * 512
+    path: Path,
+    *,
+    poll_interval: float = 0.25,
+    max_bytes: int = 1024 * 512,
+    start_at_end: bool = False,
 ) -> Iterable[str]:
     path = Path(path)
     pos = 0
@@ -360,7 +367,11 @@ async def tail_log_sse(
             if not initialized:
                 try:
                     size = path.stat().st_size
-                    if size > max_bytes:
+                    if start_at_end:
+                        pos = max(0, size)
+                        drop_first_line = False
+                        notice_line = None
+                    elif size > max_bytes:
                         pos = max(0, size - max_bytes)
                         drop_first_line = pos > 0
                         notice_line = (

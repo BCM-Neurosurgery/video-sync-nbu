@@ -1,8 +1,8 @@
 {% extends "wizard_layout.html" %}
 {% set nav = flow_nav or "new" %}
 {% set title = flow_title or "New run" %}
-{% set subtitle = flow_subtitle or "Step 5/5 — Summary" %}
-{% set step = 5 %}
+{% set subtitle = flow_subtitle or "Step 6/6 — Summary" %}
+{% set step = 6 %}
 {% block wizard %}
   <div class="card">
     <div>
@@ -37,14 +37,14 @@
         <div class="v mono mono-lines">{{ pairs | join("\n") }}</div>
       {% elif mode == 'time' %}
         <div class="k">Per-camera ranges</div>
-        <div class="v mono mono-lines">
+        <div class="v mono">
           {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('time_start', '') }} -> {{ rule.get('time_end', '') }} ({{ rule.get('time_zone', 'America/Chicago') }})
             {% if not loop.last %}<br />{% endif %}
           {%- endfor -%}
         </div>
       {% elif mode == 'sample' %}
         <div class="k">Per-camera ranges</div>
-        <div class="v mono mono-lines">
+        <div class="v mono">
           {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('sample_start', '') }} -> {{ rule.get('sample_end', '') }}
             {% if not loop.last %}<br />{% endif %}
           {%- endfor -%}
@@ -59,11 +59,9 @@
       <div class="v mono">{{ groups|length }}</div>
       {% if groups|length > 0 %}
         <div class="k">Groups</div>
-        <div class="v mono mono-lines">
+        <div class="v mono">
           {%- for g in groups -%}{%- if g.get('mode') == 'time' -%}{{ loop.index }}. time | {{ g.get('time_start', '') }} -> {{ g.get('time_end', '') }} ({{ g.get('time_zone', 'America/Chicago') }}) | {{ (g.get("target_pairs") or [])|length }} pair(s){%- elif g.get('mode') == 'sample' -%}{{ loop.index }}. sample | {{ g.get('audio_sample_start', '') }} -> {{ g.get('audio_sample_end', '') }} | {{ (g.get("target_pairs") or [])|length }} pair(s){%- else -%}{{ loop.index }}. segments | {{ (g.get("target_pairs") or [])|length }} pair(s){%- endif -%}
-            {% if not loop.last %}
-              <br />
-            {% endif -%}
+            {% if not loop.last %}<br />{% endif %}
           {%- endfor -%}
         </div>
       {% endif %}
@@ -75,6 +73,8 @@
       <div class="v mono">{{ args.get('log_level', 'INFO') }}</div>
       <div class="k">Skip decode</div>
       <div class="v mono">{{ 'Yes' if args.get("skip_decode") else 'No' }}</div>
+      <div class="k">Decode strategy</div>
+      <div class="v mono">{{ args.get('decode_choice', '') or "—" }}</div>
       <div class="k">Overwrite clips</div>
       <div class="v mono">{{ 'Yes' if args.get("overwrite_clips") else 'No' }}</div>
       <div class="k">Split</div>

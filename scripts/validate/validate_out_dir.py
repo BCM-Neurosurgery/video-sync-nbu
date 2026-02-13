@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, List, Optional, Set
 
 
@@ -61,40 +62,51 @@ def _count_synced_segments(
     Count segments that appear to have completed syncing in this output dir.
 
     Heuristics:
-    - <out>/<segment>/<camera>/synced_video/*.mp4 exists, OR
-    - <out>/<segment>/<camera>/sync.log exists
+    - <out>/runs/runNNNN/<segment>/<camera>/synced_video/*.mp4 exists, OR
+    - <out>/runs/runNNNN/<segment>/<camera>/sync.log exists
     """
     segs = [str(s).strip() for s in (segments or []) if str(s).strip()]
     seg_set = set(segs)
     synced: Set[str] = set()
 
-    # Only consider segment directories that actually exist in out_dir.
-    existing_seg_dirs: List[Path] = []
-    for d in out_dir.iterdir():
-        if not d.is_dir():
-            continue
-        if seg_set and d.name not in seg_set:
-            continue
-        existing_seg_dirs.append(d)
+    runs_dir = out_dir / "runs"
+    if not runs_dir.is_dir():
+        return {
+            "synced_segments_count": 0,
+            "synced_segments_preview": [],
+            "total_segments": len(segs) if segs else None,
+        }
 
-    for seg_dir in existing_seg_dirs:
-        seg = seg_dir.name
-        # Any camera subdir with evidence of syncing?
-        try:
-            for cam_dir in seg_dir.iterdir():
-                if not cam_dir.is_dir():
-                    continue
-                if (cam_dir / "sync.log").exists():
-                    synced.add(seg)
-                    break
-                sv = cam_dir / "synced_video"
-                if sv.is_dir():
-                    mp4s = list(sv.glob("*.mp4"))
-                    if mp4s:
+    run_dirs = sorted(
+        [
+            d
+            for d in runs_dir.iterdir()
+            if d.is_dir() and re.fullmatch(r"run\d+", d.name)
+        ],
+        key=lambda p: p.name,
+    )
+    for run_dir in run_dirs:
+        for seg_dir in run_dir.iterdir():
+            if not seg_dir.is_dir():
+                continue
+            seg = seg_dir.name
+            if seg_set and seg not in seg_set:
+                continue
+            try:
+                for cam_dir in seg_dir.iterdir():
+                    if not cam_dir.is_dir():
+                        continue
+                    if (cam_dir / "sync.log").exists():
                         synced.add(seg)
                         break
-        except Exception:
-            continue
+                    sv = cam_dir / "synced_video"
+                    if sv.is_dir():
+                        mp4s = list(sv.glob("*.mp4"))
+                        if mp4s:
+                            synced.add(seg)
+                            break
+            except Exception:
+                continue
 
     return {
         "synced_segments_count": len(synced),
@@ -113,8 +125,8 @@ def discover_synced_pairs(
     Discover which segment/camera combinations appear already synced in an output folder.
 
     Evidence:
-    - <out>/<segment>/<camera>/sync.log exists, OR
-    - <out>/<segment>/<camera>/synced_video/*.mp4 exists
+    - <out>/runs/runNNNN/<segment>/<camera>/sync.log exists, OR
+    - <out>/runs/runNNNN/<segment>/<camera>/synced_video/*.mp4 exists
     """
     out_dir = (out_dir or "").strip()
     p = Path(out_dir).expanduser()
@@ -124,33 +136,45 @@ def discover_synced_pairs(
     seg_set = {str(s).strip() for s in (segments or []) if str(s).strip()} or None
     cam_set = {str(c).strip() for c in (cameras or []) if str(c).strip()} or None
 
+    runs_dir = p / "runs"
+    if not runs_dir.is_dir():
+        return {"synced_pairs": [], "synced_pairs_count": 0}
+
+    run_dirs = sorted(
+        [
+            d
+            for d in runs_dir.iterdir()
+            if d.is_dir() and re.fullmatch(r"run\d+", d.name)
+        ],
+        key=lambda q: q.name,
+    )
     pairs: Set[tuple[str, str]] = set()
-    for seg_dir in p.iterdir():
-        if not seg_dir.is_dir():
-            continue
-        seg = seg_dir.name
-        if seg_set is not None and seg not in seg_set:
-            continue
-        try:
-            for cam_dir in seg_dir.iterdir():
-                if not cam_dir.is_dir():
-                    continue
-                cam = cam_dir.name
-                if cam_set is not None and cam not in cam_set:
-                    continue
-                if (cam_dir / "sync.log").exists():
-                    pairs.add((seg, cam))
-                    continue
-                sv = cam_dir / "synced_video"
-                if sv.is_dir():
-                    try:
-                        if any(sv.glob("*.mp4")):
-                            pairs.add((seg, cam))
-                    except Exception:
-                        # Ignore glob issues; treat as not-synced.
-                        pass
-        except Exception:
-            continue
+    for run_dir in run_dirs:
+        for seg_dir in run_dir.iterdir():
+            if not seg_dir.is_dir():
+                continue
+            seg = seg_dir.name
+            if seg_set is not None and seg not in seg_set:
+                continue
+            try:
+                for cam_dir in seg_dir.iterdir():
+                    if not cam_dir.is_dir():
+                        continue
+                    cam = cam_dir.name
+                    if cam_set is not None and cam not in cam_set:
+                        continue
+                    if (cam_dir / "sync.log").exists():
+                        pairs.add((seg, cam))
+                        continue
+                    sv = cam_dir / "synced_video"
+                    if sv.is_dir():
+                        try:
+                            if any(sv.glob("*.mp4")):
+                                pairs.add((seg, cam))
+                        except Exception:
+                            pass
+            except Exception:
+                continue
 
     synced_pairs = [{"segment": s, "camera": c} for s, c in sorted(pairs)]
     return {"synced_pairs": synced_pairs, "synced_pairs_count": len(synced_pairs)}
