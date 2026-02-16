@@ -3,32 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
-def default_args() -> Dict[str, Any]:
-    return {
-        "audio_dir": "",
-        "video_dir": "",
-        "out_dir": "",
-        "site": "nbu_lounge",
-        "segments": [],
-        "cameras": [],
-        "target_pairs": [],
-        "manual_target_pairs": [],
-        "range_config": {},
-        "selection_mode": "segments",
-        "log_level": "INFO",
-        "skip_decode": False,
-        "overwrite_clips": False,
-        "split": False,
-        "split_overwrite": False,
-        "split_clean": False,
-        "split_chunk_seconds": 3600,
-        "decode_choice": "",
-        "decode_choice_out_dir": "",
-        "decode_error": None,
-        "decode_log_path": "",
-    }
-
-
 def clear_decode_state(data: Dict[str, Any]) -> None:
     data.pop("decode_choice", None)
     data.pop("decode_choice_out_dir", None)

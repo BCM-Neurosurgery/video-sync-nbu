@@ -6,7 +6,6 @@ import os
 import sys
 import subprocess
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -15,8 +14,24 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from scripts.webui.db import get_conn, tx
-from scripts.webui.repositories import draft_repo, run_repo, timestamp_run_repo
+from scripts.webui.repositories import run_repo, timestamp_run_repo
+from scripts.webui.services.draft_service import (
+    create_draft as _draft_create,
+    delete_draft as _draft_delete,
+    get_draft as _draft_get,
+    set_draft as _draft_set,
+)
+from scripts.webui.services.timestamp_service import (
+    create_timestamp_run as _create_timestamp_run,
+    resolve_timestamp_output_path as _resolve_timestamp_output_path,
+    start_audio_timestamp_job as _start_audio_timestamp_job,
+)
+from scripts.webui.services.run_service import enqueue_sync_runs, resolve_schedule
+from scripts.webui.services.wizard_service import (
+    invalidate_after_audio_change,
+    invalidate_after_out_change,
+    invalidate_after_video_change,
+)
 from scripts.webui.models import utc_now_iso
 from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_sse
 from scripts.webui.decode_workflow import (
@@ -30,15 +45,9 @@ from scripts.validate.validate_video_dir import (
     validate_video_dir,
     validate_video_dir_progress,
 )
-from scripts.time.find_audio_abs_time import (
-    OutputLayout,
-    compute_audio_start_records,
-    _record_to_payload,
-)
 from scripts.index.common import DEFAULT_TZ
 from scripts.webui.wizard_state import (
     clear_decode_state as _clear_decode_state,
-    default_args as _default_args,
     is_decode_ready as _is_decode_ready,
     mark_decode_ready as _mark_decode_ready,
     wizard_flow_context as _wizard_flow_context,
@@ -46,16 +55,14 @@ from scripts.webui.wizard_state import (
 from scripts.webui.sync_selection import (
     WEBUI_DEFAULT_TIME_ZONE,
     _build_range_catalog,
+    _build_range_config_from_form,
     _build_sync_run_groups,
     _coerce_range_config,
     _compute_effective_target_pairs,
-    _default_range_config,
     _extract_available_pair_map,
     _extract_missing_json_map,
     _extract_synced_pair_map,
     _normalize_target_pairs,
-    _normalize_time_text,
-    _parse_int_or_none,
     _segment_range_title,
 )
 
@@ -68,143 +75,6 @@ try:
     )
 except Exception:
     templates.env.globals["static_v"] = 1
-
-
-def _draft_create(*, mode: str = "sync") -> int:
-    now = utc_now_iso()
-    data = {"mode": mode}
-    if mode == "audio_timestamp":
-        data["site"] = "nbu_lounge"
-    return draft_repo.create_draft(
-        created_at=now,
-        updated_at=now,
-        data_json=json.dumps(data),
-    )
-
-
-def _draft_get(draft_id: int) -> Dict[str, Any]:
-    data_json = draft_repo.get_draft_data_json(draft_id)
-    if data_json is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
-    try:
-        return json.loads(data_json)
-    except Exception:
-        return {}
-
-
-def _draft_set(draft_id: int, data: Dict[str, Any]) -> None:
-    draft_repo.update_draft_data_json(
-        draft_id=draft_id,
-        updated_at=utc_now_iso(),
-        data_json=json.dumps(data),
-    )
-
-
-def _draft_delete(draft_id: int) -> None:
-    draft_repo.delete_draft(draft_id)
-
-
-def _default_timestamp_output_path(data: Dict[str, Any]) -> str:
-    out_dir = str(data.get("out_dir", "")).strip()
-    if not out_dir:
-        return ""
-    try:
-        return str(OutputLayout(Path(out_dir)).default_metadata_path)
-    except Exception:
-        return ""
-
-
-def _resolve_timestamp_output_path(
-    data: Dict[str, Any], *, override: Optional[str] = None
-) -> str:
-    raw = (override or "").strip()
-    if not raw:
-        raw = str(data.get("timestamp_output_path") or "").strip()
-    if raw:
-        try:
-            return str(Path(raw).expanduser())
-        except Exception:
-            return raw
-    return _default_timestamp_output_path(data)
-
-
-def _create_timestamp_run(
-    args: Dict[str, Any], *, output_path: Optional[str] = None
-) -> int:
-    now = utc_now_iso()
-    return timestamp_run_repo.create_timestamp_run(
-        created_at=now,
-        started_at=now,
-        status="running",
-        args_json=json.dumps(args),
-        output_path=output_path,
-    )
-
-
-def _update_timestamp_run(
-    run_id: int,
-    *,
-    status: Optional[str] = None,
-    finished_at: Optional[str] = None,
-    output_path: Optional[str] = None,
-    records_count: Optional[int] = None,
-    error: Optional[str] = None,
-) -> None:
-    timestamp_run_repo.update_timestamp_run(
-        run_id,
-        status=status,
-        finished_at=finished_at,
-        output_path=output_path,
-        records_count=records_count,
-        error=error,
-    )
-
-
-def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
-    def worker() -> None:
-        data = _draft_get(draft_id)
-        try:
-            audio_dir = Path(str(data.get("audio_dir", "")).strip()).expanduser()
-            video_dir = Path(str(data.get("video_dir", "")).strip()).expanduser()
-            out_dir = Path(str(data.get("out_dir", "")).strip()).expanduser()
-            site = str(data.get("site") or "nbu_lounge")
-
-            records = compute_audio_start_records(
-                audio_dir=audio_dir,
-                video_dir=video_dir,
-                out_dir=out_dir,
-                local_tz=DEFAULT_TZ,
-                site=site,
-            )
-            payload = [_record_to_payload(rec) for rec in records]
-            output_path_raw = _resolve_timestamp_output_path(data)
-            if not output_path_raw:
-                raise RuntimeError("Output JSON path is required.")
-            output_path = Path(output_path_raw)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-            data = _draft_get(draft_id)
-            data["timestamp_output_path"] = str(output_path)
-            _draft_set(draft_id, data)
-            _update_timestamp_run(
-                run_id,
-                status="succeeded",
-                finished_at=utc_now_iso(),
-                output_path=str(output_path),
-                records_count=len(payload),
-            )
-        except Exception as exc:
-            _update_timestamp_run(
-                run_id,
-                status="failed",
-                finished_at=utc_now_iso(),
-                error=str(exc),
-            )
-
-    threading.Thread(
-        target=worker, name=f"audio-timestamp-{draft_id}", daemon=True
-    ).start()
 
 
 def create_app() -> FastAPI:
@@ -565,19 +435,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("audio_dir") != audio_dir.strip():
             # Changing audio dir invalidates downstream choices.
-            data.pop("video_dir", None)
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_dir", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            _clear_decode_state(data)
+            invalidate_after_audio_change(data)
         data["audio_dir"] = audio_dir.strip()
 
         result = validate_audio_dir(
@@ -598,21 +456,7 @@ def create_app() -> FastAPI:
         audio_dir = audio_dir.strip()
         if data.get("audio_dir") != audio_dir:
             # Changing audio dir invalidates downstream choices.
-            data.pop("video_dir", None)
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_dir", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            _clear_decode_state(data)
-            data.pop("timestamp_output_path", None)
-            data.pop("timestamp_run_id", None)
+            invalidate_after_audio_change(data, include_timestamp_state=True)
         data["audio_dir"] = audio_dir
         _draft_set(draft_id, data)
 
@@ -725,19 +569,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("video_dir") != video_dir.strip():
             # Changing video dir invalidates downstream choices.
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("all_segments", None)
-            data.pop("all_cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            _clear_decode_state(data)
+            invalidate_after_video_change(data)
         data["video_dir"] = video_dir.strip()
 
         result = validate_video_dir(video_dir)
@@ -765,19 +597,7 @@ def create_app() -> FastAPI:
         video_dir = video_dir.strip()
         if data.get("video_dir") != video_dir:
             # Changing video dir invalidates downstream choices.
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("all_segments", None)
-            data.pop("all_cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            _clear_decode_state(data)
+            invalidate_after_video_change(data)
         data["video_dir"] = video_dir
         _draft_set(draft_id, data)
 
@@ -913,10 +733,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         out_dir = out_dir.strip()
         if data.get("out_dir") != out_dir:
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            _clear_decode_state(data)
+            invalidate_after_out_change(data)
         data["out_dir"] = out_dir
 
         segments = data.get("segments_all")
@@ -938,10 +755,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         out_dir = out_dir.strip()
         if data.get("out_dir") != out_dir:
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            _clear_decode_state(data)
+            invalidate_after_out_change(data)
         data["out_dir"] = out_dir
         _draft_set(draft_id, data)
 
@@ -1544,19 +1358,7 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("audio_dir") != audio_dir:
             # Changing audio dir invalidates downstream choices.
-            data.pop("video_dir", None)
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_dir", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            _clear_decode_state(data)
+            invalidate_after_audio_change(data)
 
         data["audio_dir"] = audio_dir
         # Validate on POST as a no-JS fallback (JS uses /api/drafts/<id>/validate-audio).
@@ -1597,21 +1399,7 @@ def create_app() -> FastAPI:
         video_dir = video_dir.strip()
         data = _draft_get(draft_id)
         if data.get("video_dir") != video_dir:
-            data.pop("segments_all", None)
-            data.pop("cameras_all", None)
-            data.pop("segments", None)
-            data.pop("cameras", None)
-            data.pop("all_segments", None)
-            data.pop("all_cameras", None)
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("out_ok", None)
-            data.pop("out_result", None)
-            data.pop("out_error", None)
-            data.pop("timestamp_output_path", None)
-            data.pop("timestamp_run_id", None)
-            _clear_decode_state(data)
+            invalidate_after_video_change(data, include_timestamp_state=True)
 
         data["video_dir"] = video_dir
         result = validate_video_dir(video_dir)
@@ -1668,12 +1456,7 @@ def create_app() -> FastAPI:
         out_dir = out_dir.strip()
         data = _draft_get(draft_id)
         if data.get("out_dir") != out_dir:
-            data.pop("target_pairs", None)
-            data.pop("manual_target_pairs", None)
-            data.pop("range_config", None)
-            data.pop("timestamp_output_path", None)
-            data.pop("timestamp_run_id", None)
-            _clear_decode_state(data)
+            invalidate_after_out_change(data, include_timestamp_state=True)
         data["out_dir"] = out_dir
         segments = data.get("segments_all")
         if not isinstance(segments, list):
@@ -1926,75 +1709,12 @@ def create_app() -> FastAPI:
             cameras = sorted(
                 {k.split("::", 1)[1] for k in available_pair_map.keys() if "::" in k}
             )
-        prev_cfg = _coerce_range_config(data.get("range_config"), cameras)
-        range_config = _default_range_config(cameras)
-        for cam in cameras:
-            rule = range_config["cameras"][cam]
-            prev_rule = (
-                (prev_cfg.get("cameras") or {}).get(cam)
-                if isinstance(prev_cfg.get("cameras"), dict)
-                else {}
-            ) or {}
-            if selection_mode == "time":
-                enabled_raw = (
-                    str(form.get(f"time_camera_enabled_{cam}") or "1").strip().lower()
-                )
-                rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
-            elif selection_mode == "sample":
-                enabled_raw = (
-                    str(form.get(f"sample_camera_enabled_{cam}") or "1").strip().lower()
-                )
-                rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
-            else:
-                rule["enabled"] = True
-            if selection_mode == "segments":
-                rule["mode"] = "manual"
-                rule["time_start"] = _normalize_time_text(prev_rule.get("time_start"))
-                rule["time_end"] = _normalize_time_text(prev_rule.get("time_end"))
-                rule["time_zone"] = (
-                    str(prev_rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
-                    or WEBUI_DEFAULT_TIME_ZONE
-                )
-                ss0 = _parse_int_or_none(prev_rule.get("sample_start"))
-                ss1 = _parse_int_or_none(prev_rule.get("sample_end"))
-                rule["sample_start"] = "" if ss0 is None else str(ss0)
-                rule["sample_end"] = "" if ss1 is None else str(ss1)
-            elif selection_mode == "time":
-                rule["mode"] = "time"
-                ts_key = f"time_start_{cam}"
-                te_key = f"time_end_{cam}"
-                tz_key = f"time_zone_{cam}"
-                ts_raw = (
-                    form.get(ts_key) if ts_key in form else prev_rule.get("time_start")
-                )
-                te_raw = (
-                    form.get(te_key) if te_key in form else prev_rule.get("time_end")
-                )
-                tz_raw = (
-                    form.get(tz_key) if tz_key in form else prev_rule.get("time_zone")
-                )
-                rule["time_start"] = _normalize_time_text(ts_raw)
-                rule["time_end"] = _normalize_time_text(te_raw)
-                rule["time_zone"] = (
-                    str(tz_raw or WEBUI_DEFAULT_TIME_ZONE).strip()
-                    or WEBUI_DEFAULT_TIME_ZONE
-                )
-            else:
-                rule["mode"] = "sample"
-                ss_key = f"sample_start_{cam}"
-                se_key = f"sample_end_{cam}"
-                ss_raw = (
-                    form.get(ss_key)
-                    if ss_key in form
-                    else prev_rule.get("sample_start")
-                )
-                se_raw = (
-                    form.get(se_key) if se_key in form else prev_rule.get("sample_end")
-                )
-                s0 = _parse_int_or_none(ss_raw)
-                s1 = _parse_int_or_none(se_raw)
-                rule["sample_start"] = "" if s0 is None else str(s0)
-                rule["sample_end"] = "" if s1 is None else str(s1)
+        range_config = _build_range_config_from_form(
+            selection_mode=selection_mode,
+            cameras=cameras,
+            form=form,
+            prev_range_config=data.get("range_config"),
+        )
         data["range_config"] = range_config
         data["manual_target_pairs"] = picked_pairs
 
@@ -2189,71 +1909,23 @@ def create_app() -> FastAPI:
 
         schedule_at = str(data.get("schedule_at", "") or "").strip()
         now = utc_now_iso()
-        scheduled_iso: Optional[str] = None
-        status = "queued"
-        if schedule_at:
-            try:
-                dt = datetime.fromisoformat(schedule_at)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                scheduled_iso = dt.astimezone(timezone.utc).isoformat(
-                    timespec="seconds"
-                )
-                status = "scheduled"
-            except Exception as e:
-                data["run_error"] = f"Bad schedule_at: {e}"
-                _draft_set(draft_id, data)
-                return RedirectResponse(
-                    url=f"/wizard/{draft_id}/select", status_code=303
-                )
+        try:
+            status, scheduled_iso = resolve_schedule(schedule_at)
+        except Exception as e:
+            data["run_error"] = f"Bad schedule_at: {e}"
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
-        logs_dir = Path(".webui") / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-
-        created_run_ids: List[int] = []
-        conn = get_conn()
-        with tx(conn):
-            total_groups = len(run_groups)
-            for idx, group in enumerate(run_groups, start=1):
-                args = dict(base_args)
-                args["target_pairs"] = list(group.get("target_pairs") or [])
-                if group.get("mode") == "time":
-                    args["time_start"] = str(group.get("time_start") or "")
-                    args["time_end"] = str(group.get("time_end") or "")
-                    args["time_zone"] = str(
-                        group.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE
-                    )
-                elif group.get("mode") == "sample":
-                    args["audio_sample_start"] = group.get("audio_sample_start")
-                    args["audio_sample_end"] = group.get("audio_sample_end")
-
-                title = data.get("title") or "video-sync run"
-                if total_groups > 1:
-                    mode_label = str(group.get("mode") or "manual")
-                    title = f"{title} ({mode_label} {idx}/{total_groups})"
-
-                run_id = run_repo.insert_run(
-                    conn,
-                    title=title,
-                    created_at=now,
-                    scheduled_at=scheduled_iso,
-                    status=status,
-                    cwd=str(Path.cwd()),
-                    cmd_json=json.dumps([]),
-                    args_json=json.dumps(args),
-                    log_path=str(logs_dir / "pending.log"),
-                )
-                args["run_id"] = run_id
-                cmd = build_cli_cmd(args)
-                created_run_ids.append(run_id)
-                log_path = logs_dir / f"run-{run_id}.log"
-                run_repo.update_run_command_and_log(
-                    conn,
-                    run_id,
-                    cmd_json=json.dumps(cmd),
-                    args_json=json.dumps(args),
-                    log_path=str(log_path),
-                )
+        created_run_ids = enqueue_sync_runs(
+            base_args=base_args,
+            run_groups=run_groups,
+            title=str(data.get("title") or "video-sync run"),
+            created_at=now,
+            status=status,
+            scheduled_at=scheduled_iso,
+            build_cmd=build_cli_cmd,
+            default_time_zone=WEBUI_DEFAULT_TIME_ZONE,
+        )
 
         _draft_delete(draft_id)
         if len(created_run_ids) == 1:

@@ -399,6 +399,79 @@ def _coerce_range_config(raw: object, cameras: List[str]) -> Dict[str, Any]:
     return cfg
 
 
+def _build_range_config_from_form(
+    *,
+    selection_mode: str,
+    cameras: List[str],
+    form: Mapping[str, Any],
+    prev_range_config: object,
+) -> Dict[str, Any]:
+    prev_cfg = _coerce_range_config(prev_range_config, cameras)
+    range_config = _default_range_config(cameras)
+
+    for cam in cameras:
+        rule = range_config["cameras"][cam]
+        prev_rule = (
+            (prev_cfg.get("cameras") or {}).get(cam)
+            if isinstance(prev_cfg.get("cameras"), dict)
+            else {}
+        ) or {}
+
+        if selection_mode == "time":
+            enabled_raw = (
+                str(form.get(f"time_camera_enabled_{cam}") or "1").strip().lower()
+            )
+            rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
+        elif selection_mode == "sample":
+            enabled_raw = (
+                str(form.get(f"sample_camera_enabled_{cam}") or "1").strip().lower()
+            )
+            rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
+        else:
+            rule["enabled"] = True
+
+        if selection_mode == "segments":
+            rule["mode"] = "manual"
+            rule["time_start"] = _normalize_time_text(prev_rule.get("time_start"))
+            rule["time_end"] = _normalize_time_text(prev_rule.get("time_end"))
+            rule["time_zone"] = (
+                str(prev_rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
+                or WEBUI_DEFAULT_TIME_ZONE
+            )
+            ss0 = _parse_int_or_none(prev_rule.get("sample_start"))
+            ss1 = _parse_int_or_none(prev_rule.get("sample_end"))
+            rule["sample_start"] = "" if ss0 is None else str(ss0)
+            rule["sample_end"] = "" if ss1 is None else str(ss1)
+        elif selection_mode == "time":
+            rule["mode"] = "time"
+            ts_key = f"time_start_{cam}"
+            te_key = f"time_end_{cam}"
+            tz_key = f"time_zone_{cam}"
+            ts_raw = form.get(ts_key) if ts_key in form else prev_rule.get("time_start")
+            te_raw = form.get(te_key) if te_key in form else prev_rule.get("time_end")
+            tz_raw = form.get(tz_key) if tz_key in form else prev_rule.get("time_zone")
+            rule["time_start"] = _normalize_time_text(ts_raw)
+            rule["time_end"] = _normalize_time_text(te_raw)
+            rule["time_zone"] = (
+                str(tz_raw or WEBUI_DEFAULT_TIME_ZONE).strip()
+                or WEBUI_DEFAULT_TIME_ZONE
+            )
+        else:
+            rule["mode"] = "sample"
+            ss_key = f"sample_start_{cam}"
+            se_key = f"sample_end_{cam}"
+            ss_raw = (
+                form.get(ss_key) if ss_key in form else prev_rule.get("sample_start")
+            )
+            se_raw = form.get(se_key) if se_key in form else prev_rule.get("sample_end")
+            s0 = _parse_int_or_none(ss_raw)
+            s1 = _parse_int_or_none(se_raw)
+            rule["sample_start"] = "" if s0 is None else str(s0)
+            rule["sample_end"] = "" if s1 is None else str(s1)
+
+    return range_config
+
+
 def _resolve_camera_rule(range_config: Dict[str, Any], cam: str) -> Dict[str, Any]:
     cam_rules = range_config.get("cameras") or {}
     base = dict(cam_rules.get(str(cam)) or {})
