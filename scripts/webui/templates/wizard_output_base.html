@@ -3,7 +3,6 @@
 {% set title = flow_title or "New run" %}
 {% set subtitle = flow_subtitle or "Step 3/6 — Select output folder" %}
 {% set step = 3 %}
-
 {% block wizard %}
   <form class="form" method="post" action="/wizard/{{ draft_id }}/output">
     <div class="card stack">
@@ -11,147 +10,178 @@
         <label>
           <span class="label-row">
             <h3 style="margin:0">Output dir</h3>
-            <span class="help" data-tip="Folder where outputs and logs will be written. Use a new folder per study/session if possible."></span>
+            <span class="help"
+                  data-tip="Folder where outputs and logs will be written. Use a new folder per study/session if possible."></span>
             <span id="out_status" class="pill" style="margin-left:6px">Not checked</span>
           </span>
           <div class="input-row">
-            <input id="out_dir" name="out_dir" required value="{{ out_dir or '' }}" placeholder="/path/to/out" />
+            <input id="out_dir"
+                   name="out_dir"
+                   required
+                   value="{{ out_dir or '' }}"
+                   placeholder="/path/to/out" />
             <button class="btn" type="button" onclick="browseDir('out_dir')">Browse</button>
           </div>
         </label>
-
         <div id="out_hint" class="hint" style="margin-top:6px"></div>
         {% block output_extra_hint %}{% endblock %}
-
-        <div class="actions" style="margin-top:12px; justify-content:space-between">
+        <div class="actions"
+             style="margin-top:12px;
+                    justify-content:space-between">
           <div class="actions">
             <a class="btn" href="/wizard/{{ draft_id }}/video">Back</a>
             <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
           </div>
           <div class="actions">
-            <button id="btn_recheck" class="btn" type="button" onclick="validateOut(true)">Re-check</button>
-            <button
-              id="btn_continue"
-              class="btn primary"
-              type="button"
-              onclick="location.href='{{ continue_url or ('/wizard/' ~ draft_id ~ '/select') }}'"
-              disabled
-              title="Continue is available after the output check passes"
-            >Continue</button>
+            <button id="btn_recheck"
+                    class="btn"
+                    type="button"
+                    onclick="validateOut(true)">Re-check</button>
+            <button id="btn_continue"
+                    class="btn primary"
+                    type="button"
+                    onclick="location.href='{{ continue_url or ('/wizard/' ~ draft_id ~ '/decode') }}'"
+                    disabled
+                    title="Continue is available after the output check passes">Continue</button>
           </div>
         </div>
       </div>
-
       <div id="out_result_wrap" class="stack">
-      {% if out_result %}
-        {% set check_tips = {
-          "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
-          "Audio metadata present": "Checks whether audio_metadata/audio_abs_start.json is already present.",
-        } %}
-
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Checks</h3>
-            <div class="muted small">Checked at <span class="mono">{{ out_result.checked_at }}</span></div>
-          </div>
-
-          {% if out_result.checks %}
-            <table class="table checks-table">
-              <thead>
-                <tr>
-                  <th>Check</th>
-                  <th class="right statuscol">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for c in out_result.checks %}
-                  <tr>
-                    <td>
-                      <span class="label-row">
-                        {{ c.name }}
-                        <span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the output folder.') }}"></span>
-                      </span>
-                    </td>
-                    <td class="right statuscol">
-                      {% if c.status == "pass" %}
-                        <span class="pill succeeded">Pass</span>
-                      {% elif c.status == "fail" %}
-                        <span class="pill failed">Fail</span>
-                      {% elif c.status == "warn" %}
-                        <span class="pill running">Warn</span>
-                      {% elif c.status == "running" %}
-                        <span class="pill running">Running</span>
-                      {% elif c.status == "skipped" %}
-                        <span class="pill">Skipped</span>
-                      {% elif c.status == "pending" %}
-                        <span class="pill">Pending</span>
-                      {% else %}
-                        <span class="pill">{{ c.status }}</span>
-                      {% endif %}
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% else %}
-            <div class="muted">No checks run yet.</div>
-          {% endif %}
-        </div>
-
-        {% block output_summary %}
+        {% if out_result %}
+          {% set check_tips = {
+            "Directory empty": "Checks whether the output folder is empty (warns if not empty).",
+            "Audio metadata present": "Checks whether audio_metadata/audio_abs_start.json is already present."
+          } %}
           <div class="card subcard">
-            <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-              <h3 style="margin:0">Summary</h3>
-            </div>
-
-            {% set summary_error = (out_result.error or error) %}
-            {% if (not out_result.ok) and summary_error %}
-              <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
-            {% elif out_result.ok %}
-              <div class="kv">
-                <div class="k">Directory</div>
-                <div class="v mono">{% if out_result.will_create %}Will create{% elif out_result.exists %}Exists{% else %}—{% endif %}</div>
-
-                <div class="k">Empty</div>
-                <div class="v mono">{% if out_result.empty is none %}—{% elif out_result.empty %}Yes{% else %}No{% endif %}</div>
-
-                <div class="k">Reuse audio artifacts</div>
-                <div class="v mono">{% if out_result.can_reuse_audio_decoded %}Yes{% else %}No{% endif %}</div>
-
-                <div class="k">Synced segments</div>
-                <div class="v mono">{{ out_result.synced_segments_count }}{% if out_result.total_segments is not none %} / {{ out_result.total_segments }}{% endif %}</div>
-
-                <div class="k">Audio metadata</div>
-                <div class="v mono">
-                  {% if out_result.audio_metadata and out_result.audio_metadata.abs_json %}
-                    audio_abs_start.json found
-                  {% elif out_result.audio_metadata and out_result.audio_metadata.exists %}
-                    audio_metadata/ present (no audio_abs_start.json)
-                  {% else %}
-                    No metadata detected
-                  {% endif %}
-                </div>
-
-                <div class="k">Already synced (preview)</div>
-                <div class="v mono mono-lines">{{ out_result.synced_segments_preview|join('\n') if out_result.synced_segments_preview else "—" }}</div>
+            <div class="actions"
+                 style="justify-content:space-between;
+                        margin-bottom:10px">
+              <h3 style="margin:0">Checks</h3>
+              <div class="muted small">
+                Checked at <span class="mono">{{ out_result.checked_at }}</span>
               </div>
+            </div>
+            {% if out_result.checks %}
+              <table class="table checks-table">
+                <thead>
+                  <tr>
+                    <th>Check</th>
+                    <th class="right statuscol">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for c in out_result.checks %}
+                    <tr>
+                      <td>
+                        <span class="label-row">
+                          {{ c.name }}
+                          <span class="help"
+                                data-tip="{{ check_tips.get(c.name, 'What this check validates in the output folder.') }}"></span>
+                        </span>
+                      </td>
+                      <td class="right statuscol">
+                        {% if c.status == "pass" %}
+                          <span class="pill succeeded">Pass</span>
+                        {% elif c.status == "fail" %}
+                          <span class="pill failed">Fail</span>
+                        {% elif c.status == "warn" %}
+                          <span class="pill running">Warn</span>
+                        {% elif c.status == "running" %}
+                          <span class="pill running">Running</span>
+                        {% elif c.status == "skipped" %}
+                          <span class="pill">Skipped</span>
+                        {% elif c.status == "pending" %}
+                          <span class="pill">Pending</span>
+                        {% else %}
+                          <span class="pill">{{ c.status }}</span>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
             {% else %}
-              <div class="muted">Summary will appear after checks pass.</div>
+              <div class="muted">No checks run yet.</div>
             {% endif %}
           </div>
-        {% endblock %}
-      {% elif error %}
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Summary</h3>
+          {% block output_summary %}
+            <div class="card subcard">
+              <div class="actions"
+                   style="justify-content:space-between;
+                          margin-bottom:10px">
+                <h3 style="margin:0">Summary</h3>
+              </div>
+              {% set summary_error = (out_result.error or error) %}
+              {% if (not out_result.ok) and summary_error %}
+                <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+              {% elif out_result.ok %}
+                <div class="kv">
+                  <div class="k">Directory</div>
+                  <div class="v mono">
+                    {% if out_result.will_create %}
+                      Will create
+                    {% elif out_result.exists %}
+                      Exists
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                  <div class="k">Empty</div>
+                  <div class="v mono">
+                    {% if out_result.empty is none %}
+                      —
+                    {% elif out_result.empty %}
+                      Yes
+                    {% else %}
+                      No
+                    {% endif %}
+                  </div>
+                  <div class="k">Reuse audio artifacts</div>
+                  <div class="v mono">
+                    {% if out_result.can_reuse_audio_decoded %}
+                      Yes
+                    {% else %}
+                      No
+                    {% endif %}
+                  </div>
+                  <div class="k">Synced segments</div>
+                  <div class="v mono">
+                    {{ out_result.synced_segments_count }}
+                    {% if out_result.total_segments is not none %}/ {{ out_result.total_segments }}{% endif %}
+                  </div>
+                  <div class="k">Audio metadata</div>
+                  <div class="v mono">
+                    {% if out_result.audio_metadata and out_result.audio_metadata.abs_json %}
+                      audio_abs_start.json found
+                    {% elif out_result.audio_metadata and out_result.audio_metadata.exists %}
+                      audio_metadata/ present (no audio_abs_start.json)
+                    {% else %}
+                      No metadata detected
+                    {% endif %}
+                  </div>
+                  <div class="k">Already synced (preview)</div>
+                  <div class="v mono mono-lines">
+                    {{ out_result.synced_segments_preview|join("\n") if out_result.synced_segments_preview else "—" }}
+                  </div>
+                </div>
+              {% else %}
+                <div class="muted">Summary will appear after checks pass.</div>
+              {% endif %}
+            </div>
+          {% endblock %}
+        {% elif error %}
+          <div class="card subcard">
+            <div class="actions"
+                 style="justify-content:space-between;
+                        margin-bottom:10px">
+              <h3 style="margin:0">Summary</h3>
+            </div>
+            <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
           </div>
-          <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
-        </div>
-      {% endif %}
+        {% endif %}
       </div>
     </div>
   </form>
-
   <script>
     const draftId = {{ draft_id }};
     const outInput = document.getElementById("out_dir");
@@ -164,7 +194,7 @@
 
     function esc(s){
       return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+        "&":"&amp;","<":"&lt ;",">":"&gt;","\"":"&quot;","'":"&#39;"
       }[c]));
     }
 

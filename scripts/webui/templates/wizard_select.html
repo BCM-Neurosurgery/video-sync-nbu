@@ -1,173 +1,310 @@
 {% extends "wizard_layout.html" %}
 {% set nav = flow_nav or "new" %}
 {% set title = flow_title or "New run" %}
-{% set subtitle = flow_subtitle or "Step 4/5 — Choose segments and run options" %}
-{% set step = 4 %}
+{% set subtitle = flow_subtitle or "Step 5/6 — Choose segments and run options" %}
+{% set step = 5 %}
 {% set available_pair_map = available_pair_map | default({}) %}
 {% set missing_json_map = missing_json_map | default({}) %}
-
+{% set range_config = range_config | default({}) %}
+{% set range_catalog = range_catalog | default({}) %}
+{% set camera_rules = range_config.get("cameras", {}) %}
+{% set global_time_bounds = range_catalog.get("global_time_bounds") or {} %}
+{% set global_sample_bounds = range_catalog.get("global_sample_bounds") or {} %}
+{% set selection_mode = selection_mode | default('segments') %}
 {% block wizard %}
-  <form class="card form" method="post" action="/wizard/{{ draft_id }}/select">
+  <form class="card form"
+        method="post"
+        action="/wizard/{{ draft_id }}/select">
+    <input type="hidden" name="log_level" value="INFO" />
+    <h3 style="margin:0 0 8px 0">Selection mode</h3>
     <div class="input-row">
-      <div class="label-row field-label">
-        Site
-        <span class="help" data-tip="Select the recording site preset (affects serial decoding defaults)."></span>
-      </div>
-      <select name="site" class="narrow-select">
-        {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
-          <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
+      <label class="field-label" for="selection_mode" style="margin:0">Mode</label>
+      <select id="selection_mode" name="selection_mode" class="narrow-select">
+        <option value="segments"
+                {% if selection_mode == 'segments' %}selected{% endif %}>Segments</option>
+        <option value="time" {% if selection_mode == 'time' %}selected{% endif %}>Time range</option>
+        <option value="sample" {% if selection_mode == 'sample' %}selected{% endif %}>
+          Audio sample range
+        </option>
       </select>
     </div>
-
-    {% if show_reuse_audio is not defined or show_reuse_audio %}
-      <div class="input-row check{% if not reuse_audio_available %} disabled{% endif %}" style="margin-top:8px">
-        <div class="label-row field-label">
-          Reuse audio artifacts
-          <span class="help" data-tip="Reuse existing decoded audio artifacts in the output directory and skip serial decoding."></span>
-        </div>
-        <span class="checkbox">
-          <input type="checkbox" name="reuse_audio" {% if skip_decode %}checked{% endif %} {% if not reuse_audio_available %}disabled{% endif %} />
-        </span>
+    <section id="segments_section" style="margin-top:10px">
+      <div class="hint" style="margin-top:0">
+        {{ select_hint or "Select segment-camera pairs to sync. OK = already synced. GO = selected. RE = re-sync. -- = missing video. Click a segment or camera header to toggle its row/column." }}
       </div>
-    {% endif %}
-
-    <hr class="divider" />
-
-    <div class="hint" style="margin-top:6px">
-      {{ select_hint or "Select segment-camera pairs to sync. OK = already synced. GO = selected. RE = re-sync. -- = missing video. Click a segment or camera header to toggle its row/column." }}
-    </div>
-
-    <div class="matrix-wrap" style="margin-top:8px">
-      <table class="table matrix">
-        <thead>
-          <tr>
-            <th class="sticky-col">Segment</th>
-            {% for cam in cameras %}
-              <th class="center">
-                <button type="button" class="matrix-toggle" data-cam="{{ cam }}" title="Toggle all segments for camera {{ cam }}">
-                  <span class="mono">{{ cam }}</span>
-                </button>
-              </th>
-            {% endfor %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for seg in segments %}
+      <div class="matrix-wrap" style="margin-top:8px">
+        <table class="table matrix">
+          <thead>
             <tr>
-              <td class="sticky-col">
-                <button type="button" class="matrix-toggle" data-seg="{{ seg }}" title="Toggle all cameras for segment {{ seg }}">
-                  <span class="mono">{{ seg }}</span>
-                </button>
-              </td>
+              <th class="sticky-col">Segment</th>
               {% for cam in cameras %}
-                {% set key = seg ~ '::' ~ cam %}
-                {% set is_synced = synced_pair_map.get(key) %}
-                {% set is_present = available_pair_map.get(key) %}
-                {% set missing_json = missing_json_map.get(seg) %}
-                {% set is_selected = key in (selected_pairs or []) %}
-                <td class="center">
-                  <label class="cell{% if is_synced %} synced{% endif %}{% if (not is_present) or missing_json %} missing{% endif %}" title="{% if missing_json %}Companion JSON missing for this segment.{% elif not is_present %}Video missing for this segment/camera.{% elif is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
-                    <input class="cellinput" type="checkbox" name="target_pairs" value="{{ key }}" data-seg="{{ seg }}" data-cam="{{ cam }}" {% if is_selected %}checked{% endif %} {% if (not is_present) or missing_json %}disabled{% endif %} />
-                    <span class="cellbox"></span>
-                  </label>
-                </td>
+                <th class="center">
+                  <button type="button"
+                          class="matrix-toggle"
+                          data-cam="{{ cam }}"
+                          title="Toggle all segments for camera {{ cam }}">
+                    <span class="mono">{{ cam }}</span>
+                  </button>
+                </th>
               {% endfor %}
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="actions" style="margin-top:8px; justify-content:flex-end">
-      <button class="btn" type="button" id="select_all_pairs">Select all</button>
-    </div>
-
-    {% if error %}
-      <div class="alert danger mono">{{ error }}</div>
-    {% endif %}
-
-    <div class="actions" style="margin-top:12px; justify-content:space-between">
+          </thead>
+          <tbody>
+            {% for seg in segments %}
+              <tr>
+                <td class="sticky-col">
+                  <button type="button"
+                          class="matrix-toggle"
+                          data-seg="{{ seg }}"
+                          title="Toggle all cameras for segment {{ seg }}">
+                    <span class="mono">{{ seg }}</span>
+                  </button>
+                </td>
+                {% for cam in cameras %}
+                  {% set key = seg ~ '::' ~ cam %}
+                  {% set is_synced = synced_pair_map.get(key) %}
+                  {% set is_present = available_pair_map.get(key) %}
+                  {% set missing_json = missing_json_map.get(seg) %}
+                  {% set is_selected = key in (selected_pairs or []) %}
+                  <td class="center">
+                    <label class="cell{% if is_synced %} synced{% endif %}{% if (not is_present) or missing_json %} missing{% endif %}"
+                           title="{% if missing_json %}Companion JSON missing for this segment.{% elif not is_present %}Video missing for this segment/camera.{% elif is_synced %}Already synced. Click to mark for re-sync.{% else %}Not yet synced. Click to select this pair.{% endif %}">
+                      <input class="cellinput"
+                             type="checkbox"
+                             name="target_pairs"
+                             value="{{ key }}"
+                             data-seg="{{ seg }}"
+                             data-cam="{{ cam }}"
+                             data-base-disabled="{% if (not is_present) or missing_json %}1{% else %}0{% endif %}"
+                             {% if is_selected %}checked{% endif %}
+                             {% if (not is_present) or missing_json %}disabled{% endif %} />
+                      <span class="cellbox"></span>
+                    </label>
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:8px; justify-content:flex-end">
+        <button class="btn" type="button" id="select_all_pairs">Select all</button>
+      </div>
+    </section>
+    <section id="time_section" style="margin-top:10px">
+      <div class="hint" style="margin-top:0">
+        Set a time range per camera. Matching segment-camera pairs are selected automatically. Click a camera name to exclude it from sync.
+      </div>
+      <div class="matrix-wrap" style="margin-top:8px">
+        <table class="table range-table">
+          <colgroup>
+            <col class="col-camera" />
+            <col class="col-select-range" />
+            <col class="col-timezone" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Camera</th>
+              <th>Select range</th>
+              <th>Timezone</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cam in cameras %}
+              {% set cr = camera_rules.get(cam, {}) %}
+              {% set ct = (range_catalog.get("camera_time_bounds") or {}).get(cam, {}) %}
+              {% set cam_enabled = cr.get('enabled', True) %}
+              {% set selected_start = cr.get('time_start') or ct.get('start','') %}
+              {% set selected_end = cr.get('time_end') or ct.get('end','') %}
+              {% set bound_start = ct.get('start') or selected_start %}
+              {% set bound_end = ct.get('end') or selected_end %}
+              {% set tz_raw = (cr.get('time_zone') or 'America/Chicago') %}
+              {% set tz_value = 'UTC' if tz_raw == 'UTC' else 'America/Chicago' %}
+              {% set has_saved_time = (cr.get('time_start') and cr.get('time_end')) %}
+              {% set value_source_tz = tz_value if has_saved_time else 'UTC' %}
+              {% set bound_source_tz = 'UTC' if ct else value_source_tz %}
+              {% set scale_start = global_time_bounds.get('start') or bound_start %}
+              {% set scale_end = global_time_bounds.get('end') or bound_end %}
+              {% set scale_source_tz = 'UTC' if global_time_bounds else bound_source_tz %}
+              <tr data-mode="time-camera"
+                  class="{% if not cam_enabled %}camera-disabled{% endif %}">
+                <td class="mono camera-toggle"
+                    title="Click to include/exclude this camera">
+                  {{ cam }}
+                  <input type="hidden"
+                         name="time_camera_enabled_{{ cam }}"
+                         data-role="camera-enabled"
+                         value="{{ '1' if cam_enabled else '0' }}" />
+                </td>
+                <td>
+                  <div class="range-widget"
+                       data-range-kind="time"
+                       data-range-min="{{ bound_start }}"
+                       data-range-max="{{ bound_end }}"
+                       data-range-start="{{ selected_start }}"
+                       data-range-end="{{ selected_end }}"
+                       data-range-bound-tz="{{ bound_source_tz }}"
+                       data-range-value-tz="{{ value_source_tz }}"
+                       data-range-scale-min="{{ scale_start }}"
+                       data-range-scale-max="{{ scale_end }}"
+                       data-range-scale-tz="{{ scale_source_tz }}">
+                    <div class="range-track">
+                      <div class="range-rail"></div>
+                      <div class="range-fill" data-role="range-fill"></div>
+                      <button type="button"
+                              class="range-thumb range-thumb-start"
+                              data-role="range-start"
+                              aria-label="Start range handle"
+                              {% if not cam_enabled %}disabled{% endif %}></button>
+                      <button type="button"
+                              class="range-thumb range-thumb-end"
+                              data-role="range-end"
+                              aria-label="End range handle"
+                              {% if not cam_enabled %}disabled{% endif %}></button>
+                    </div>
+                    <div class="range-values mono">
+                      <span class="range-value-label range-value-start"
+                            data-role="range-start-label"
+                            title="Double-click to edit">{{ selected_start }}</span>
+                      <span class="range-value-label range-value-end"
+                            data-role="range-end-label"
+                            title="Double-click to edit">{{ selected_end }}</span>
+                    </div>
+                    <input type="hidden"
+                           name="time_start_{{ cam }}"
+                           data-role="time-start"
+                           value="{{ selected_start }}"
+                           {% if not cam_enabled %}disabled{% endif %} />
+                    <input type="hidden"
+                           name="time_end_{{ cam }}"
+                           data-role="time-end"
+                           value="{{ selected_end }}"
+                           {% if not cam_enabled %}disabled{% endif %} />
+                  </div>
+                </td>
+                <td>
+                  <select name="time_zone_{{ cam }}"
+                          data-role="time-zone"
+                          {% if not cam_enabled %}disabled{% endif %}>
+                    <option value="UTC" {% if tz_value == 'UTC' %}selected{% endif %}>UTC</option>
+                    <option value="America/Chicago"
+                            {% if tz_value == 'America/Chicago' %}selected{% endif %}>
+                      Chicago
+                    </option>
+                  </select>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section id="sample_section" style="margin-top:10px">
+      <div class="hint" style="margin-top:0">
+        Set an audio sample range per camera. Matching segment-camera pairs are selected automatically. Click a camera name to exclude it from sync.
+      </div>
+      {% if not (range_catalog.get('sample_ready')) %}
+        <div class="alert danger mono" style="margin-top:8px">
+          Sample metadata is unavailable. Decode audio first (or disable reuse) to populate sample ranges.
+        </div>
+      {% endif %}
+      <div class="matrix-wrap" style="margin-top:8px">
+        <table class="table range-table">
+          <colgroup>
+            <col class="col-camera" />
+            <col class="col-select-range" />
+            <col class="col-timezone" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Camera</th>
+              <th>Select range</th>
+              <th class="range-spacer"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cam in cameras %}
+              {% set cr = camera_rules.get(cam, {}) %}
+              {% set cs = (range_catalog.get("camera_sample_bounds") or {}).get(cam, {}) %}
+              {% set cam_enabled = cr.get('enabled', True) %}
+              {% set selected_start = cr.get('sample_start') or cs.get('start','') %}
+              {% set selected_end = cr.get('sample_end') or cs.get('end','') %}
+              {% set bound_start = cs.get('start') or selected_start %}
+              {% set bound_end = cs.get('end') or selected_end %}
+              {% set global_sample_start = global_sample_bounds.get('start') if global_sample_bounds else none %}
+              {% set global_sample_end = global_sample_bounds.get('end') if global_sample_bounds else none %}
+              {% set scale_start = global_sample_start if global_sample_start is not none else bound_start %}
+              {% set scale_end = global_sample_end if global_sample_end is not none else bound_end %}
+              <tr data-mode="sample-camera"
+                  class="{% if not cam_enabled %}camera-disabled{% endif %}">
+                <td class="mono camera-toggle"
+                    title="Click to include/exclude this camera">
+                  {{ cam }}
+                  <input type="hidden"
+                         name="sample_camera_enabled_{{ cam }}"
+                         data-role="camera-enabled"
+                         value="{{ '1' if cam_enabled else '0' }}" />
+                </td>
+                <td>
+                  <div class="range-widget"
+                       data-range-kind="sample"
+                       data-range-min="{{ bound_start }}"
+                       data-range-max="{{ bound_end }}"
+                       data-range-start="{{ selected_start }}"
+                       data-range-end="{{ selected_end }}"
+                       data-range-scale-min="{{ scale_start }}"
+                       data-range-scale-max="{{ scale_end }}">
+                    <div class="range-track">
+                      <div class="range-rail"></div>
+                      <div class="range-fill" data-role="range-fill"></div>
+                      <button type="button"
+                              class="range-thumb range-thumb-start"
+                              data-role="range-start"
+                              aria-label="Start range handle"
+                              {% if not cam_enabled %}disabled{% endif %}></button>
+                      <button type="button"
+                              class="range-thumb range-thumb-end"
+                              data-role="range-end"
+                              aria-label="End range handle"
+                              {% if not cam_enabled %}disabled{% endif %}></button>
+                    </div>
+                    <div class="range-values mono">
+                      <span class="range-value-label range-value-start"
+                            data-role="range-start-label"
+                            title="Double-click to edit">{{ selected_start }}</span>
+                      <span class="range-value-label range-value-end"
+                            data-role="range-end-label"
+                            title="Double-click to edit">{{ selected_end }}</span>
+                    </div>
+                    <input type="hidden"
+                           name="sample_start_{{ cam }}"
+                           data-role="sample-start"
+                           value="{{ selected_start }}"
+                           {% if not cam_enabled %}disabled{% endif %} />
+                    <input type="hidden"
+                           name="sample_end_{{ cam }}"
+                           data-role="sample-end"
+                           value="{{ selected_end }}"
+                           {% if not cam_enabled %}disabled{% endif %} />
+                  </div>
+                </td>
+                <td class="range-spacer"></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% if error %}<div class="alert danger mono">{{ error }}</div>{% endif %}
+    <div class="actions"
+         style="margin-top:12px;
+                justify-content:space-between">
       <div class="actions">
-        <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
+        <a class="btn" href="/wizard/{{ draft_id }}/decode">Back</a>
         <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
       </div>
       <button class="btn primary" type="submit" id="continue_btn">Continue</button>
     </div>
   </form>
-
-  <script>
-    function pairInputs(){
-      return Array.from(document.querySelectorAll("input[name='target_pairs']"));
-    }
-
-    function enabledInputs(inputs){
-      return inputs.filter((input) => !input.disabled);
-    }
-
-    function updateContinueState(){
-      const btn = document.getElementById("continue_btn");
-      if(!btn){ return; }
-      const anyChecked = enabledInputs(pairInputs()).some((input) => input.checked);
-      btn.disabled = !anyChecked;
-    }
-
-    function toggleSet(inputs){
-      const enabled = enabledInputs(inputs);
-      if(!enabled.length){ return; }
-      const allChecked = enabled.every((input) => input.checked);
-      enabled.forEach((input) => { input.checked = !allChecked; });
-    }
-
-    function updateSelectAllLabel(){
-      const btn = document.getElementById("select_all_pairs");
-      if(!btn){ return; }
-      const inputs = enabledInputs(pairInputs());
-      const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
-      btn.textContent = allChecked ? "Select none" : "Select all";
-    }
-
-    const selectAllBtn = document.getElementById("select_all_pairs");
-    if(selectAllBtn){
-      selectAllBtn.addEventListener("click", () => {
-        const inputs = enabledInputs(pairInputs());
-        const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
-        inputs.forEach((input) => { input.checked = !allChecked; });
-        updateSelectAllLabel();
-        updateContinueState();
-      });
-    }
-
-    document.addEventListener("click", (e) => {
-      const t = e.target;
-      if(!t) return;
-      const btn = t.closest(".matrix-toggle");
-      if(!btn){ return; }
-      const seg = btn.getAttribute("data-seg");
-      const cam = btn.getAttribute("data-cam");
-      if(seg){
-        const inputs = enabledInputs(pairInputs()).filter((input) => input.getAttribute("data-seg") === seg);
-        toggleSet(inputs);
-        updateContinueState();
-      } else if(cam){
-        const inputs = enabledInputs(pairInputs()).filter((input) => input.getAttribute("data-cam") === cam);
-        toggleSet(inputs);
-        updateSelectAllLabel();
-        updateContinueState();
-      }
-    });
-
-    document.addEventListener("change", (e) => {
-      const t = e.target;
-      if(!t) return;
-      if(t.name === "target_pairs"){
-        updateSelectAllLabel();
-        updateContinueState();
-      }
-    });
-
-    updateSelectAllLabel();
-    updateContinueState();
-  </script>
-
+  <script src="/static/wizard_select.js?v={{ static_v }}"></script>
 {% endblock %}

@@ -8,7 +8,6 @@
       <p class="muted">Latest 200 timestamp computations.</p>
     </div>
   </div>
-
   <div class="card">
     <table class="table">
       <thead>
@@ -24,13 +23,20 @@
       <tbody>
         {% for r in runs %}
           <tr>
-            <td><a href="/audio-timestamp/runs/{{ r['id'] }}">#{{ r['id'] }}</a></td>
-            <td><span id="ts-status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span></td>
-            <td class="mono">{{ r.get('site','') }}</td>
+            <td>
+              <a href="/audio-timestamp/runs/{{ r['id'] }}">#{{ r['id'] }}</a>
+            </td>
+            <td>
+              <span id="ts-status-{{ r['id'] }}" class="pill {{ r['status'] }}">{{ r['status'] }}</span>
+            </td>
+            <td class="mono">{{ r.get('site', '') }}</td>
             <td class="mono">{{ r['created_at'] }}</td>
             <td class="mono" id="ts-finished-{{ r['id'] }}">{{ r['finished_at'] or "" }}</td>
             <td class="right">
-              <form class="inline" method="post" action="/audio-timestamp/runs/{{ r['id'] }}/delete" onsubmit="return confirm('Remove this timestamp run from history?')">
+              <form class="inline"
+                    method="post"
+                    action="/audio-timestamp/runs/{{ r['id'] }}/delete"
+                    onsubmit="return confirm('Remove this timestamp run from history?')">
                 <button class="btn danger" type="submit">Remove</button>
               </form>
             </td>
@@ -39,7 +45,6 @@
       </tbody>
     </table>
   </div>
-
   <script>
     async function refreshStatus(){
       try{

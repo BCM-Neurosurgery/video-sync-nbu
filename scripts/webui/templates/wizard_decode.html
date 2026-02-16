@@ -1,0 +1,399 @@
+{% extends "wizard_layout.html" %}
+{% set nav = flow_nav or "new" %}
+{% set title = flow_title or "New run" %}
+{% set subtitle = flow_subtitle or "Step 4/6 — Decode audio artifacts" %}
+{% set step = 4 %}
+{% set audio_decoded = (out_result or {}).get("audio_decoded", {}) %}
+{% set decode_status = decode_status or {} %}
+{% block wizard %}
+  <form class="form" method="post" action="/wizard/{{ draft_id }}/decode">
+    <div class="card stack">
+      <div class="card subcard">
+        <h3 style="margin:0 0 8px 0">Audio artifact status</h3>
+        <div class="kv">
+          <div class="k">audio_decoded/ folder</div>
+          <div class="v mono">{{ "Yes" if audio_decoded.get("exists") else "No" }}</div>
+          <div class="k">raw.csv</div>
+          <div class="v mono">{{ "Yes" if audio_decoded.get("raw_csv") else "No" }}</div>
+          <div class="k">raw-gapfilled-filtered.csv</div>
+          <div class="v mono">{{ "Yes" if audio_decoded.get("filtered_csv") else "No" }}</div>
+        </div>
+        {% if can_reuse_audio %}
+          <div class="hint" style="margin-top:10px">
+            Existing audio artifacts are available. You can continue with them or rebuild.
+          </div>
+        {% else %}
+          <div class="alert danger mono" style="margin-top:10px">
+            No reusable audio artifacts found. Decode is required before you can continue.
+          </div>
+        {% endif %}
+      </div>
+      <div class="card subcard">
+        <div class="actions"
+             style="justify-content:space-between;
+                    margin-bottom:8px">
+          <h3 style="margin:0">Decode action</h3>
+          <span id="decode_status_pill" class="pill">Idle</span>
+        </div>
+        <div class="input-row">
+          <label class="field-label" for="decode_site" style="margin:0">Site</label>
+          <select id="decode_site" name="site" class="narrow-select">
+            {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
+              <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% if can_reuse_audio %}
+          <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap">
+            <label class="input-row"
+                   style="justify-content:flex-start;
+                          gap:10px;
+                          border:1px solid var(--border);
+                          border-radius:10px;
+                          padding:10px 12px;
+                          flex:1 1 260px">
+              <input type="radio"
+                     name="decode_action"
+                     value="reuse"
+                     {% if decode_choice == "reuse" %}checked{% endif %} />
+              <span class="field-label" style="margin:0">Use existing artifacts</span>
+            </label>
+            <label class="input-row"
+                   style="justify-content:flex-start;
+                          gap:10px;
+                          border:1px solid var(--border);
+                          border-radius:10px;
+                          padding:10px 12px;
+                          flex:1 1 260px">
+              <input type="radio"
+                     name="decode_action"
+                     value="rebuild"
+                     {% if decode_choice == "rebuild" %}checked{% endif %} />
+              <span class="field-label" style="margin:0">Rebuild artifacts now</span>
+            </label>
+          </div>
+        {% else %}
+          <input type="hidden" name="decode_action" value="rebuild" />
+        {% endif %}
+        {% if decode_error %}
+          <div class="alert danger mono" style="margin-top:10px">{{ decode_error }}</div>
+        {% endif %}
+        {% if decode_ready %}
+          <div class="hint mono" style="margin-top:10px">
+            Ready: decode choice is <strong>{{ decode_choice }}</strong>.
+          </div>
+        {% endif %}
+        <div id="decode_progress" class="hint mono" style="margin-top:10px"></div>
+        <div id="decode_client_error"
+             class="alert danger mono hidden"
+             style="margin-top:10px"></div>
+        <div style="margin-top:10px">
+          <div class="actions"
+               style="justify-content:space-between;
+                      margin-bottom:6px">
+            <div class="label-row field-label">Decode terminal</div>
+            <div class="actions">
+              <a id="decode_log_download"
+                 class="btn hidden"
+                 href="/api/drafts/{{ draft_id }}/decode/log/download">Download log</a>
+              <button id="decode_terminal_clear" class="btn" type="button">Clear</button>
+            </div>
+          </div>
+          <pre id="decode_terminal"
+               class="mono"
+               style="margin:0;
+                      min-height:180px;
+                      max-height:300px;
+                      overflow:auto;
+                      padding:10px;
+                      border:1px solid var(--border);
+                      border-radius:10px;
+                      background:#0f172a;
+                      color:#e2e8f0;
+                      white-space:pre-wrap;
+                      word-break:break-word"></pre>
+        </div>
+        <div class="actions"
+             style="margin-top:12px;
+                    justify-content:space-between">
+          <div class="actions">
+            <a class="btn" href="/wizard/{{ draft_id }}/output">Back</a>
+            <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
+          </div>
+          <button id="decode_submit_btn" class="btn primary" type="submit">
+            {% if can_reuse_audio %}
+              Continue
+            {% else %}
+              Decode audio artifacts
+            {% endif %}
+          </button>
+        </div>
+      </div>
+    </div>
+  </form>
+  <script>
+    const decodeDraftId = {{ draft_id }};
+    const decodeForm = document.querySelector('form[action="/wizard/{{ draft_id }}/decode"]');
+    const decodeSubmitBtn = document.getElementById("decode_submit_btn");
+    const decodeStatusPill = document.getElementById("decode_status_pill");
+    const decodeProgress = document.getElementById("decode_progress");
+    const decodeClientError = document.getElementById("decode_client_error");
+    const decodeTerminal = document.getElementById("decode_terminal");
+    const decodeTerminalClearBtn = document.getElementById("decode_terminal_clear");
+    const decodeLogDownload = document.getElementById("decode_log_download");
+    const initialDecodeStatus = {{ decode_status | tojson }};
+    let decodePollTimer = null;
+    let decodeAutoRedirect = false;
+    let decodeLogSource = null;
+    let decodeLogAllowed = true;
+
+    function appendDecodeTerminal(line) {
+      const text = String(line ?? "");
+      if (!text) {
+        return;
+      }
+      decodeTerminal.textContent += `${text}\n`;
+      decodeTerminal.scrollTop = decodeTerminal.scrollHeight;
+    }
+
+    function closeDecodeLogStream() {
+      if (decodeLogSource) {
+        decodeLogSource.close();
+        decodeLogSource = null;
+      }
+    }
+
+    function updateDecodeLogActions(statusData) {
+      const hasLog = !!statusData?.log_available;
+      if (!hasLog) {
+        decodeLogDownload.classList.add("hidden");
+        decodeLogDownload.removeAttribute("href");
+        return;
+      }
+      decodeLogDownload.classList.remove("hidden");
+      decodeLogDownload.href = `/api/drafts/${decodeDraftId}/decode/log/download`;
+    }
+
+    function openDecodeLogStream(statusData, fromEnd = false) {
+      if (statusData && statusData.log_available === false) {
+        if (decodeLogAllowed) {
+          appendDecodeTerminal("[decode] Live log unavailable; using status updates only.");
+        }
+        decodeLogAllowed = false;
+        return;
+      }
+      decodeLogAllowed = true;
+      const baseUrl = statusData?.log_stream_url || `/api/drafts/${decodeDraftId}/decode/log/stream`;
+      const streamUrl = fromEnd ? `${baseUrl}?from_end=1` : baseUrl;
+      if (!streamUrl || decodeLogSource) {
+        return;
+      }
+      decodeLogSource = new EventSource(streamUrl);
+      decodeLogSource.onmessage = (event) => {
+        appendDecodeTerminal(event.data);
+      };
+      decodeLogSource.addEventListener("status", (event) => {
+        if (event?.data === "no_log") {
+          appendDecodeTerminal("[decode] No log file yet.");
+          return;
+        }
+        if (event?.data === "waiting_for_log") {
+          appendDecodeTerminal("[decode] Waiting for log file...");
+        }
+      });
+      decodeLogSource.onerror = () => {
+        // EventSource auto-reconnects; keep current instance unless explicitly closed.
+      };
+    }
+
+    async function loadDecodeLogSnapshot() {
+      try {
+        const resp = await fetch(`/api/drafts/${decodeDraftId}/decode/log`);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        if (!data?.ok) {
+          return;
+        }
+        decodeTerminal.textContent = String(data.text || "");
+        if (data.truncated) {
+          appendDecodeTerminal("... log truncated to most recent content ...");
+        }
+        decodeTerminal.scrollTop = decodeTerminal.scrollHeight;
+      } catch (_) {
+        // Keep UI usable even if snapshot cannot be loaded.
+      }
+    }
+
+    function selectedDecodeAction() {
+      const checked = decodeForm.querySelector('input[name="decode_action"]:checked');
+      if (checked && checked.value) {
+        return checked.value;
+      }
+      const hidden = decodeForm.querySelector('input[name="decode_action"]');
+      if (hidden && hidden.value) {
+        return hidden.value;
+      }
+      return "rebuild";
+    }
+
+    function setDecodeControlsDisabled(disabled) {
+      if (decodeSubmitBtn) {
+        decodeSubmitBtn.disabled = disabled;
+      }
+      const controls = decodeForm.querySelectorAll('input[name="decode_action"], select[name="site"]');
+      controls.forEach((el) => {
+        el.disabled = disabled;
+      });
+    }
+
+    function setDecodeStatus(data) {
+      const status = String(data?.status || "idle").toLowerCase();
+      const phase = String(data?.phase || "").trim();
+      const message = String(data?.message || "").trim();
+      const running = !!data?.running;
+      updateDecodeLogActions(data);
+
+      decodeStatusPill.className = "pill";
+      if (running || status === "running") {
+        decodeStatusPill.classList.add("running");
+      } else if (status === "succeeded") {
+        decodeStatusPill.classList.add("succeeded");
+      } else if (status === "failed") {
+        decodeStatusPill.classList.add("failed");
+      }
+
+      if (status === "running") {
+        decodeStatusPill.textContent = "Running";
+      } else if (status === "succeeded") {
+        decodeStatusPill.textContent = "Done";
+      } else if (status === "failed") {
+        decodeStatusPill.textContent = "Failed";
+      } else {
+        decodeStatusPill.textContent = "Idle";
+      }
+
+      decodeProgress.textContent = message || phase || "";
+
+      if (!running && status !== "running") {
+        setDecodeControlsDisabled(false);
+      }
+    }
+
+    function showDecodeClientError(text) {
+      if (!text) {
+        decodeClientError.classList.add("hidden");
+        decodeClientError.textContent = "";
+        return;
+      }
+      decodeClientError.classList.remove("hidden");
+      decodeClientError.textContent = text;
+    }
+
+    async function fetchDecodeStatus() {
+      try {
+        const resp = await fetch(`/api/drafts/${decodeDraftId}/decode/status`);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        return await resp.json();
+      } catch (err) {
+        showDecodeClientError(`Failed to read decode status: ${err}`);
+        return null;
+      }
+    }
+
+    function scheduleDecodePoll() {
+      if (decodePollTimer) {
+        clearTimeout(decodePollTimer);
+      }
+      decodePollTimer = setTimeout(pollDecodeStatus, 1000);
+    }
+
+    async function pollDecodeStatus() {
+      const data = await fetchDecodeStatus();
+      if (!data) {
+        scheduleDecodePoll();
+        return;
+      }
+      setDecodeStatus(data);
+      if (data.running || data.status === "running") {
+        setDecodeControlsDisabled(true);
+        openDecodeLogStream(data, true);
+        scheduleDecodePoll();
+        return;
+      }
+      closeDecodeLogStream();
+      if (data.status === "succeeded" && decodeAutoRedirect) {
+        const next = data.redirect_url || `/wizard/${decodeDraftId}/select`;
+        window.location.href = next;
+        return;
+      }
+      if (data.status === "failed" && data.error) {
+        showDecodeClientError(String(data.error));
+      }
+    }
+
+    async function startDecodeAsync() {
+      showDecodeClientError("");
+      decodeTerminal.textContent = "";
+      setDecodeControlsDisabled(true);
+      const payload = new FormData(decodeForm);
+      try {
+        const resp = await fetch(`/api/drafts/${decodeDraftId}/decode/start`, {
+          method: "POST",
+          body: payload,
+        });
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        setDecodeStatus(data);
+        if (data.running || data.status === "running") {
+          decodeAutoRedirect = true;
+          openDecodeLogStream(data, false);
+          scheduleDecodePoll();
+          return;
+        }
+        if (data.status === "succeeded") {
+          const next = data.redirect_url || `/wizard/${decodeDraftId}/select`;
+          window.location.href = next;
+          return;
+        }
+        setDecodeControlsDisabled(false);
+        if (data.error) {
+          showDecodeClientError(String(data.error));
+        }
+      } catch (err) {
+        setDecodeControlsDisabled(false);
+        showDecodeClientError(`Failed to start decode: ${err}`);
+      }
+    }
+
+    decodeForm.addEventListener("submit", (event) => {
+      if (selectedDecodeAction() !== "rebuild") {
+        return;
+      }
+      event.preventDefault();
+      startDecodeAsync();
+    });
+    decodeTerminalClearBtn.addEventListener("click", () => {
+      decodeTerminal.textContent = "";
+    });
+
+    setDecodeStatus(initialDecodeStatus || {});
+    (async () => {
+      if (initialDecodeStatus && initialDecodeStatus.log_available) {
+        await loadDecodeLogSnapshot();
+      }
+      if (initialDecodeStatus && (initialDecodeStatus.running || initialDecodeStatus.status === "running")) {
+        setDecodeControlsDisabled(true);
+        decodeAutoRedirect = true;
+        openDecodeLogStream(initialDecodeStatus, true);
+        scheduleDecodePoll();
+      }
+    })();
+    window.addEventListener("beforeunload", closeDecodeLogStream);
+  </script>
+{% endblock %}

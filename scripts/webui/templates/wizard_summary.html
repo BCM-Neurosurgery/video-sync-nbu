@@ -1,63 +1,95 @@
 {% extends "wizard_layout.html" %}
 {% set nav = flow_nav or "new" %}
 {% set title = flow_title or "New run" %}
-{% set subtitle = flow_subtitle or "Step 5/5 — Summary" %}
-{% set step = 5 %}
-
+{% set subtitle = flow_subtitle or "Step 6/6 — Summary" %}
+{% set step = 6 %}
 {% block wizard %}
   <div class="card">
     <div>
       <h3 style="margin:0">Review</h3>
       <div class="muted small">The run will start only after you click “Start run”.</div>
     </div>
-
     <hr class="divider" />
-
     <h3>Inputs</h3>
     <div class="kv">
-      <div class="k">Audio dir</div><div class="v mono">{{ args.get('audio_dir','') }}</div>
-      <div class="k">Video dir</div><div class="v mono">{{ args.get('video_dir','') }}</div>
-      <div class="k">Output dir</div><div class="v mono">{{ args.get('out_dir','') }}</div>
-      <div class="k">Site</div><div class="v mono">{{ args.get('site','') }}</div>
+      <div class="k">Audio dir</div>
+      <div class="v mono">{{ args.get('audio_dir', '') }}</div>
+      <div class="k">Video dir</div>
+      <div class="v mono">{{ args.get('video_dir', '') }}</div>
+      <div class="k">Output dir</div>
+      <div class="v mono">{{ args.get('out_dir', '') }}</div>
+      <div class="k">Site</div>
+      <div class="v mono">{{ args.get('site', '') }}</div>
     </div>
-
     <hr class="divider" />
-
     <h3>Selection</h3>
+    {% set mode = args.get('selection_mode', 'segments') %}
+    {% set rc = args.get('range_config') or {} %}
+    {% set camera_rules = rc.get('cameras') or {} %}
     <div class="kv">
-      {% set pairs = args.get('target_pairs') or [] %}
-      {% if pairs|length > 0 %}
-        <div class="k">Target pairs</div>
-        <div class="v mono mono-lines">{{ pairs | join('\n') }}</div>
-      {% else %}
-        <div class="k">Segments</div>
+      <div class="k">Mode</div>
+      <div class="v mono">{{ mode }}</div>
+      <div class="k">Target pairs</div>
+      <div class="v mono">{{ (args.get("target_pairs") or [])|length }}</div>
+      {% if mode == 'segments' %}
+        {% set pairs = args.get('target_pairs') or [] %}
+        <div class="k">Pairs</div>
+        <div class="v mono mono-lines">{{ pairs | join("\n") }}</div>
+      {% elif mode == 'time' %}
+        <div class="k">Per-camera ranges</div>
         <div class="v mono">
-          {% set segs = args.get('segments') or [] %}
-          {{ '(all)' if segs|length == 0 else (segs | join(', ')) }}
+          {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('time_start', '') }} -> {{ rule.get('time_end', '') }} ({{ rule.get('time_zone', 'America/Chicago') }})
+            {% if not loop.last %}<br />{% endif %}
+          {%- endfor -%}
         </div>
-        <div class="k">Cameras</div>
+      {% elif mode == 'sample' %}
+        <div class="k">Per-camera ranges</div>
         <div class="v mono">
-          {% set cams = args.get('cameras') or [] %}
-          {{ '(all)' if cams|length == 0 else (cams | join(', ')) }}
+          {%- for cam, rule in camera_rules|dictsort -%}{{ cam }}: {{ rule.get('sample_start', '') }} -> {{ rule.get('sample_end', '') }}
+            {% if not loop.last %}<br />{% endif %}
+          {%- endfor -%}
         </div>
       {% endif %}
     </div>
-
     <hr class="divider" />
-
+    <h3>Execution plan</h3>
+    {% set groups = run_groups or [] %}
+    <div class="kv">
+      <div class="k">CLI runs</div>
+      <div class="v mono">{{ groups|length }}</div>
+      {% if groups|length > 0 %}
+        <div class="k">Groups</div>
+        <div class="v mono">
+          {%- for g in groups -%}{%- if g.get('mode') == 'time' -%}{{ loop.index }}. time | {{ g.get('time_start', '') }} -> {{ g.get('time_end', '') }} ({{ g.get('time_zone', 'America/Chicago') }}) | {{ (g.get("target_pairs") or [])|length }} pair(s){%- elif g.get('mode') == 'sample' -%}{{ loop.index }}. sample | {{ g.get('audio_sample_start', '') }} -> {{ g.get('audio_sample_end', '') }} | {{ (g.get("target_pairs") or [])|length }} pair(s){%- else -%}{{ loop.index }}. segments | {{ (g.get("target_pairs") or [])|length }} pair(s){%- endif -%}
+            {% if not loop.last %}<br />{% endif %}
+          {%- endfor -%}
+        </div>
+      {% endif %}
+    </div>
+    <hr class="divider" />
     <h3>Options</h3>
     <div class="kv">
-      <div class="k">Log level</div><div class="v mono">{{ args.get('log_level','INFO') }}</div>
-      <div class="k">Skip decode</div><div class="v mono">{{ 'Yes' if args.get('skip_decode') else 'No' }}</div>
-      <div class="k">Overwrite clips</div><div class="v mono">{{ 'Yes' if args.get('overwrite_clips') else 'No' }}</div>
-      <div class="k">Split</div><div class="v mono">{{ 'Yes' if args.get('split') else 'No' }}</div>
-      <div class="k">Split overwrite</div><div class="v mono">{{ 'Yes' if args.get('split_overwrite') else 'No' }}</div>
-      <div class="k">Split clean</div><div class="v mono">{{ 'Yes' if args.get('split_clean') else 'No' }}</div>
+      <div class="k">Log level</div>
+      <div class="v mono">{{ args.get('log_level', 'INFO') }}</div>
+      <div class="k">Skip decode</div>
+      <div class="v mono">{{ 'Yes' if args.get("skip_decode") else 'No' }}</div>
+      <div class="k">Decode strategy</div>
+      <div class="v mono">{{ args.get('decode_choice', '') or "—" }}</div>
+      <div class="k">Overwrite clips</div>
+      <div class="v mono">{{ 'Yes' if args.get("overwrite_clips") else 'No' }}</div>
+      <div class="k">Split</div>
+      <div class="v mono">{{ 'Yes' if args.get("split") else 'No' }}</div>
+      <div class="k">Split overwrite</div>
+      <div class="v mono">{{ 'Yes' if args.get("split_overwrite") else 'No' }}</div>
+      <div class="k">Split clean</div>
+      <div class="v mono">{{ 'Yes' if args.get("split_clean") else 'No' }}</div>
     </div>
-
-    <div class="actions" style="margin-top:14px; justify-content:space-between">
+    <div class="actions"
+         style="margin-top:14px;
+                justify-content:space-between">
       <div class="actions">
-        <a class="btn" href="{{ back_url or ('/wizard/' ~ draft_id ~ '/select') }}">Back</a>
+        <a class="btn"
+           href="{{ back_url or ('/wizard/' ~ draft_id ~ '/select') }}">Back</a>
         <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
       </div>
       <form method="post" action="/wizard/{{ draft_id }}/start" class="inline">

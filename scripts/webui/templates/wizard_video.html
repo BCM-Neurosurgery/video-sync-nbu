@@ -3,7 +3,6 @@
 {% set title = flow_title or "New run" %}
 {% set subtitle = flow_subtitle or "Step 2/6 — Select video folder" %}
 {% set step = 2 %}
-
 {% block wizard %}
   <form class="form" method="post" action="/wizard/{{ draft_id }}/video">
     <div class="card stack">
@@ -11,136 +10,145 @@
         <label>
           <span class="label-row">
             <h3 style="margin:0">Video dir</h3>
-            <span class="help" data-tip="Folder containing the segment JSON and camera MP4 files (e.g., <SEG>.json and <SEG>.<CAM>.mp4)."></span>
+            <span class="help"
+                  data-tip="Folder containing the segment JSON and camera MP4 files (e.g., <SEG>.json and <SEG>.<CAM>.mp4)."></span>
             <span id="video_status" class="pill" style="margin-left:6px">Not checked</span>
           </span>
           <div class="input-row">
-            <input id="video_dir" name="video_dir" required value="{{ video_dir or '' }}" placeholder="/path/to/video" />
+            <input id="video_dir"
+                   name="video_dir"
+                   required
+                   value="{{ video_dir or '' }}"
+                   placeholder="/path/to/video" />
             <button class="btn" type="button" onclick="browseDir('video_dir')">Browse</button>
           </div>
         </label>
-
         <div id="video_hint" class="hint" style="margin-top:6px"></div>
-
-        <div class="actions" style="margin-top:12px; justify-content:space-between">
+        <div class="actions"
+             style="margin-top:12px;
+                    justify-content:space-between">
           <div class="actions">
             <a class="btn" href="/wizard/{{ draft_id }}/audio">Back</a>
             <a class="btn" href="{{ cancel_url or '/runs' }}">Cancel</a>
           </div>
           <div class="actions">
-            <button id="btn_recheck" class="btn" type="button" onclick="validateVideo(true)">Re-check</button>
-            <button
-              id="btn_continue"
-              class="btn primary"
-              type="button"
-              onclick="location.href='/wizard/{{ draft_id }}/output'"
-              disabled
-              title="Continue is available after the video check passes"
-            >Continue</button>
+            <button id="btn_recheck"
+                    class="btn"
+                    type="button"
+                    onclick="validateVideo(true)">Re-check</button>
+            <button id="btn_continue"
+                    class="btn primary"
+                    type="button"
+                    onclick="location.href='/wizard/{{ draft_id }}/output'"
+                    disabled
+                    title="Continue is available after the video check passes">Continue</button>
           </div>
         </div>
       </div>
-
       <div id="video_result_wrap" class="stack">
-      {% if video_result %}
-	        {% set check_tips = {
-	          "Segment JSON present": "Checks there are segment JSON files (<SEG>.json) in the selected folder.",
-	          "Camera MP4 present": "Checks there are camera MP4 files named <SEG>.<CAM>.mp4 in the selected folder.",
-	          "Segments discovered": "Parses filenames to discover unique segment IDs.",
-	          "Companion JSON per segment": "For each segment discovered from MP4 filenames, checks there is exactly one matching <SEG>.json file.",
-	          "Cameras discovered": "Parses filenames to discover unique camera IDs.",
-	          "Discovery": "Scans the folder for expected files and naming patterns.",
-	        } %}
-
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Checks</h3>
-            <div class="muted small">Checked at <span class="mono">{{ video_result.checked_at }}</span></div>
-          </div>
-
-          {% if video_result.checks %}
-            <table class="table checks-table">
-              <thead>
-                <tr>
-                  <th>Check</th>
-                  <th class="right statuscol">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for c in video_result.checks %}
+        {% if video_result %}
+          {% set check_tips = {
+            "Segment JSON present": "Checks there are segment JSON files (<SEG>.json) in the selected folder.",
+            "Camera MP4 present": "Checks there are camera MP4 files named <SEG>.<CAM>.mp4 in the selected folder.",
+            "Segments discovered": "Parses filenames to discover unique segment IDs.",
+            "Companion JSON per segment": "For each segment discovered from MP4 filenames, checks there is exactly one matching <SEG>.json file.",
+            "Cameras discovered": "Parses filenames to discover unique camera IDs.",
+            "Discovery": "Scans the folder for expected files and naming patterns."
+          } %}
+          <div class="card subcard">
+            <div class="actions"
+                 style="justify-content:space-between;
+                        margin-bottom:10px">
+              <h3 style="margin:0">Checks</h3>
+              <div class="muted small">
+                Checked at <span class="mono">{{ video_result.checked_at }}</span>
+              </div>
+            </div>
+            {% if video_result.checks %}
+              <table class="table checks-table">
+                <thead>
                   <tr>
-                    <td>
-                      <span class="label-row">
-                        {{ c.name }}
-                        <span class="help" data-tip="{{ check_tips.get(c.name, 'What this check validates in the video folder.') }}"></span>
-                      </span>
-                    </td>
-                    <td class="right statuscol">
-                      {% if c.status == "pass" %}
-                        <span class="pill succeeded">Pass</span>
-                      {% elif c.status == "fail" %}
-                        <span class="pill failed">Fail</span>
-                      {% elif c.status == "warn" %}
-                        <span class="pill failed">Warn</span>
-                      {% elif c.status == "running" %}
-                        <span class="pill running">Running</span>
-                      {% elif c.status == "skipped" %}
-                        <span class="pill">Skipped</span>
-                      {% elif c.status == "pending" %}
-                        <span class="pill">Pending</span>
-                      {% else %}
-                        <span class="pill">{{ c.status }}</span>
-                      {% endif %}
-                    </td>
+                    <th>Check</th>
+                    <th class="right statuscol">Status</th>
                   </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% else %}
-            <div class="muted">No checks run yet.</div>
-          {% endif %}
-        </div>
-
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Summary</h3>
+                </thead>
+                <tbody>
+                  {% for c in video_result.checks %}
+                    <tr>
+                      <td>
+                        <span class="label-row">
+                          {{ c.name }}
+                          <span class="help"
+                                data-tip="{{ check_tips.get(c.name, 'What this check validates in the video folder.') }}"></span>
+                        </span>
+                      </td>
+                      <td class="right statuscol">
+                        {% if c.status == "pass" %}
+                          <span class="pill succeeded">Pass</span>
+                        {% elif c.status == "fail" %}
+                          <span class="pill failed">Fail</span>
+                        {% elif c.status == "warn" %}
+                          <span class="pill failed">Warn</span>
+                        {% elif c.status == "running" %}
+                          <span class="pill running">Running</span>
+                        {% elif c.status == "skipped" %}
+                          <span class="pill">Skipped</span>
+                        {% elif c.status == "pending" %}
+                          <span class="pill">Pending</span>
+                        {% else %}
+                          <span class="pill">{{ c.status }}</span>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <div class="muted">No checks run yet.</div>
+            {% endif %}
           </div>
-
-          {% set summary_error = (video_result.error or error) %}
-          {% if (not video_result.ok) and summary_error %}
-            <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
-          {% elif video_result.ok %}
-            <div class="kv">
-              <div class="k">Top-level JSON files</div>
-              <div class="v mono">{{ video_result.json_count }}</div>
-              <div class="k">Top-level MP4 files</div>
-              <div class="v mono">{{ video_result.mp4_count }}</div>
-              <div class="k">Segments</div>
-              <div class="v mono">{{ video_result.segments_count }}</div>
-              <div class="k">First segment</div>
-              <div class="v mono">{{ video_result.segments_first or "—" }}</div>
-              <div class="k">Last segment</div>
-	              <div class="v mono">{{ video_result.segments_last or "—" }}</div>
-	              <div class="k">Cameras</div>
-	              {% set cams = (video_result.cameras or video_result.cameras_preview or []) %}
-	              <div class="v mono camera-lines">{{ cams|join('\n') if cams else "—" }}</div>
-	            </div>
-	          {% else %}
-	            <div class="muted">Summary will appear after checks pass.</div>
-	          {% endif %}
-        </div>
-      {% elif error %}
-        <div class="card subcard">
-          <div class="actions" style="justify-content:space-between; margin-bottom:10px">
-            <h3 style="margin:0">Summary</h3>
+          <div class="card subcard">
+            <div class="actions"
+                 style="justify-content:space-between;
+                        margin-bottom:10px">
+              <h3 style="margin:0">Summary</h3>
+            </div>
+            {% set summary_error = (video_result.error or error) %}
+            {% if (not video_result.ok) and summary_error %}
+              <div class="danger-text mono" style="margin-top:0">{{ summary_error }}</div>
+            {% elif video_result.ok %}
+              <div class="kv">
+                <div class="k">Top-level JSON files</div>
+                <div class="v mono">{{ video_result.json_count }}</div>
+                <div class="k">Top-level MP4 files</div>
+                <div class="v mono">{{ video_result.mp4_count }}</div>
+                <div class="k">Segments</div>
+                <div class="v mono">{{ video_result.segments_count }}</div>
+                <div class="k">First segment</div>
+                <div class="v mono">{{ video_result.segments_first or "—" }}</div>
+                <div class="k">Last segment</div>
+                <div class="v mono">{{ video_result.segments_last or "—" }}</div>
+                <div class="k">Cameras</div>
+                {% set cams = (video_result.cameras or video_result.cameras_preview or []) %}
+                <div class="v mono camera-lines">{{ cams|join("\n") if cams else "—" }}</div>
+              </div>
+            {% else %}
+              <div class="muted">Summary will appear after checks pass.</div>
+            {% endif %}
           </div>
-          <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
-        </div>
-      {% endif %}
+        {% elif error %}
+          <div class="card subcard">
+            <div class="actions"
+                 style="justify-content:space-between;
+                        margin-bottom:10px">
+              <h3 style="margin:0">Summary</h3>
+            </div>
+            <div class="danger-text mono" style="margin-top:0">{{ error }}</div>
+          </div>
+        {% endif %}
       </div>
     </div>
   </form>
-
   <script>
     const draftId = {{ draft_id }};
     const videoInput = document.getElementById("video_dir");
@@ -152,7 +160,7 @@
 
     function esc(s){
       return String(s ?? "").replace(/[&<>\"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+        "&":"&amp;","<":"&lt ;",">":"&gt;","\"":"&quot;","'":"&#39;"
       }[c]));
     }
 

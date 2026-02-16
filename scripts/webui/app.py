@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -9,7 +10,8 @@ import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -22,17 +24,26 @@ from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_s
 from scripts.validate.validate_audio_dir import validate_audio_dir
 from scripts.validate.validate_audio_dir import validate_audio_dir_progress
 from scripts.validate.validate_out_dir import discover_synced_pairs, validate_out_dir
+from scripts.cli.cli_nbu import prepare_serial_audio
 from scripts.validate.validate_video_dir import (
     discover_from_video_dir,
     validate_video_dir,
     validate_video_dir_progress,
 )
+from scripts.index.discover import AudioDiscoverer
 from scripts.time.find_audio_abs_time import (
     OutputLayout,
     compute_audio_start_records,
     _record_to_payload,
 )
 from scripts.index.common import DEFAULT_TZ
+from scripts.errors import (
+    AudioGroupDiscoverError,
+    AudioDecodingError,
+    GapFillError,
+    FilteredError,
+)
+from scripts.parsers.jsonfileparser import JsonParser
 
 
 ROOT = Path(__file__).resolve().parent
@@ -54,6 +65,9 @@ def _default_args() -> Dict[str, Any]:
         "segments": [],
         "cameras": [],
         "target_pairs": [],
+        "manual_target_pairs": [],
+        "range_config": {},
+        "selection_mode": "segments",
         "log_level": "INFO",
         "skip_decode": False,
         "overwrite_clips": False,
@@ -61,7 +75,126 @@ def _default_args() -> Dict[str, Any]:
         "split_overwrite": False,
         "split_clean": False,
         "split_chunk_seconds": 3600,
+        "decode_choice": "",
+        "decode_choice_out_dir": "",
+        "decode_error": None,
+        "decode_log_path": "",
     }
+
+
+def _clear_decode_state(data: Dict[str, Any]) -> None:
+    data.pop("decode_choice", None)
+    data.pop("decode_choice_out_dir", None)
+    data.pop("decode_error", None)
+    data.pop("decode_log_path", None)
+    data["skip_decode"] = False
+
+
+def _mark_decode_ready(data: Dict[str, Any], *, choice: str) -> None:
+    out_dir = str(data.get("out_dir", "")).strip()
+    data["decode_choice"] = choice
+    data["decode_choice_out_dir"] = out_dir
+    data["decode_error"] = None
+    data["skip_decode"] = True
+    data["split"] = False
+    data["split_overwrite"] = False
+    data["split_clean"] = False
+
+
+def _is_decode_ready(data: Dict[str, Any]) -> bool:
+    if str(data.get("mode") or "sync") == "audio_timestamp":
+        return True
+    out_dir = str(data.get("out_dir", "")).strip()
+    if not out_dir:
+        return False
+    if str(data.get("decode_choice_out_dir") or "").strip() != out_dir:
+        return False
+    choice = str(data.get("decode_choice") or "").strip().lower()
+    if choice not in {"reuse", "rebuild"}:
+        return False
+    out_result = data.get("out_result") or {}
+    audio_decoded = out_result.get("audio_decoded") or {}
+    return bool(audio_decoded.get("raw_csv") and audio_decoded.get("filtered_csv"))
+
+
+def _rebuild_decode_artifacts_for_draft(
+    data: Dict[str, Any],
+    *,
+    site_value: str,
+    on_phase: Optional[Callable[[str, str], None]] = None,
+) -> Optional[str]:
+    def emit(phase: str, message: str) -> None:
+        if on_phase is None:
+            return
+        try:
+            on_phase(phase, message)
+        except Exception:
+            pass
+
+    out_dir = str(data.get("out_dir", "")).strip()
+    if not out_dir:
+        _clear_decode_state(data)
+        return "Output dir is required."
+
+    emit("discover", "Discovering audio files...")
+    try:
+        audio_dir = Path(str(data.get("audio_dir", "")).strip()).expanduser()
+        out_dir_path = Path(out_dir).expanduser()
+        decode_log = logging.getLogger("webui.decode.audio")
+        audiogroup = AudioDiscoverer(
+            audio_dir=audio_dir, log=decode_log
+        ).get_audio_group()
+    except (AudioGroupDiscoverError, ValueError) as exc:
+        _clear_decode_state(data)
+        return f"Audio decode failed: {exc}"
+    except Exception as exc:
+        _clear_decode_state(data)
+        return f"Audio decode failed: {exc}"
+
+    emit(
+        "decode",
+        "Decoding serial audio (split + split-overwrite) and rebuilding artifacts...",
+    )
+    try:
+        split_chunk_seconds = int(data.get("split_chunk_seconds", 3600) or 3600)
+        prepare_serial_audio(
+            audiogroup=audiogroup,
+            artifact_root=out_dir_path,
+            site=site_value,
+            skip_decode=False,
+            do_split=True,
+            split_chunk_seconds=split_chunk_seconds,
+            split_overwrite=True,
+            split_clean=False,
+        )
+    except (
+        AudioDecodingError,
+        GapFillError,
+        FilteredError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        _clear_decode_state(data)
+        return f"Audio decode failed: {exc}"
+    except Exception as exc:
+        _clear_decode_state(data)
+        return f"Audio decode failed: {exc}"
+
+    emit("finalize", "Refreshing output artifact status...")
+    segments = data.get("segments_all")
+    if not isinstance(segments, list):
+        segments = None
+    refreshed = validate_out_dir(out_dir, segments=segments)
+    data["out_ok"] = bool(refreshed.get("ok"))
+    data["out_result"] = refreshed
+    data["out_error"] = refreshed.get("error")
+    if not bool(refreshed.get("can_reuse_audio_decoded")):
+        _clear_decode_state(data)
+        return "Decode completed but expected audio artifacts were not found in output."
+
+    _mark_decode_ready(data, choice="rebuild")
+    data["decode_error"] = None
+    return None
 
 
 def _normalize_target_pairs(raw: Optional[List[str]]) -> List[str]:
@@ -139,6 +272,485 @@ def _segment_range_title(args: Dict[str, Any]) -> str:
     return f"{first} → {last}"
 
 
+RANGE_MODE_VALUES = {"manual", "time", "sample"}
+TIME_DISPLAY_FMT = "%Y-%m-%d %H:%M:%S"
+WEBUI_DEFAULT_TIME_ZONE = "America/Chicago"
+
+
+def _normalize_range_mode(raw: object, *, default: str = "manual") -> str:
+    s = str(raw or "").strip().lower()
+    return s if s in RANGE_MODE_VALUES else default
+
+
+def _parse_int_or_none(raw: object) -> Optional[int]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+
+def _normalize_time_text(raw: object) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    s = s.replace("T", " ")
+    try:
+        return datetime.fromisoformat(s).strftime(TIME_DISPLAY_FMT)
+    except Exception:
+        pass
+    for fmt in (TIME_DISPLAY_FMT, "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s, fmt).strftime(TIME_DISPLAY_FMT)
+        except Exception:
+            continue
+    return ""
+
+
+def _parse_time_text(raw: object) -> Optional[datetime]:
+    normalized = _normalize_time_text(raw)
+    if not normalized:
+        return None
+    try:
+        return datetime.strptime(normalized, TIME_DISPLAY_FMT)
+    except Exception:
+        return None
+
+
+def _parse_time_text_in_utc(raw: object, source_tz: str = "UTC") -> Optional[datetime]:
+    """
+    Parse wall-clock text and convert to naive UTC datetime for internal comparison.
+    """
+    dt = _parse_time_text(raw)
+    if dt is None:
+        return None
+    tz_name = str(source_tz or "UTC").strip() or "UTC"
+    if tz_name == "UTC":
+        return dt
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except Exception:
+        return None
+    return dt.replace(tzinfo=tzinfo).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _extract_available_pair_map(video_result: Mapping[str, Any]) -> Dict[str, bool]:
+    out: Dict[str, bool] = {}
+    available_pairs = video_result.get("available_pairs")
+    if not isinstance(available_pairs, list):
+        return out
+    for item in available_pairs:
+        if isinstance(item, dict):
+            seg = item.get("segment")
+            cam = item.get("camera")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            seg = item[0]
+            cam = item[1]
+        else:
+            continue
+        if seg and cam:
+            out[f"{seg}::{cam}"] = True
+    return out
+
+
+def _extract_missing_json_map(video_result: Mapping[str, Any]) -> Dict[str, bool]:
+    out: Dict[str, bool] = {}
+    missing_json_segments = video_result.get("missing_json_segments")
+    if not isinstance(missing_json_segments, list):
+        return out
+    for seg in missing_json_segments:
+        if seg:
+            out[str(seg)] = True
+    return out
+
+
+def _extract_synced_pair_map(out_result: Mapping[str, Any]) -> Dict[str, bool]:
+    out: Dict[str, bool] = {}
+    synced_pairs = out_result.get("synced_pairs")
+    if not isinstance(synced_pairs, list):
+        return out
+    for item in synced_pairs:
+        if isinstance(item, dict):
+            seg = item.get("segment")
+            cam = item.get("camera")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            seg = item[0]
+            cam = item[1]
+        else:
+            continue
+        if seg and cam:
+            out[f"{seg}::{cam}"] = True
+    return out
+
+
+def _load_serial_sample_map(serial_csv: Path) -> Dict[int, Tuple[int, int]]:
+    mapping: Dict[int, Tuple[int, int]] = {}
+    if not serial_csv.exists() or not serial_csv.is_file():
+        return mapping
+    try:
+        with serial_csv.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    serial = int(str(row.get("serial", "")).strip())
+                    start = int(str(row.get("start_sample", "")).strip())
+                    end = int(str(row.get("end_sample", "")).strip())
+                except Exception:
+                    continue
+                mapping[serial] = (start, end)
+    except Exception:
+        return {}
+    return mapping
+
+
+def _build_range_catalog(
+    *,
+    video_dir: Path,
+    out_dir: Path,
+    available_pair_map: Mapping[str, bool],
+) -> Dict[str, Any]:
+    pairs: Dict[str, Dict[str, Any]] = {}
+    pairs_by_camera: Dict[str, List[str]] = {}
+    camera_time_bounds: Dict[str, Dict[str, str]] = {}
+    camera_sample_bounds: Dict[str, Dict[str, int]] = {}
+
+    serial_csv = out_dir / "audio_decoded" / "raw-gapfilled-filtered.csv"
+    serial_sample_map = _load_serial_sample_map(serial_csv)
+    sample_ready = bool(serial_sample_map)
+
+    segment_ids = sorted({k.split("::", 1)[0] for k in available_pair_map.keys()})
+    for seg_id in segment_ids:
+        json_path = video_dir / f"{seg_id}.json"
+        if not json_path.exists():
+            continue
+        try:
+            jp = JsonParser(str(json_path))
+            payload = jp.dic
+        except Exception:
+            continue
+
+        real_times = payload.get("real_times") or []
+        segment_time_start = _normalize_time_text(real_times[0]) if real_times else ""
+        segment_time_end = _normalize_time_text(real_times[-1]) if real_times else ""
+
+        serials_raw = payload.get("serials") or []
+        for cam_serial_raw in serials_raw:
+            cam = str(cam_serial_raw).strip()
+            key = f"{seg_id}::{cam}"
+            if key not in available_pair_map:
+                continue
+
+            pair_info: Dict[str, Any] = {
+                "time_start": "" if sample_ready else segment_time_start,
+                "time_end": "" if sample_ready else segment_time_end,
+                "sample_start": None,
+                "sample_end": None,
+            }
+
+            if sample_ready:
+                sample_min: Optional[int] = None
+                sample_max: Optional[int] = None
+                matched_start_idx: Optional[int] = None
+                matched_end_idx: Optional[int] = None
+                try:
+                    fixed_serials = jp.get_fixed_chunk_serial_list(cam_serial_raw)
+                except Exception:
+                    fixed_serials = []
+
+                for frame_idx, serial_val_raw in enumerate(fixed_serials):
+                    if frame_idx >= len(real_times):
+                        continue
+                    try:
+                        serial_val = int(serial_val_raw)
+                    except Exception:
+                        continue
+                    rng = serial_sample_map.get(serial_val)
+                    if rng is None:
+                        continue
+
+                    s0, s1 = rng
+                    sample_min = s0 if sample_min is None else min(sample_min, s0)
+                    sample_max = s1 if sample_max is None else max(sample_max, s1)
+                    if matched_start_idx is None:
+                        matched_start_idx = frame_idx
+                    matched_end_idx = frame_idx
+
+                if sample_min is not None and sample_max is not None:
+                    pair_info["sample_start"] = int(sample_min)
+                    pair_info["sample_end"] = int(sample_max)
+                if matched_start_idx is not None and matched_end_idx is not None:
+                    pair_info["time_start"] = _normalize_time_text(
+                        real_times[matched_start_idx]
+                    )
+                    pair_info["time_end"] = _normalize_time_text(
+                        real_times[matched_end_idx]
+                    )
+
+            pairs[key] = pair_info
+            pairs_by_camera.setdefault(cam, []).append(key)
+
+            t0 = pair_info.get("time_start")
+            t1 = pair_info.get("time_end")
+            if isinstance(t0, str) and isinstance(t1, str) and t0 and t1:
+                cur = camera_time_bounds.get(cam)
+                if cur is None:
+                    camera_time_bounds[cam] = {"start": t0, "end": t1}
+                else:
+                    if t0 < cur["start"]:
+                        cur["start"] = t0
+                    if t1 > cur["end"]:
+                        cur["end"] = t1
+
+            s0 = pair_info.get("sample_start")
+            s1 = pair_info.get("sample_end")
+            if isinstance(s0, int) and isinstance(s1, int):
+                cur_s = camera_sample_bounds.get(cam)
+                if cur_s is None:
+                    camera_sample_bounds[cam] = {"start": s0, "end": s1}
+                else:
+                    if s0 < cur_s["start"]:
+                        cur_s["start"] = s0
+                    if s1 > cur_s["end"]:
+                        cur_s["end"] = s1
+
+    for cam, keys in pairs_by_camera.items():
+        keys.sort()
+
+    global_time_bounds: Optional[Dict[str, str]] = None
+    if camera_time_bounds:
+        starts = [v["start"] for v in camera_time_bounds.values()]
+        ends = [v["end"] for v in camera_time_bounds.values()]
+        global_time_bounds = {"start": min(starts), "end": max(ends)}
+
+    global_sample_bounds: Optional[Dict[str, int]] = None
+    if camera_sample_bounds:
+        starts_s = [v["start"] for v in camera_sample_bounds.values()]
+        ends_s = [v["end"] for v in camera_sample_bounds.values()]
+        global_sample_bounds = {"start": min(starts_s), "end": max(ends_s)}
+
+    return {
+        "pairs": pairs,
+        "pairs_by_camera": pairs_by_camera,
+        "camera_time_bounds": camera_time_bounds,
+        "camera_sample_bounds": camera_sample_bounds,
+        "global_time_bounds": global_time_bounds,
+        "global_sample_bounds": global_sample_bounds,
+        "sample_ready": sample_ready,
+    }
+
+
+def _default_range_config(cameras: List[str]) -> Dict[str, Any]:
+    return {
+        "cameras": {
+            str(cam): {
+                "enabled": True,
+                "mode": "manual",
+                "time_start": "",
+                "time_end": "",
+                "time_zone": WEBUI_DEFAULT_TIME_ZONE,
+                "sample_start": "",
+                "sample_end": "",
+            }
+            for cam in cameras
+        },
+    }
+
+
+def _coerce_range_config(raw: object, cameras: List[str]) -> Dict[str, Any]:
+    cfg = _default_range_config(cameras)
+    if not isinstance(raw, dict):
+        return cfg
+
+    cameras_raw = raw.get("cameras")
+    if isinstance(cameras_raw, dict):
+        for cam in cameras:
+            cam_raw = cameras_raw.get(cam)
+            if not isinstance(cam_raw, dict):
+                continue
+            cur = cfg["cameras"][cam]
+            cur["enabled"] = bool(cam_raw.get("enabled", True))
+            cur["mode"] = _normalize_range_mode(cam_raw.get("mode"))
+            cur["time_start"] = _normalize_time_text(cam_raw.get("time_start"))
+            cur["time_end"] = _normalize_time_text(cam_raw.get("time_end"))
+            cur["time_zone"] = (
+                str(cam_raw.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
+                or WEBUI_DEFAULT_TIME_ZONE
+            )
+            cs0 = _parse_int_or_none(cam_raw.get("sample_start"))
+            cs1 = _parse_int_or_none(cam_raw.get("sample_end"))
+            cur["sample_start"] = "" if cs0 is None else str(cs0)
+            cur["sample_end"] = "" if cs1 is None else str(cs1)
+
+    return cfg
+
+
+def _resolve_camera_rule(range_config: Dict[str, Any], cam: str) -> Dict[str, Any]:
+    cam_rules = range_config.get("cameras") or {}
+    base = dict(cam_rules.get(str(cam)) or {})
+    return {
+        "mode": _normalize_range_mode(base.get("mode")),
+        "time_start": _normalize_time_text(base.get("time_start")),
+        "time_end": _normalize_time_text(base.get("time_end")),
+        "time_zone": (
+            str(base.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
+            or WEBUI_DEFAULT_TIME_ZONE
+        ),
+        "sample_start": _parse_int_or_none(base.get("sample_start")),
+        "sample_end": _parse_int_or_none(base.get("sample_end")),
+        "enabled": bool(base.get("enabled", True)),
+    }
+
+
+def _pair_matches_rule(pair_meta: Dict[str, Any], rule: Dict[str, Any]) -> bool:
+    mode = rule.get("mode")
+    if mode == "time":
+        rule_tz = str(rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip() or "UTC"
+        t0 = _parse_time_text_in_utc(rule.get("time_start"), rule_tz)
+        t1 = _parse_time_text_in_utc(rule.get("time_end"), rule_tz)
+        p0 = _parse_time_text(pair_meta.get("time_start"))
+        p1 = _parse_time_text(pair_meta.get("time_end"))
+        if not t0 or not t1 or not p0 or not p1:
+            return False
+        if t1 < t0:
+            return False
+        return (p1 >= t0) and (p0 <= t1)
+    if mode == "sample":
+        s0 = _parse_int_or_none(rule.get("sample_start"))
+        s1 = _parse_int_or_none(rule.get("sample_end"))
+        p0 = _parse_int_or_none(pair_meta.get("sample_start"))
+        p1 = _parse_int_or_none(pair_meta.get("sample_end"))
+        if s0 is None or s1 is None or p0 is None or p1 is None:
+            return False
+        if s1 < s0:
+            return False
+        return (p1 >= s0) and (p0 <= s1)
+    return False
+
+
+def _compute_effective_target_pairs(
+    *,
+    manual_pairs: List[str],
+    cameras: List[str],
+    available_pair_map: Mapping[str, bool],
+    range_config: Dict[str, Any],
+    range_catalog: Dict[str, Any],
+) -> Tuple[List[str], Optional[str]]:
+    manual_set = {p for p in manual_pairs if p in available_pair_map}
+    pairs_by_camera: Dict[str, List[str]] = range_catalog.get("pairs_by_camera") or {}
+    pair_meta_map: Dict[str, Dict[str, Any]] = range_catalog.get("pairs") or {}
+
+    selected: List[str] = []
+    seen: set[str] = set()
+
+    for cam in cameras:
+        rule = _resolve_camera_rule(range_config, cam)
+        if not bool(rule.get("enabled", True)):
+            continue
+        mode = rule.get("mode")
+        if mode == "manual":
+            for pair in manual_pairs:
+                if pair in seen:
+                    continue
+                if pair not in manual_set:
+                    continue
+                if pair.endswith(f"::{cam}"):
+                    seen.add(pair)
+                    selected.append(pair)
+            continue
+
+        if mode == "time":
+            if not rule.get("time_start") or not rule.get("time_end"):
+                return [], f"Camera {cam}: both time start/end are required."
+        elif mode == "sample":
+            s0 = rule.get("sample_start")
+            s1 = rule.get("sample_end")
+            if s0 is None or s1 is None:
+                return [], f"Camera {cam}: both sample start/end are required."
+            if int(s1) < int(s0):
+                return [], f"Camera {cam}: sample end must be >= sample start."
+        else:
+            return [], f"Camera {cam}: invalid range mode '{mode}'."
+
+        for pair in pairs_by_camera.get(cam, []):
+            if pair in seen or pair not in available_pair_map:
+                continue
+            meta = pair_meta_map.get(pair) or {}
+            if _pair_matches_rule(meta, rule):
+                seen.add(pair)
+                selected.append(pair)
+
+    if not selected:
+        return [], (
+            "No segment/camera pairs matched the current selection rules. "
+            "Adjust manual picks or range values."
+        )
+    return selected, None
+
+
+def _build_sync_run_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    selected_pairs = _normalize_target_pairs(data.get("target_pairs"))
+    if not selected_pairs:
+        return []
+
+    cameras = [str(c) for c in (data.get("cameras_all") or []) if str(c).strip()]
+    if not cameras:
+        cameras = sorted({p.split("::", 1)[1] for p in selected_pairs if "::" in p})
+    range_config = _coerce_range_config(data.get("range_config"), cameras)
+
+    grouped: Dict[Tuple[str, str, str, str], List[str]] = {}
+    order: List[Tuple[str, str, str, str]] = []
+
+    for pair in sorted(selected_pairs):
+        cam = pair.split("::", 1)[1] if "::" in pair else ""
+        rule = _resolve_camera_rule(range_config, cam)
+        mode = rule.get("mode", "manual")
+        if mode == "time":
+            key = (
+                "time",
+                str(rule.get("time_start") or ""),
+                str(rule.get("time_end") or ""),
+                str(rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE),
+            )
+        elif mode == "sample":
+            key = (
+                "sample",
+                str(rule.get("sample_start") or ""),
+                str(rule.get("sample_end") or ""),
+                "",
+            )
+        else:
+            key = ("manual", "", "", "")
+
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(pair)
+
+    runs: List[Dict[str, Any]] = []
+    for key in order:
+        mode, a, b, c = key
+        entry: Dict[str, Any] = {
+            "mode": mode,
+            "target_pairs": grouped[key],
+            "time_start": "",
+            "time_end": "",
+            "time_zone": "",
+            "audio_sample_start": None,
+            "audio_sample_end": None,
+        }
+        if mode == "time":
+            entry["time_start"] = a
+            entry["time_end"] = b
+            entry["time_zone"] = c or WEBUI_DEFAULT_TIME_ZONE
+        elif mode == "sample":
+            entry["audio_sample_start"] = _parse_int_or_none(a)
+            entry["audio_sample_end"] = _parse_int_or_none(b)
+        runs.append(entry)
+    return runs
+
+
 def _draft_create(*, mode: str = "sync") -> int:
     conn = get_conn()
     now = utc_now_iso()
@@ -205,18 +817,24 @@ def _wizard_flow_context(data: Dict[str, Any], *, step: int) -> Dict[str, Any]:
                 "Select segment-camera pairs to use as reference anchors. "
                 "-- = missing video. Click a segment or camera header to toggle its row/column."
             ),
-            "show_reuse_audio": False,
         }
+    subtitles = {
+        1: "Step 1/6 — Select audio folder",
+        2: "Step 2/6 — Select video folder",
+        3: "Step 3/6 — Select output folder",
+        4: "Step 4/6 — Decode audio artifacts",
+        5: "Step 5/6 — Select sync targets",
+        6: "Step 6/6 — Summary",
+    }
     return {
         "mode": mode,
         "base_layout": "layout_nbu.html",
         "flow_title": "New run",
-        "flow_subtitle": None,
+        "flow_subtitle": subtitles.get(step),
         "flow_nav": "new",
         "cancel_url": "/runs",
-        "flow_steps": ["Audio", "Video", "Output", "Select", "Summary"],
+        "flow_steps": ["Audio", "Video", "Output", "Decode", "Select", "Summary"],
         "select_hint": None,
-        "show_reuse_audio": True,
     }
 
 
@@ -382,6 +1000,104 @@ def create_app() -> FastAPI:
         "Directory empty",
         "Audio metadata present",
     ]
+    decode_val_lock = threading.Lock()
+    decode_val_state: Dict[int, Dict[str, Any]] = {}
+
+    def _decode_payload(
+        *,
+        draft_id: int,
+        out_dir: str,
+        action: str,
+        status: str,
+        running: bool,
+        phase: str,
+        message: str,
+        error: Optional[str] = None,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        log_available: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "draft_id": draft_id,
+            "out_dir": out_dir,
+            "action": action,
+            "status": status,
+            "running": running,
+            "phase": phase,
+            "message": message,
+            "error": error,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "redirect_url": (
+                f"/wizard/{draft_id}/select" if status == "succeeded" else ""
+            ),
+            "log_stream_url": f"/api/drafts/{draft_id}/decode/log/stream",
+            "log_available": bool(log_available),
+        }
+
+    def _decode_status_from_draft(
+        draft_id: int, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        out_dir = str(data.get("out_dir", "")).strip()
+        log_available = bool(str(data.get("decode_log_path", "")).strip())
+        decode_choice = str(data.get("decode_choice") or "").strip().lower()
+        if decode_choice not in {"reuse", "rebuild"}:
+            decode_choice = "rebuild"
+        if _is_decode_ready(data):
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action=decode_choice,
+                status="succeeded",
+                running=False,
+                phase="done",
+                message="Audio artifacts are ready.",
+                log_available=log_available,
+            )
+        decode_error = str(data.get("decode_error") or "").strip()
+        if decode_error:
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action=decode_choice,
+                status="failed",
+                running=False,
+                phase="failed",
+                message=decode_error,
+                error=decode_error,
+                log_available=log_available,
+            )
+        can_reuse = bool((data.get("out_result") or {}).get("can_reuse_audio_decoded"))
+        idle_msg = (
+            "Audio artifacts found. Choose reuse or rebuild."
+            if can_reuse
+            else "No audio artifacts found. Decode is required."
+        )
+        return _decode_payload(
+            draft_id=draft_id,
+            out_dir=out_dir,
+            action=decode_choice,
+            status="idle",
+            running=False,
+            phase="idle",
+            message=idle_msg,
+            log_available=log_available,
+        )
+
+    def _resolve_decode_log_path_for_draft(
+        draft_id: int, data: Dict[str, Any]
+    ) -> Optional[Path]:
+        out_dir = str(data.get("out_dir", "")).strip()
+        log_path_raw = ""
+        with decode_val_lock:
+            st = decode_val_state.get(draft_id)
+            if st and str(st.get("out_dir", "")).strip() == out_dir:
+                log_path_raw = str(st.get("log_path") or "").strip()
+        if not log_path_raw:
+            log_path_raw = str(data.get("decode_log_path") or "").strip()
+        if not log_path_raw:
+            return None
+        return Path(log_path_raw)
 
     @app.get("/api/video-index")
     def api_video_index(video_dir: str) -> Dict[str, Any]:
@@ -628,10 +1344,13 @@ def create_app() -> FastAPI:
             data.pop("segments", None)
             data.pop("cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            _clear_decode_state(data)
         data["audio_dir"] = audio_dir.strip()
 
         result = validate_audio_dir(
@@ -658,10 +1377,13 @@ def create_app() -> FastAPI:
             data.pop("segments", None)
             data.pop("cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            _clear_decode_state(data)
             data.pop("timestamp_output_path", None)
             data.pop("timestamp_run_id", None)
         data["audio_dir"] = audio_dir
@@ -783,9 +1505,12 @@ def create_app() -> FastAPI:
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            _clear_decode_state(data)
         data["video_dir"] = video_dir.strip()
 
         result = validate_video_dir(video_dir)
@@ -820,9 +1545,12 @@ def create_app() -> FastAPI:
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            _clear_decode_state(data)
         data["video_dir"] = video_dir
         _draft_set(draft_id, data)
 
@@ -959,6 +1687,9 @@ def create_app() -> FastAPI:
         out_dir = out_dir.strip()
         if data.get("out_dir") != out_dir:
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
+            _clear_decode_state(data)
         data["out_dir"] = out_dir
 
         segments = data.get("segments_all")
@@ -981,6 +1712,9 @@ def create_app() -> FastAPI:
         out_dir = out_dir.strip()
         if data.get("out_dir") != out_dir:
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
+            _clear_decode_state(data)
         data["out_dir"] = out_dir
         _draft_set(draft_id, data)
 
@@ -1115,6 +1849,450 @@ def create_app() -> FastAPI:
             "error": None,
         }
 
+    @app.post("/api/drafts/{draft_id}/decode/start")
+    def api_decode_start(
+        draft_id: int,
+        decode_action: str = Form("rebuild"),
+        site: str = Form("nbu_lounge"),
+    ) -> Dict[str, Any]:
+        data = _draft_get(draft_id)
+        mode = str(data.get("mode") or "sync")
+        out_dir = str(data.get("out_dir", "")).strip()
+        site_value = (
+            str(site or data.get("site") or "nbu_lounge").strip() or "nbu_lounge"
+        )
+
+        if mode == "audio_timestamp":
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action="rebuild",
+                status="failed",
+                running=False,
+                phase="failed",
+                message="Decode stage is not used in audio timestamp mode.",
+                error="Decode stage is not used in audio timestamp mode.",
+            )
+        if not bool(data.get("audio_ok", False)):
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action="rebuild",
+                status="failed",
+                running=False,
+                phase="failed",
+                message="Audio input is not valid. Go back to Step 1.",
+                error="Audio input is not valid.",
+            )
+        if not bool(data.get("video_ok", False)):
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action="rebuild",
+                status="failed",
+                running=False,
+                phase="failed",
+                message="Video input is not valid. Go back to Step 2.",
+                error="Video input is not valid.",
+            )
+        if not bool(data.get("out_ok", False)) or not out_dir:
+            return _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action="rebuild",
+                status="failed",
+                running=False,
+                phase="failed",
+                message="Output directory is not ready. Go back to Step 3.",
+                error="Output directory is not ready.",
+            )
+
+        data["site"] = site_value
+        out_result = data.get("out_result") or {}
+        can_reuse = bool(out_result.get("can_reuse_audio_decoded"))
+        action = str(decode_action or "").strip().lower()
+        if action not in {"reuse", "rebuild"}:
+            action = "reuse" if can_reuse else "rebuild"
+
+        if action == "reuse":
+            if can_reuse:
+                _mark_decode_ready(data, choice="reuse")
+                data["decode_log_path"] = ""
+            else:
+                _clear_decode_state(data)
+                data["decode_error"] = (
+                    "No reusable audio artifacts found. Decode audio artifacts to continue."
+                )
+            _draft_set(draft_id, data)
+            payload = _decode_status_from_draft(draft_id, data)
+            with decode_val_lock:
+                st = decode_val_state.get(draft_id)
+                seq = int(st.get("seq", 0)) + 1 if st else 1
+                decode_val_state[draft_id] = {
+                    "seq": seq,
+                    "out_dir": out_dir,
+                    "running": False,
+                    "result": payload,
+                    "log_path": "",
+                }
+            return payload
+
+        data["decode_error"] = None
+
+        with decode_val_lock:
+            st = decode_val_state.get(draft_id)
+            if (
+                st
+                and bool(st.get("running"))
+                and str(st.get("out_dir", "")).strip() == out_dir
+            ):
+                existing = st.get("result")
+                if isinstance(existing, dict):
+                    return existing
+
+            seq = int(st.get("seq", 0)) + 1 if st else 1
+            decode_log_path: Optional[Path] = None
+            try:
+                logs_dir = Path(".webui") / "logs"
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                decode_log_path = logs_dir / f"decode-{draft_id}-{seq}.log"
+                header = (
+                    f"\n==== DECODE DRAFT {draft_id} @ {utc_now_iso()} ====\n"
+                    f"OUT: {out_dir}\n"
+                    f"SITE: {site_value}\n"
+                    f"ACTION: rebuild\n\n"
+                )
+                decode_log_path.write_text(header, encoding="utf-8")
+                data["decode_log_path"] = str(decode_log_path)
+            except Exception:
+                decode_log_path = None
+                data["decode_log_path"] = ""
+            _draft_set(draft_id, data)
+            started_at = utc_now_iso()
+            start_payload = _decode_payload(
+                draft_id=draft_id,
+                out_dir=out_dir,
+                action="rebuild",
+                status="running",
+                running=True,
+                phase="queued",
+                message="Decode started...",
+                started_at=started_at,
+                log_available=decode_log_path is not None,
+            )
+            decode_val_state[draft_id] = {
+                "seq": seq,
+                "out_dir": out_dir,
+                "running": True,
+                "result": start_payload,
+                "log_path": str(decode_log_path or ""),
+            }
+
+        def run_decode(local_seq: int, expected_out_dir: str, local_site: str) -> None:
+            def update(
+                *,
+                status: Optional[str] = None,
+                running: Optional[bool] = None,
+                phase: Optional[str] = None,
+                message: Optional[str] = None,
+                error: Optional[str] = None,
+                finished: bool = False,
+            ) -> None:
+                with decode_val_lock:
+                    cur = decode_val_state.get(draft_id)
+                    if not cur or int(cur.get("seq", 0)) != local_seq:
+                        return
+                    res = dict(cur.get("result") or {})
+                    if status is not None:
+                        res["status"] = status
+                    if running is not None:
+                        res["running"] = running
+                        cur["running"] = running
+                    if phase is not None:
+                        res["phase"] = phase
+                    if message is not None:
+                        res["message"] = message
+                    if error is not None:
+                        res["error"] = error
+                    if finished:
+                        res["finished_at"] = utc_now_iso()
+                    cur["result"] = res
+
+            def persist_if_current(updated: Dict[str, Any]) -> bool:
+                latest = _draft_get(draft_id)
+                if str(latest.get("out_dir", "")).strip() != expected_out_dir:
+                    return False
+                keys = [
+                    "site",
+                    "out_ok",
+                    "out_result",
+                    "out_error",
+                    "decode_choice",
+                    "decode_choice_out_dir",
+                    "decode_error",
+                    "skip_decode",
+                    "split",
+                    "split_overwrite",
+                    "split_clean",
+                    "decode_log_path",
+                ]
+                for key in keys:
+                    if key in updated:
+                        latest[key] = updated[key]
+                    else:
+                        latest.pop(key, None)
+                _draft_set(draft_id, latest)
+                return True
+
+            log_path: Optional[Path] = None
+            with decode_val_lock:
+                cur = decode_val_state.get(draft_id)
+                if cur and int(cur.get("seq", 0)) == local_seq:
+                    raw_path = str(cur.get("log_path") or "").strip()
+                    if raw_path:
+                        log_path = Path(raw_path)
+            log_handler: Optional[logging.Handler] = None
+            root_logger = logging.getLogger()
+            patched_levels: List[Tuple[logging.Logger, int]] = []
+            if log_path is not None:
+                try:
+                    this_thread_name = threading.current_thread().name
+
+                    class _ThreadFilter(logging.Filter):
+                        def filter(self, record: logging.LogRecord) -> bool:
+                            return record.threadName == this_thread_name
+
+                    log_handler = logging.FileHandler(
+                        log_path, mode="a", encoding="utf-8"
+                    )
+                    log_handler.setLevel(logging.INFO)
+                    log_handler.setFormatter(
+                        logging.Formatter(
+                            "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+                        )
+                    )
+                    log_handler.addFilter(_ThreadFilter())
+                    for logger_name in ("scripts", "cli", "webui.decode.audio"):
+                        lg = logging.getLogger(logger_name)
+                        patched_levels.append((lg, lg.level))
+                        lg.setLevel(logging.INFO)
+                    root_logger.addHandler(log_handler)
+                    logging.getLogger("webui.decode.audio").info(
+                        "Decode worker started for draft %s", draft_id
+                    )
+                except Exception:
+                    log_handler = None
+                    patched_levels = []
+
+            try:
+                data2 = _draft_get(draft_id)
+                if str(data2.get("out_dir", "")).strip() != expected_out_dir:
+                    update(
+                        status="failed",
+                        running=False,
+                        phase="failed",
+                        message="Decode canceled because output directory changed.",
+                        error="Output directory changed while decode was running.",
+                        finished=True,
+                    )
+                    return
+
+                data2["site"] = local_site
+                data2["decode_error"] = None
+                _draft_set(draft_id, data2)
+
+                err = _rebuild_decode_artifacts_for_draft(
+                    data2,
+                    site_value=local_site,
+                    on_phase=lambda p, m: (
+                        update(
+                            status="running",
+                            running=True,
+                            phase=p,
+                            message=m,
+                        ),
+                        logging.getLogger("webui.decode.audio").info("[%s] %s", p, m),
+                    ),
+                )
+                if err:
+                    data2["decode_error"] = err
+                    if not persist_if_current(data2):
+                        update(
+                            status="failed",
+                            running=False,
+                            phase="failed",
+                            message="Decode canceled because output directory changed.",
+                            error="Output directory changed while decode was running.",
+                            finished=True,
+                        )
+                        return
+                    update(
+                        status="failed",
+                        running=False,
+                        phase="failed",
+                        message=err,
+                        error=err,
+                        finished=True,
+                    )
+                    return
+
+                logging.getLogger("webui.decode.audio").info(
+                    "Decode finished successfully."
+                )
+                if not persist_if_current(data2):
+                    update(
+                        status="failed",
+                        running=False,
+                        phase="failed",
+                        message="Decode canceled because output directory changed.",
+                        error="Output directory changed while decode was running.",
+                        finished=True,
+                    )
+                    return
+                update(
+                    status="succeeded",
+                    running=False,
+                    phase="done",
+                    message="Decode finished. Audio artifacts are ready.",
+                    error=None,
+                    finished=True,
+                )
+            except Exception as exc:
+                try:
+                    data3 = _draft_get(draft_id)
+                    _clear_decode_state(data3)
+                    data3["decode_error"] = f"Audio decode failed: {exc}"
+                    _draft_set(draft_id, data3)
+                except Exception:
+                    pass
+                update(
+                    status="failed",
+                    running=False,
+                    phase="failed",
+                    message=f"Audio decode failed: {exc}",
+                    error=f"Audio decode failed: {exc}",
+                    finished=True,
+                )
+            finally:
+                if log_handler is not None:
+                    try:
+                        root_logger.removeHandler(log_handler)
+                    except Exception:
+                        pass
+                    try:
+                        log_handler.close()
+                    except Exception:
+                        pass
+                for lg, prev_level in patched_levels:
+                    try:
+                        lg.setLevel(prev_level)
+                    except Exception:
+                        pass
+
+        threading.Thread(
+            target=run_decode,
+            args=(seq, out_dir, site_value),
+            name=f"webui-decode-{draft_id}",
+            daemon=True,
+        ).start()
+        with decode_val_lock:
+            return dict(decode_val_state[draft_id].get("result") or start_payload)
+
+    @app.get("/api/drafts/{draft_id}/decode/status")
+    def api_decode_status(draft_id: int) -> Dict[str, Any]:
+        data = _draft_get(draft_id)
+        out_dir = str(data.get("out_dir", "")).strip()
+        with decode_val_lock:
+            st = decode_val_state.get(draft_id)
+            if st:
+                state_out_dir = str(st.get("out_dir", "")).strip()
+                if state_out_dir == out_dir:
+                    payload = st.get("result")
+                    if isinstance(payload, dict):
+                        return payload
+                elif not bool(st.get("running")):
+                    decode_val_state.pop(draft_id, None)
+        return _decode_status_from_draft(draft_id, data)
+
+    @app.get("/api/drafts/{draft_id}/decode/log")
+    def api_decode_log(draft_id: int) -> Dict[str, Any]:
+        data = _draft_get(draft_id)
+        path = _resolve_decode_log_path_for_draft(draft_id, data)
+        if path is None:
+            return {"ok": False, "path": "", "error": "No decode log available."}
+        if not path.exists():
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": "Decode log file not found yet.",
+            }
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return {
+                "ok": False,
+                "path": str(path),
+                "error": f"Failed to read log: {exc}",
+            }
+
+        max_chars = 300000
+        truncated = False
+        if len(text) > max_chars:
+            text = text[-max_chars:]
+            truncated = True
+        return {
+            "ok": True,
+            "path": str(path),
+            "text": text,
+            "truncated": truncated,
+        }
+
+    @app.get("/api/drafts/{draft_id}/decode/log/download")
+    def api_decode_log_download(draft_id: int) -> StreamingResponse:
+        data = _draft_get(draft_id)
+        path = _resolve_decode_log_path_for_draft(draft_id, data)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Decode log not found")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Decode log not found")
+
+        def _iter() -> Iterable[bytes]:
+            with path.open("rb") as f:
+                while True:
+                    chunk = f.read(1024 * 64)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(
+            _iter(),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+        )
+
+    @app.get("/api/drafts/{draft_id}/decode/log/stream")
+    async def api_decode_log_stream(
+        draft_id: int, from_end: int = 0
+    ) -> StreamingResponse:
+        data = _draft_get(draft_id)
+        path = _resolve_decode_log_path_for_draft(draft_id, data)
+        if path is None:
+
+            async def no_log() -> Iterable[str]:
+                yield "event: status\ndata: no_log\n\n"
+
+            return StreamingResponse(
+                no_log(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        return StreamingResponse(
+            tail_log_sse(path, start_at_end=bool(from_end)),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @app.get("/wizard/{draft_id}/audio", response_class=HTMLResponse)
     def wizard_audio(request: Request, draft_id: int) -> HTMLResponse:
         data = _draft_get(draft_id)
@@ -1145,10 +2323,13 @@ def create_app() -> FastAPI:
             data.pop("segments", None)
             data.pop("cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_dir", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
+            _clear_decode_state(data)
 
         data["audio_dir"] = audio_dir
         # Validate on POST as a no-JS fallback (JS uses /api/drafts/<id>/validate-audio).
@@ -1196,11 +2377,14 @@ def create_app() -> FastAPI:
             data.pop("all_segments", None)
             data.pop("all_cameras", None)
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("out_ok", None)
             data.pop("out_result", None)
             data.pop("out_error", None)
             data.pop("timestamp_output_path", None)
             data.pop("timestamp_run_id", None)
+            _clear_decode_state(data)
 
         data["video_dir"] = video_dir
         result = validate_video_dir(video_dir)
@@ -1236,7 +2420,7 @@ def create_app() -> FastAPI:
         continue_url = (
             f"/wizard/{draft_id}/select"
             if mode == "audio_timestamp"
-            else f"/wizard/{draft_id}/select"
+            else f"/wizard/{draft_id}/decode"
         )
         return templates.TemplateResponse(
             template_name,
@@ -1258,8 +2442,11 @@ def create_app() -> FastAPI:
         data = _draft_get(draft_id)
         if data.get("out_dir") != out_dir:
             data.pop("target_pairs", None)
+            data.pop("manual_target_pairs", None)
+            data.pop("range_config", None)
             data.pop("timestamp_output_path", None)
             data.pop("timestamp_run_id", None)
+            _clear_decode_state(data)
         data["out_dir"] = out_dir
         segments = data.get("segments_all")
         if not isinstance(segments, list):
@@ -1270,6 +2457,101 @@ def create_app() -> FastAPI:
         data["out_error"] = result.get("error")
         _draft_set(draft_id, data)
         return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+    @app.get("/wizard/{draft_id}/decode", response_class=HTMLResponse)
+    def wizard_decode(request: Request, draft_id: int) -> HTMLResponse:
+        data = _draft_get(draft_id)
+        if str(data.get("mode") or "sync") == "audio_timestamp":
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        out_result = data.get("out_result") or {}
+        can_reuse = bool(out_result.get("can_reuse_audio_decoded"))
+        decode_choice = str(data.get("decode_choice") or "").strip().lower()
+        if decode_choice not in {"reuse", "rebuild"}:
+            decode_choice = "reuse" if can_reuse else "rebuild"
+        decode_status = _decode_status_from_draft(draft_id, data)
+        out_dir = str(data.get("out_dir", "")).strip()
+        with decode_val_lock:
+            st = decode_val_state.get(draft_id)
+            if st and str(st.get("out_dir", "")).strip() == out_dir:
+                payload = st.get("result")
+                if isinstance(payload, dict):
+                    decode_status = payload
+
+        return templates.TemplateResponse(
+            "wizard_decode.html",
+            {
+                "request": request,
+                "draft_id": draft_id,
+                "site": data.get("site", "nbu_lounge"),
+                "out_result": out_result,
+                "decode_choice": decode_choice,
+                "decode_error": data.get("decode_error"),
+                "can_reuse_audio": can_reuse,
+                "decode_ready": _is_decode_ready(data),
+                "decode_status": decode_status,
+                **_wizard_flow_context(data, step=4),
+            },
+        )
+
+    @app.post("/wizard/{draft_id}/decode")
+    def wizard_decode_post(
+        draft_id: int,
+        decode_action: str = Form("reuse"),
+        site: str = Form("nbu_lounge"),
+    ) -> RedirectResponse:
+        data = _draft_get(draft_id)
+        if str(data.get("mode") or "sync") == "audio_timestamp":
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+        if not bool(data.get("audio_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
+        if not bool(data.get("video_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
+        if not bool(data.get("out_ok", False)):
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        out_dir = str(data.get("out_dir", "")).strip()
+        if not out_dir:
+            return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+
+        site_value = str(site or data.get("site") or "nbu_lounge").strip()
+        if not site_value:
+            site_value = "nbu_lounge"
+        data["site"] = site_value
+
+        out_result = data.get("out_result") or {}
+        can_reuse = bool(out_result.get("can_reuse_audio_decoded"))
+        action = str(decode_action or "").strip().lower()
+        if action not in {"reuse", "rebuild"}:
+            action = "reuse" if can_reuse else "rebuild"
+
+        if action == "reuse":
+            if not can_reuse:
+                _clear_decode_state(data)
+                data["decode_error"] = (
+                    "No reusable audio artifacts found. Decode audio artifacts to continue."
+                )
+                _draft_set(draft_id, data)
+                return RedirectResponse(
+                    url=f"/wizard/{draft_id}/decode", status_code=303
+                )
+            _mark_decode_ready(data, choice="reuse")
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+
+        err = _rebuild_decode_artifacts_for_draft(data, site_value=site_value)
+        if err:
+            data["decode_error"] = err
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/decode", status_code=303)
+        _draft_set(draft_id, data)
+        return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
     @app.get("/wizard/{draft_id}/select", response_class=HTMLResponse)
     def wizard_select(request: Request, draft_id: int) -> HTMLResponse:
@@ -1305,42 +2587,41 @@ def create_app() -> FastAPI:
             return RedirectResponse(url=f"/wizard/{draft_id}/video", status_code=303)
         if not bool(data.get("out_ok", False)):
             return RedirectResponse(url=f"/wizard/{draft_id}/output", status_code=303)
+        if not _is_decode_ready(data):
+            return RedirectResponse(url=f"/wizard/{draft_id}/decode", status_code=303)
         video_result = data.get("video_result") or {}
         out_result = data.get("out_result") or {}
-        available_pair_map: Dict[str, bool] = {}
-        missing_json_map: Dict[str, bool] = {}
-        synced_pair_map: Dict[str, bool] = {}
-        available_pairs = video_result.get("available_pairs")
-        if isinstance(available_pairs, list):
-            for item in available_pairs:
-                if isinstance(item, dict):
-                    seg = item.get("segment")
-                    cam = item.get("camera")
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    seg = item[0]
-                    cam = item[1]
-                else:
-                    continue
-                if seg and cam:
-                    available_pair_map[f"{seg}::{cam}"] = True
-        missing_json_segments = video_result.get("missing_json_segments")
-        if isinstance(missing_json_segments, list):
-            for seg in missing_json_segments:
-                if seg:
-                    missing_json_map[str(seg)] = True
-        synced_pairs = out_result.get("synced_pairs")
-        if isinstance(synced_pairs, list):
-            for item in synced_pairs:
-                if isinstance(item, dict):
-                    seg = item.get("segment")
-                    cam = item.get("camera")
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    seg = item[0]
-                    cam = item[1]
-                else:
-                    continue
-                if seg and cam:
-                    synced_pair_map[f"{seg}::{cam}"] = True
+        available_pair_map = _extract_available_pair_map(video_result)
+        missing_json_map = _extract_missing_json_map(video_result)
+        synced_pair_map = _extract_synced_pair_map(out_result)
+
+        cameras = [str(c) for c in (data.get("cameras_all") or []) if str(c).strip()]
+        if not cameras:
+            cameras = sorted(
+                {k.split("::", 1)[1] for k in available_pair_map.keys() if "::" in k}
+            )
+        range_config = _coerce_range_config(data.get("range_config"), cameras)
+        selection_mode = str(data.get("selection_mode") or "segments").strip().lower()
+        if selection_mode not in {"segments", "time", "sample"}:
+            selection_mode = "segments"
+        video_dir = Path(str(data.get("video_dir", "")).strip()).expanduser()
+        out_dir = Path(str(data.get("out_dir", "")).strip()).expanduser()
+        try:
+            range_catalog = _build_range_catalog(
+                video_dir=video_dir,
+                out_dir=out_dir,
+                available_pair_map=available_pair_map,
+            )
+        except Exception:
+            range_catalog = {
+                "pairs": {},
+                "pairs_by_camera": {},
+                "camera_time_bounds": {},
+                "camera_sample_bounds": {},
+                "global_time_bounds": None,
+                "global_sample_bounds": None,
+                "sample_ready": False,
+            }
         return templates.TemplateResponse(
             "wizard_select.html",
             {
@@ -1348,40 +2629,41 @@ def create_app() -> FastAPI:
                 "draft_id": draft_id,
                 "site": data.get("site", "nbu_lounge"),
                 "segments": data.get("segments_all", []),
-                "cameras": data.get("cameras_all", []),
-                "selected_pairs": data.get("target_pairs", []),
-                "skip_decode": bool(data.get("skip_decode", False)),
-                "run_error": data.get("run_error"),
-                "reuse_audio_available": bool(
-                    out_result.get("audio_decoded", {}).get("filtered_csv")
+                "cameras": cameras,
+                "selected_pairs": data.get(
+                    "manual_target_pairs", data.get("target_pairs", [])
                 ),
+                "run_error": data.get("run_error"),
                 "available_pair_map": available_pair_map,
                 "missing_json_map": missing_json_map,
                 "synced_pair_map": synced_pair_map,
+                "range_config": range_config,
+                "range_catalog": range_catalog,
+                "selection_mode": selection_mode,
                 "error": data.get("select_error"),
-                **_wizard_flow_context(data, step=4),
+                **_wizard_flow_context(data, step=5),
             },
         )
 
     @app.post("/wizard/{draft_id}/select")
-    def wizard_select_post(
-        draft_id: int,
-        site: str = Form(default="nbu_lounge"),
-        target_pairs: Optional[List[str]] = Form(default=None),
-        log_level: str = Form(default="INFO"),
-        reuse_audio: Optional[str] = Form(default=None),
-        output_json: Optional[str] = Form(default=None),
-    ) -> RedirectResponse:
+    async def wizard_select_post(draft_id: int, request: Request) -> RedirectResponse:
+        form = await request.form()
+        log_level = str(form.get("log_level") or "INFO").strip() or "INFO"
+        output_json = str(form.get("output_json") or "").strip() or None
+        selection_mode = str(form.get("selection_mode") or "segments").strip().lower()
+        if selection_mode not in {"segments", "time", "sample"}:
+            selection_mode = "segments"
+        picked_pairs = _normalize_target_pairs(
+            [str(v) for v in form.getlist("target_pairs")]
+        )
+
         data = _draft_get(draft_id)
         mode = str(data.get("mode") or "sync")
-        data["site"] = site
-        picked_pairs = _normalize_target_pairs(target_pairs)
-
-        data["target_pairs"] = picked_pairs
         data["all_segments"] = False
         data["all_cameras"] = False
         data["segments"] = []
         data["cameras"] = []
+        data["selection_mode"] = selection_mode
 
         data["select_error"] = None
         data["run_error"] = None
@@ -1406,23 +2688,122 @@ def create_app() -> FastAPI:
             data["timestamp_run_id"] = None
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/summary", status_code=303)
-        if not picked_pairs:
+
+        if not _is_decode_ready(data):
+            return RedirectResponse(url=f"/wizard/{draft_id}/decode", status_code=303)
+
+        video_result = data.get("video_result") or {}
+        available_pair_map = _extract_available_pair_map(video_result)
+        cameras = [str(c) for c in (data.get("cameras_all") or []) if str(c).strip()]
+        if not cameras:
+            cameras = sorted(
+                {k.split("::", 1)[1] for k in available_pair_map.keys() if "::" in k}
+            )
+        prev_cfg = _coerce_range_config(data.get("range_config"), cameras)
+        range_config = _default_range_config(cameras)
+        for cam in cameras:
+            rule = range_config["cameras"][cam]
+            prev_rule = (
+                (prev_cfg.get("cameras") or {}).get(cam)
+                if isinstance(prev_cfg.get("cameras"), dict)
+                else {}
+            ) or {}
+            if selection_mode == "time":
+                enabled_raw = (
+                    str(form.get(f"time_camera_enabled_{cam}") or "1").strip().lower()
+                )
+                rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
+            elif selection_mode == "sample":
+                enabled_raw = (
+                    str(form.get(f"sample_camera_enabled_{cam}") or "1").strip().lower()
+                )
+                rule["enabled"] = enabled_raw not in {"0", "false", "off", "no"}
+            else:
+                rule["enabled"] = True
+            if selection_mode == "segments":
+                rule["mode"] = "manual"
+                rule["time_start"] = _normalize_time_text(prev_rule.get("time_start"))
+                rule["time_end"] = _normalize_time_text(prev_rule.get("time_end"))
+                rule["time_zone"] = (
+                    str(prev_rule.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE).strip()
+                    or WEBUI_DEFAULT_TIME_ZONE
+                )
+                ss0 = _parse_int_or_none(prev_rule.get("sample_start"))
+                ss1 = _parse_int_or_none(prev_rule.get("sample_end"))
+                rule["sample_start"] = "" if ss0 is None else str(ss0)
+                rule["sample_end"] = "" if ss1 is None else str(ss1)
+            elif selection_mode == "time":
+                rule["mode"] = "time"
+                ts_key = f"time_start_{cam}"
+                te_key = f"time_end_{cam}"
+                tz_key = f"time_zone_{cam}"
+                ts_raw = (
+                    form.get(ts_key) if ts_key in form else prev_rule.get("time_start")
+                )
+                te_raw = (
+                    form.get(te_key) if te_key in form else prev_rule.get("time_end")
+                )
+                tz_raw = (
+                    form.get(tz_key) if tz_key in form else prev_rule.get("time_zone")
+                )
+                rule["time_start"] = _normalize_time_text(ts_raw)
+                rule["time_end"] = _normalize_time_text(te_raw)
+                rule["time_zone"] = (
+                    str(tz_raw or WEBUI_DEFAULT_TIME_ZONE).strip()
+                    or WEBUI_DEFAULT_TIME_ZONE
+                )
+            else:
+                rule["mode"] = "sample"
+                ss_key = f"sample_start_{cam}"
+                se_key = f"sample_end_{cam}"
+                ss_raw = (
+                    form.get(ss_key)
+                    if ss_key in form
+                    else prev_rule.get("sample_start")
+                )
+                se_raw = (
+                    form.get(se_key) if se_key in form else prev_rule.get("sample_end")
+                )
+                s0 = _parse_int_or_none(ss_raw)
+                s1 = _parse_int_or_none(se_raw)
+                rule["sample_start"] = "" if s0 is None else str(s0)
+                rule["sample_end"] = "" if s1 is None else str(s1)
+        data["range_config"] = range_config
+        data["manual_target_pairs"] = picked_pairs
+
+        video_dir = Path(str(data.get("video_dir", "")).strip()).expanduser()
+        out_dir_path = Path(str(data.get("out_dir", "")).strip()).expanduser()
+        range_catalog = _build_range_catalog(
+            video_dir=video_dir,
+            out_dir=out_dir_path,
+            available_pair_map=available_pair_map,
+        )
+        if selection_mode == "segments" and not picked_pairs:
             data["select_error"] = "Select at least one segment/camera pair."
             _draft_set(draft_id, data)
             return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
+        effective_pairs, range_error = _compute_effective_target_pairs(
+            manual_pairs=picked_pairs,
+            cameras=cameras,
+            available_pair_map=available_pair_map,
+            range_config=range_config,
+            range_catalog=range_catalog,
+        )
+        if range_error:
+            data["select_error"] = range_error
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
+        data["target_pairs"] = effective_pairs
+
         data["title"] = ""
         data["log_level"] = log_level
-        can_reuse = bool(
-            (data.get("out_result") or {}).get("audio_decoded", {}).get("filtered_csv")
-        )
-        reuse_enabled = reuse_audio is not None and can_reuse
-        data["skip_decode"] = reuse_enabled
+        data["skip_decode"] = True
         overwrite_clips = False
         out_dir = str(data.get("out_dir", "")).strip()
-        if out_dir and picked_pairs:
-            segs = sorted({p.split("::", 1)[0] for p in picked_pairs if "::" in p})
-            cams = sorted({p.split("::", 1)[1] for p in picked_pairs if "::" in p})
+        if out_dir and effective_pairs:
+            segs = sorted({p.split("::", 1)[0] for p in effective_pairs if "::" in p})
+            cams = sorted({p.split("::", 1)[1] for p in effective_pairs if "::" in p})
             synced_pairs = discover_synced_pairs(
                 out_dir, segments=segs or None, cameras=cams or None
             ).get("synced_pairs", [])
@@ -1431,10 +2812,10 @@ def create_app() -> FastAPI:
                 for p in synced_pairs
                 if p.get("segment") and p.get("camera")
             }
-            overwrite_clips = any(pair in synced_set for pair in picked_pairs)
+            overwrite_clips = any(pair in synced_set for pair in effective_pairs)
         data["overwrite_clips"] = overwrite_clips
-        data["split"] = not reuse_enabled
-        data["split_overwrite"] = not reuse_enabled
+        data["split"] = False
+        data["split_overwrite"] = False
         data["split_clean"] = False
         data["split_chunk_seconds"] = 3600
         data["schedule_at"] = ""
@@ -1474,11 +2855,17 @@ def create_app() -> FastAPI:
             "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
+            "decode_choice": str(data.get("decode_choice") or ""),
             "overwrite_clips": bool(data.get("overwrite_clips", False)),
             "split": bool(data.get("split", False)),
             "split_overwrite": bool(data.get("split_overwrite", False)),
             "split_clean": bool(data.get("split_clean", False)),
             "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
+            "selection_mode": str(data.get("selection_mode") or "segments"),
+            "range_config": _coerce_range_config(
+                data.get("range_config"),
+                [str(c) for c in (data.get("cameras_all") or []) if str(c).strip()],
+            ),
         }
         if mode == "audio_timestamp":
             output_path = _resolve_timestamp_output_path(data)
@@ -1493,13 +2880,17 @@ def create_app() -> FastAPI:
                     "back_url": f"/wizard/{draft_id}/select",
                 },
             )
+        if not _is_decode_ready(data):
+            return RedirectResponse(url=f"/wizard/{draft_id}/decode", status_code=303)
+        run_groups = _build_sync_run_groups(data)
         return templates.TemplateResponse(
             "wizard_summary.html",
             {
                 "request": request,
                 "draft_id": draft_id,
                 "args": args,
-                **_wizard_flow_context(data, step=5),
+                "run_groups": run_groups,
+                **_wizard_flow_context(data, step=6),
                 "back_url": f"/wizard/{draft_id}/select",
             },
         )
@@ -1543,15 +2934,18 @@ def create_app() -> FastAPI:
             return RedirectResponse(
                 url=f"/audio-timestamp/runs/{run_id}", status_code=303
             )
+        if not _is_decode_ready(data):
+            data["run_error"] = "Decode audio artifacts before starting the run."
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/decode", status_code=303)
 
-        args: Dict[str, Any] = {
+        base_args: Dict[str, Any] = {
             "audio_dir": data.get("audio_dir", ""),
             "video_dir": data.get("video_dir", ""),
             "out_dir": data.get("out_dir", ""),
             "site": data.get("site", "nbu_lounge"),
             "segments": data.get("segments", []),
             "cameras": data.get("cameras", []),
-            "target_pairs": data.get("target_pairs", []),
             "log_level": data.get("log_level", "INFO"),
             "skip_decode": bool(data.get("skip_decode", False)),
             "overwrite_clips": bool(data.get("overwrite_clips", False)),
@@ -1560,7 +2954,11 @@ def create_app() -> FastAPI:
             "split_clean": bool(data.get("split_clean", False)),
             "split_chunk_seconds": int(data.get("split_chunk_seconds", 3600)),
         }
-        cmd = build_cli_cmd(args)
+        run_groups = _build_sync_run_groups(data)
+        if not run_groups:
+            data["run_error"] = "No valid target pairs to run."
+            _draft_set(draft_id, data)
+            return RedirectResponse(url=f"/wizard/{draft_id}/select", status_code=303)
 
         schedule_at = str(data.get("schedule_at", "") or "").strip()
         now = utc_now_iso()
@@ -1586,31 +2984,57 @@ def create_app() -> FastAPI:
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         conn = get_conn()
+        created_run_ids: List[int] = []
         with tx(conn):
-            cur = conn.execute(
-                """
-                INSERT INTO runs(title, created_at, scheduled_at, status, cwd, cmd_json, args_json, log_path)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    data.get("title") or "video-sync run",
-                    now,
-                    scheduled_iso,
-                    status,
-                    str(Path.cwd()),
-                    json.dumps(cmd),
-                    json.dumps(args),
-                    str(logs_dir / "pending.log"),
-                ),
-            )
-            run_id = int(cur.lastrowid)
-            log_path = logs_dir / f"run-{run_id}.log"
-            conn.execute(
-                "UPDATE runs SET log_path=? WHERE id=?", (str(log_path), run_id)
-            )
+            total_groups = len(run_groups)
+            for idx, group in enumerate(run_groups, start=1):
+                args = dict(base_args)
+                args["target_pairs"] = list(group.get("target_pairs") or [])
+                if group.get("mode") == "time":
+                    args["time_start"] = str(group.get("time_start") or "")
+                    args["time_end"] = str(group.get("time_end") or "")
+                    args["time_zone"] = str(
+                        group.get("time_zone") or WEBUI_DEFAULT_TIME_ZONE
+                    )
+                elif group.get("mode") == "sample":
+                    args["audio_sample_start"] = group.get("audio_sample_start")
+                    args["audio_sample_end"] = group.get("audio_sample_end")
+
+                title = data.get("title") or "video-sync run"
+                if total_groups > 1:
+                    mode_label = str(group.get("mode") or "manual")
+                    title = f"{title} ({mode_label} {idx}/{total_groups})"
+
+                cur = conn.execute(
+                    """
+                    INSERT INTO runs(title, created_at, scheduled_at, status, cwd, cmd_json, args_json, log_path)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        title,
+                        now,
+                        scheduled_iso,
+                        status,
+                        str(Path.cwd()),
+                        json.dumps([]),
+                        json.dumps(args),
+                        str(logs_dir / "pending.log"),
+                    ),
+                )
+                run_id = int(cur.lastrowid)
+                args["run_id"] = run_id
+                cmd = build_cli_cmd(args)
+                created_run_ids.append(run_id)
+                log_path = logs_dir / f"run-{run_id}.log"
+                conn.execute(
+                    "UPDATE runs SET cmd_json=?, args_json=?, log_path=? WHERE id=?",
+                    (json.dumps(cmd), json.dumps(args), str(log_path), run_id),
+                )
 
         _draft_delete(draft_id)
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+        if len(created_run_ids) == 1:
+            return RedirectResponse(url=f"/runs/{created_run_ids[0]}", status_code=303)
+        return RedirectResponse(url="/runs", status_code=303)
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_detail(request: Request, run_id: int) -> HTMLResponse:
