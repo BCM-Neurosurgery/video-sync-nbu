@@ -32,18 +32,17 @@ from scripts.webui.services.wizard_service import (
     invalidate_after_out_change,
     invalidate_after_video_change,
 )
+from scripts.webui.services.validation_service import ValidationService
 from scripts.webui.models import utc_now_iso
 from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_sse
 from scripts.webui.decode_workflow import (
     rebuild_decode_artifacts_for_draft as _rebuild_decode_artifacts_for_draft,
 )
 from scripts.validate.validate_audio_dir import validate_audio_dir
-from scripts.validate.validate_audio_dir import validate_audio_dir_progress
 from scripts.validate.validate_out_dir import discover_synced_pairs, validate_out_dir
 from scripts.validate.validate_video_dir import (
     discover_from_video_dir,
     validate_video_dir,
-    validate_video_dir_progress,
 )
 from scripts.index.common import DEFAULT_TZ
 from scripts.webui.wizard_state import (
@@ -89,33 +88,8 @@ def create_app() -> FastAPI:
     runner = Runner(cfg=RunnerConfig(max_parallel=max_parallel))
     runner.start()
 
-    audio_val_lock = threading.Lock()
-    audio_val_state: Dict[int, Dict[str, Any]] = {}
-    audio_check_names = [
-        "Find audio files",
-        "Naming pattern",
-        "Serial channel present",
-        "Program channel present",
-        "Sample rate detected",
-        "Duration detected",
-    ]
+    validation_service = ValidationService(draft_get=_draft_get, draft_set=_draft_set)
 
-    video_val_lock = threading.Lock()
-    video_val_state: Dict[int, Dict[str, Any]] = {}
-    video_check_names = [
-        "Segment JSON present",
-        "Camera MP4 present",
-        "Segments discovered",
-        "Companion JSON per segment",
-        "Cameras discovered",
-    ]
-
-    out_val_lock = threading.Lock()
-    out_val_state: Dict[int, Dict[str, Any]] = {}
-    out_check_names = [
-        "Directory empty",
-        "Audio metadata present",
-    ]
     decode_val_lock = threading.Lock()
     decode_val_state: Dict[int, Dict[str, Any]] = {}
 
@@ -432,463 +406,58 @@ def create_app() -> FastAPI:
         """
         Validate audio_dir and persist the result into the run-creation draft.
         """
-        data = _draft_get(draft_id)
-        if data.get("audio_dir") != audio_dir.strip():
-            # Changing audio dir invalidates downstream choices.
-            invalidate_after_audio_change(data)
-        data["audio_dir"] = audio_dir.strip()
-
-        result = validate_audio_dir(
-            audio_dir, logger=logging.getLogger("webui.validate.audio")
-        )
-        data["audio_ok"] = bool(result.get("ok"))
-        data["audio_result"] = result
-        data["audio_error"] = result.get("error")
-        _draft_set(draft_id, data)
-        return result
+        return validation_service.validate_audio(draft_id, audio_dir)
 
     @app.get("/api/drafts/{draft_id}/validate-audio/start")
     def api_validate_audio_start(draft_id: int, audio_dir: str) -> Dict[str, Any]:
         """
         Start async audio validation so the UI can show per-check progress.
         """
-        data = _draft_get(draft_id)
-        audio_dir = audio_dir.strip()
-        if data.get("audio_dir") != audio_dir:
-            # Changing audio dir invalidates downstream choices.
-            invalidate_after_audio_change(data, include_timestamp_state=True)
-        data["audio_dir"] = audio_dir
-        _draft_set(draft_id, data)
-
-        with audio_val_lock:
-            st = audio_val_state.get(draft_id)
-            if st and st.get("running") and st.get("audio_dir") == audio_dir:
-                return st.get("result") or {
-                    "audio_dir": audio_dir,
-                    "ok": False,
-                    "running": True,
-                    "files": [],
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in audio_check_names
-                    ],
-                    "error": None,
-                }
-
-            seq = int(st.get("seq", 0)) + 1 if st else 1
-            audio_val_state[draft_id] = {
-                "seq": seq,
-                "audio_dir": audio_dir,
-                "running": True,
-                "result": {
-                    "audio_dir": audio_dir,
-                    "ok": False,
-                    "running": True,
-                    "files": [],
-                    "nested_files": [],
-                    "nested_count": 0,
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in audio_check_names
-                    ],
-                    "error": None,
-                },
-            }
-
-        def run_validation(local_seq: int, local_audio_dir: str) -> None:
-            def on_progress(payload: Dict[str, Any]) -> None:
-                # Deep-copy into state to avoid sharing mutable dicts across threads.
-                snap = json.loads(json.dumps(payload))
-                with audio_val_lock:
-                    cur = audio_val_state.get(draft_id)
-                    if not cur or int(cur.get("seq", 0)) != local_seq:
-                        return
-                    cur["result"] = snap
-                    cur["running"] = bool(snap.get("running", False))
-
-            result = validate_audio_dir_progress(
-                local_audio_dir,
-                logger=logging.getLogger("webui.validate.audio"),
-                on_progress=on_progress,
-            )
-            result["running"] = False
-            on_progress(result)
-
-            with audio_val_lock:
-                cur = audio_val_state.get(draft_id)
-                if not cur or int(cur.get("seq", 0)) != local_seq:
-                    return
-                cur["running"] = False
-                cur["result"] = json.loads(json.dumps(result))
-
-            # Persist the final result to the draft.
-            data2 = _draft_get(draft_id)
-            if data2.get("audio_dir") != local_audio_dir:
-                return
-            data2["audio_ok"] = bool(result.get("ok"))
-            data2["audio_result"] = result
-            data2["audio_error"] = result.get("error")
-            _draft_set(draft_id, data2)
-
-        threading.Thread(
-            target=run_validation,
-            args=(seq, audio_dir),
-            name=f"webui-audio-validate-{draft_id}",
-            daemon=True,
-        ).start()
-
-        with audio_val_lock:
-            return audio_val_state[draft_id]["result"]
+        return validation_service.start_audio_validation(
+            draft_id,
+            audio_dir,
+            include_timestamp_state=True,
+        )
 
     @app.get("/api/drafts/{draft_id}/validate-audio/status")
     def api_validate_audio_status(draft_id: int) -> Dict[str, Any]:
-        with audio_val_lock:
-            st = audio_val_state.get(draft_id)
-            if st and st.get("result") is not None:
-                return st["result"]
-        data = _draft_get(draft_id)
-        if data.get("audio_result"):
-            return data["audio_result"]
-        return {
-            "audio_dir": data.get("audio_dir", ""),
-            "ok": False,
-            "running": False,
-            "files": [],
-            "checks": [
-                {"name": n, "status": "pending", "message": ""}
-                for n in audio_check_names
-            ],
-            "error": None,
-        }
+        return validation_service.audio_validation_status(draft_id)
 
     @app.get("/api/drafts/{draft_id}/validate-video")
     def api_validate_video(draft_id: int, video_dir: str) -> Dict[str, Any]:
         """
         Validate video_dir and persist the result into the run-creation draft.
         """
-        data = _draft_get(draft_id)
-        if data.get("video_dir") != video_dir.strip():
-            # Changing video dir invalidates downstream choices.
-            invalidate_after_video_change(data)
-        data["video_dir"] = video_dir.strip()
-
-        result = validate_video_dir(video_dir)
-        data["video_ok"] = bool(result.get("ok"))
-        data["video_result"] = result
-        data["video_error"] = result.get("error")
-        if data["video_ok"]:
-            try:
-                idx = discover_from_video_dir(Path(video_dir).expanduser())
-                data["segments_all"] = idx["segments"]
-                data["cameras_all"] = idx["cameras"]
-            except Exception as e:
-                data["video_ok"] = False
-                data["video_error"] = str(e)
-                data["video_result"] = {**result, "ok": False, "error": str(e)}
-        _draft_set(draft_id, data)
-        return data.get("video_result") or result
+        return validation_service.validate_video(draft_id, video_dir)
 
     @app.get("/api/drafts/{draft_id}/validate-video/start")
     def api_validate_video_start(draft_id: int, video_dir: str) -> Dict[str, Any]:
         """
         Start async video validation so the UI can show per-check progress.
         """
-        data = _draft_get(draft_id)
-        video_dir = video_dir.strip()
-        if data.get("video_dir") != video_dir:
-            # Changing video dir invalidates downstream choices.
-            invalidate_after_video_change(data)
-        data["video_dir"] = video_dir
-        _draft_set(draft_id, data)
-
-        with video_val_lock:
-            st = video_val_state.get(draft_id)
-            if st and st.get("running") and st.get("video_dir") == video_dir:
-                return st.get("result") or {
-                    "video_dir": video_dir,
-                    "ok": False,
-                    "running": True,
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in video_check_names
-                    ],
-                    "error": None,
-                }
-
-            seq = int(st.get("seq", 0)) + 1 if st else 1
-            video_val_state[draft_id] = {
-                "seq": seq,
-                "video_dir": video_dir,
-                "running": True,
-                "result": {
-                    "video_dir": video_dir,
-                    "ok": False,
-                    "running": True,
-                    "segments_count": 0,
-                    "cameras_count": 0,
-                    "segments_first": None,
-                    "segments_last": None,
-                    "segments_preview": [],
-                    "cameras": [],
-                    "cameras_preview": [],
-                    "json_count": 0,
-                    "mp4_count": 0,
-                    "nested_files": [],
-                    "nested_count": 0,
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in video_check_names
-                    ],
-                    "error": None,
-                },
-            }
-
-        def run_validation(local_seq: int, local_video_dir: str) -> None:
-            def on_progress(payload: Dict[str, Any]) -> None:
-                snap = json.loads(json.dumps(payload))
-                with video_val_lock:
-                    cur = video_val_state.get(draft_id)
-                    if not cur or int(cur.get("seq", 0)) != local_seq:
-                        return
-                    cur["result"] = snap
-                    cur["running"] = bool(snap.get("running", False))
-
-            result = validate_video_dir_progress(
-                local_video_dir, on_progress=on_progress
-            )
-            result["running"] = False
-            on_progress(result)
-
-            with video_val_lock:
-                cur = video_val_state.get(draft_id)
-                if not cur or int(cur.get("seq", 0)) != local_seq:
-                    return
-                cur["running"] = False
-                cur["result"] = json.loads(json.dumps(result))
-
-            # Persist the final result to the draft.
-            data2 = _draft_get(draft_id)
-            if data2.get("video_dir") != local_video_dir:
-                return
-            data2["video_ok"] = bool(result.get("ok"))
-            data2["video_result"] = result
-            data2["video_error"] = result.get("error")
-            if data2["video_ok"]:
-                try:
-                    idx = discover_from_video_dir(Path(local_video_dir).expanduser())
-                    data2["segments_all"] = idx["segments"]
-                    data2["cameras_all"] = idx["cameras"]
-                except Exception as e:
-                    data2["video_ok"] = False
-                    data2["video_error"] = str(e)
-                    data2["video_result"] = {**result, "ok": False, "error": str(e)}
-            _draft_set(draft_id, data2)
-
-        threading.Thread(
-            target=run_validation,
-            args=(seq, video_dir),
-            name=f"webui-video-validate-{draft_id}",
-            daemon=True,
-        ).start()
-
-        with video_val_lock:
-            return video_val_state[draft_id]["result"]
+        return validation_service.start_video_validation(draft_id, video_dir)
 
     @app.get("/api/drafts/{draft_id}/validate-video/status")
     def api_validate_video_status(draft_id: int) -> Dict[str, Any]:
-        with video_val_lock:
-            st = video_val_state.get(draft_id)
-            if st and st.get("result") is not None:
-                return st["result"]
-        data = _draft_get(draft_id)
-        if data.get("video_result"):
-            return data["video_result"]
-        return {
-            "video_dir": data.get("video_dir", ""),
-            "ok": False,
-            "running": False,
-            "segments_count": 0,
-            "cameras_count": 0,
-            "segments_first": None,
-            "segments_last": None,
-            "segments_preview": [],
-            "cameras": [],
-            "cameras_preview": [],
-            "json_count": 0,
-            "mp4_count": 0,
-            "nested_files": [],
-            "nested_count": 0,
-            "checks": [
-                {"name": n, "status": "pending", "message": ""}
-                for n in video_check_names
-            ],
-            "error": None,
-        }
+        return validation_service.video_validation_status(draft_id)
 
     @app.get("/api/drafts/{draft_id}/validate-out")
     def api_validate_out(draft_id: int, out_dir: str) -> Dict[str, Any]:
         """
         Validate out_dir and persist the result into the run-creation draft.
         """
-        data = _draft_get(draft_id)
-        out_dir = out_dir.strip()
-        if data.get("out_dir") != out_dir:
-            invalidate_after_out_change(data)
-        data["out_dir"] = out_dir
-
-        segments = data.get("segments_all")
-        if not isinstance(segments, list):
-            segments = None
-
-        result = validate_out_dir(out_dir, segments=segments)
-        data["out_ok"] = bool(result.get("ok"))
-        data["out_result"] = result
-        data["out_error"] = result.get("error")
-        _draft_set(draft_id, data)
-        return result
+        return validation_service.validate_out(draft_id, out_dir)
 
     @app.get("/api/drafts/{draft_id}/validate-out/start")
     def api_validate_out_start(draft_id: int, out_dir: str) -> Dict[str, Any]:
         """
         Start async out_dir validation so the UI can show per-check progress.
         """
-        data = _draft_get(draft_id)
-        out_dir = out_dir.strip()
-        if data.get("out_dir") != out_dir:
-            invalidate_after_out_change(data)
-        data["out_dir"] = out_dir
-        _draft_set(draft_id, data)
-
-        segments = data.get("segments_all")
-        if not isinstance(segments, list):
-            segments = None
-
-        with out_val_lock:
-            st = out_val_state.get(draft_id)
-            if st and st.get("running") and st.get("out_dir") == out_dir:
-                return st.get("result") or {
-                    "out_dir": out_dir,
-                    "ok": False,
-                    "running": True,
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in out_check_names
-                    ],
-                    "error": None,
-                }
-
-            seq = int(st.get("seq", 0)) + 1 if st else 1
-            out_val_state[draft_id] = {
-                "seq": seq,
-                "out_dir": out_dir,
-                "running": True,
-                "result": {
-                    "out_dir": out_dir,
-                    "ok": False,
-                    "running": True,
-                    "exists": False,
-                    "will_create": False,
-                    "empty": None,
-                    "entries_count": 0,
-                    "audio_decoded": {
-                        "exists": False,
-                        "raw_csv": False,
-                        "filtered_csv": False,
-                    },
-                    "can_reuse_audio_decoded": False,
-                    "split_decoded_count": 0,
-                    "serial_chunks_count": 0,
-                    "synced_segments_count": 0,
-                    "synced_segments_preview": [],
-                    "total_segments": None,
-                    "checks": [
-                        {"name": n, "status": "pending", "message": ""}
-                        for n in out_check_names
-                    ],
-                    "error": None,
-                },
-            }
-
-        def run_validation(local_seq: int, local_out_dir: str) -> None:
-            def on_progress(payload: Dict[str, Any]) -> None:
-                snap = json.loads(json.dumps(payload))
-                with out_val_lock:
-                    cur = out_val_state.get(draft_id)
-                    if not cur or int(cur.get("seq", 0)) != local_seq:
-                        return
-                    cur["result"] = snap
-                    cur["running"] = bool(snap.get("running", False))
-
-            from scripts.validate.validate_out_dir import validate_out_dir_progress
-
-            result = validate_out_dir_progress(
-                local_out_dir, segments=segments, on_progress=on_progress
-            )
-            result["running"] = False
-            on_progress(result)
-
-            with out_val_lock:
-                cur = out_val_state.get(draft_id)
-                if not cur or int(cur.get("seq", 0)) != local_seq:
-                    return
-                cur["running"] = False
-                cur["result"] = json.loads(json.dumps(result))
-
-            data2 = _draft_get(draft_id)
-            if data2.get("out_dir") != local_out_dir:
-                return
-            data2["out_ok"] = bool(result.get("ok"))
-            data2["out_result"] = result
-            data2["out_error"] = result.get("error")
-            _draft_set(draft_id, data2)
-
-        threading.Thread(
-            target=run_validation,
-            args=(seq, out_dir),
-            name=f"webui-out-validate-{draft_id}",
-            daemon=True,
-        ).start()
-
-        with out_val_lock:
-            return out_val_state[draft_id]["result"]
+        return validation_service.start_out_validation(draft_id, out_dir)
 
     @app.get("/api/drafts/{draft_id}/validate-out/status")
     def api_validate_out_status(draft_id: int) -> Dict[str, Any]:
-        with out_val_lock:
-            st = out_val_state.get(draft_id)
-            if st and st.get("result") is not None:
-                return st["result"]
-        data = _draft_get(draft_id)
-        if data.get("out_result"):
-            return data["out_result"]
-        return {
-            "out_dir": data.get("out_dir", ""),
-            "ok": False,
-            "running": False,
-            "exists": False,
-            "will_create": False,
-            "empty": None,
-            "entries_count": 0,
-            "audio_decoded": {
-                "exists": False,
-                "raw_csv": False,
-                "filtered_csv": False,
-            },
-            "can_reuse_audio_decoded": False,
-            "split_decoded_count": 0,
-            "serial_chunks_count": 0,
-            "audio_metadata": {
-                "exists": False,
-                "abs_json": False,
-            },
-            "synced_segments_count": 0,
-            "synced_segments_preview": [],
-            "total_segments": None,
-            "checks": [
-                {"name": n, "status": "pending", "message": ""} for n in out_check_names
-            ],
-            "error": None,
-        }
+        return validation_service.out_validation_status(draft_id)
 
     @app.post("/api/drafts/{draft_id}/decode/start")
     def api_decode_start(
