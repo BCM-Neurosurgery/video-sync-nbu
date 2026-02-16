@@ -14,7 +14,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from scripts.webui.repositories import run_repo, timestamp_run_repo
+from scripts.webui.routers.runs import create_runs_router
+from scripts.webui.routers.validation_api import create_validation_api_router
 from scripts.webui.services.draft_service import (
     create_draft as _draft_create,
     delete_draft as _draft_delete,
@@ -325,139 +326,17 @@ def create_app() -> FastAPI:
     def home(request: Request) -> HTMLResponse:
         return templates.TemplateResponse("home.html", {"request": request})
 
-    @app.get("/runs", response_class=HTMLResponse)
-    def runs(request: Request) -> HTMLResponse:
-        items = run_repo.list_runs(limit=200)
-        runs_view: List[Dict[str, Any]] = []
-        for row in items:
-            d = dict(row)
-            try:
-                args = json.loads(d.get("args_json") or "{}")
-            except Exception:
-                args = {}
-            d["display_title"] = _segment_range_title(args)
-            runs_view.append(d)
-        return templates.TemplateResponse(
-            "runs.html",
-            {"request": request, "runs": runs_view},
+    app.include_router(
+        create_runs_router(
+            templates=templates,
+            draft_create=_draft_create,
+            segment_range_title=_segment_range_title,
+            runner=runner,
         )
-
-    @app.get("/audio-timestamp/runs", response_class=HTMLResponse)
-    def audio_timestamp_runs(request: Request) -> HTMLResponse:
-        rows = timestamp_run_repo.list_timestamp_runs(limit=200)
-        runs_view: List[Dict[str, Any]] = []
-        for row in rows:
-            d = dict(row)
-            try:
-                args = json.loads(d.get("args_json") or "{}")
-            except Exception:
-                args = {}
-            d["site"] = args.get("site", "")
-            runs_view.append(d)
-        return templates.TemplateResponse(
-            "audio_timestamp_runs.html",
-            {"request": request, "runs": runs_view},
-        )
-
-    @app.get("/api/runs")
-    def api_runs() -> List[Dict[str, Any]]:
-        rows = run_repo.list_runs_summary(limit=200)
-        return [dict(r) for r in rows]
-
-    @app.get("/api/audio-timestamp/runs")
-    def api_audio_timestamp_runs() -> List[Dict[str, Any]]:
-        rows = timestamp_run_repo.list_timestamp_runs_summary(limit=200)
-        return [dict(r) for r in rows]
-
-    @app.post("/runs/clear")
-    def runs_clear() -> RedirectResponse:
-        """
-        Clear run history (DB rows + log files) for all runs that are not running.
-        """
-        rows = run_repo.list_non_running_runs()
-        for r in rows:
-            try:
-                p = Path(r["log_path"])
-                if p.exists():
-                    p.unlink()
-            except Exception:
-                # Best-effort deletion; DB clear still proceeds.
-                pass
-        run_repo.delete_non_running_runs()
-        return RedirectResponse(url="/runs", status_code=303)
-
-    @app.get("/runs/new", response_class=HTMLResponse)
-    def runs_new() -> RedirectResponse:
-        draft_id = _draft_create(mode="sync")
-        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
-
-    @app.get("/tools/audio-timestamp")
-    def tools_audio_timestamp() -> RedirectResponse:
-        draft_id = _draft_create(mode="audio_timestamp")
-        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
-
-    @app.get("/tools/audio-timestamp/new")
-    def tools_audio_timestamp_new() -> RedirectResponse:
-        draft_id = _draft_create(mode="audio_timestamp")
-        return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
-
-    @app.get("/api/drafts/{draft_id}/validate-audio")
-    def api_validate_audio(draft_id: int, audio_dir: str) -> Dict[str, Any]:
-        """
-        Validate audio_dir and persist the result into the run-creation draft.
-        """
-        return validation_service.validate_audio(draft_id, audio_dir)
-
-    @app.get("/api/drafts/{draft_id}/validate-audio/start")
-    def api_validate_audio_start(draft_id: int, audio_dir: str) -> Dict[str, Any]:
-        """
-        Start async audio validation so the UI can show per-check progress.
-        """
-        return validation_service.start_audio_validation(
-            draft_id,
-            audio_dir,
-            include_timestamp_state=True,
-        )
-
-    @app.get("/api/drafts/{draft_id}/validate-audio/status")
-    def api_validate_audio_status(draft_id: int) -> Dict[str, Any]:
-        return validation_service.audio_validation_status(draft_id)
-
-    @app.get("/api/drafts/{draft_id}/validate-video")
-    def api_validate_video(draft_id: int, video_dir: str) -> Dict[str, Any]:
-        """
-        Validate video_dir and persist the result into the run-creation draft.
-        """
-        return validation_service.validate_video(draft_id, video_dir)
-
-    @app.get("/api/drafts/{draft_id}/validate-video/start")
-    def api_validate_video_start(draft_id: int, video_dir: str) -> Dict[str, Any]:
-        """
-        Start async video validation so the UI can show per-check progress.
-        """
-        return validation_service.start_video_validation(draft_id, video_dir)
-
-    @app.get("/api/drafts/{draft_id}/validate-video/status")
-    def api_validate_video_status(draft_id: int) -> Dict[str, Any]:
-        return validation_service.video_validation_status(draft_id)
-
-    @app.get("/api/drafts/{draft_id}/validate-out")
-    def api_validate_out(draft_id: int, out_dir: str) -> Dict[str, Any]:
-        """
-        Validate out_dir and persist the result into the run-creation draft.
-        """
-        return validation_service.validate_out(draft_id, out_dir)
-
-    @app.get("/api/drafts/{draft_id}/validate-out/start")
-    def api_validate_out_start(draft_id: int, out_dir: str) -> Dict[str, Any]:
-        """
-        Start async out_dir validation so the UI can show per-check progress.
-        """
-        return validation_service.start_out_validation(draft_id, out_dir)
-
-    @app.get("/api/drafts/{draft_id}/validate-out/status")
-    def api_validate_out_status(draft_id: int) -> Dict[str, Any]:
-        return validation_service.out_validation_status(draft_id)
+    )
+    app.include_router(
+        create_validation_api_router(validation_service=validation_service)
+    )
 
     @app.post("/api/drafts/{draft_id}/decode/start")
     def api_decode_start(
@@ -1500,144 +1379,6 @@ def create_app() -> FastAPI:
         if len(created_run_ids) == 1:
             return RedirectResponse(url=f"/runs/{created_run_ids[0]}", status_code=303)
         return RedirectResponse(url="/runs", status_code=303)
-
-    @app.get("/runs/{run_id}", response_class=HTMLResponse)
-    def run_detail(request: Request, run_id: int) -> HTMLResponse:
-        row = run_repo.get_run(run_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Run not found")
-        try:
-            args = json.loads(row["args_json"])
-        except Exception:
-            args = {}
-        return templates.TemplateResponse(
-            "run_detail.html",
-            {
-                "request": request,
-                "run": row,
-                "args": args,
-            },
-        )
-
-    @app.get("/audio-timestamp/runs/{run_id}", response_class=HTMLResponse)
-    def audio_timestamp_run_detail(request: Request, run_id: int) -> HTMLResponse:
-        row = timestamp_run_repo.get_timestamp_run(run_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Run not found")
-        try:
-            args = json.loads(row["args_json"])
-        except Exception:
-            args = {}
-        json_text: Optional[str] = None
-        output_path = row["output_path"]
-        if output_path:
-            try:
-                json_text = Path(output_path).read_text(encoding="utf-8")
-            except Exception:
-                json_text = None
-        return templates.TemplateResponse(
-            "audio_timestamp_run_detail.html",
-            {
-                "request": request,
-                "run": row,
-                "args": args,
-                "json_text": json_text,
-            },
-        )
-
-    @app.post("/audio-timestamp/runs/{run_id}/delete")
-    def audio_timestamp_run_delete(run_id: int) -> RedirectResponse:
-        status = timestamp_run_repo.get_timestamp_run_status(run_id)
-        if status is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        if status == "running":
-            raise HTTPException(status_code=400, detail="Cannot delete a running run")
-        timestamp_run_repo.delete_timestamp_run(run_id)
-        return RedirectResponse(url="/audio-timestamp/runs", status_code=303)
-
-    # (Summary is shown before starting; see /wizard/{draft_id}/summary.)
-
-    @app.post("/runs/{run_id}/cancel")
-    def run_cancel(run_id: int) -> RedirectResponse:
-        ok = runner.request_cancel(run_id)
-        if not ok:
-            raise HTTPException(status_code=400, detail="Cannot cancel this run")
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
-
-    @app.post("/runs/{run_id}/delete")
-    def run_delete(run_id: int) -> RedirectResponse:
-        """
-        Remove a run from history (DB row) and delete its log file (best-effort).
-        """
-        row = run_repo.get_run(run_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Run not found")
-        if str(row["status"]) == "running":
-            raise HTTPException(status_code=400, detail="Cannot delete a running run")
-
-        try:
-            p = Path(row["log_path"])
-            if p.exists():
-                p.unlink()
-        except Exception:
-            pass
-
-        run_repo.delete_run(run_id)
-        return RedirectResponse(url="/runs", status_code=303)
-
-    @app.get("/runs/{run_id}/logs")
-    def run_logs(run_id: int) -> StreamingResponse:
-        log_path = run_repo.get_run_log_path(run_id)
-        if log_path is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        path = Path(log_path)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Log not found")
-
-        def _iter() -> Any:
-            with path.open("rb") as f:
-                while True:
-                    chunk = f.read(1024 * 64)
-                    if not chunk:
-                        break
-                    yield chunk
-
-        return StreamingResponse(_iter(), media_type="text/plain")
-
-    @app.get("/runs/{run_id}/logs/stream")
-    async def run_logs_stream(run_id: int) -> StreamingResponse:
-        log_path = run_repo.get_run_log_path(run_id)
-        if log_path is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        path = Path(log_path)
-        return StreamingResponse(
-            tail_log_sse(path),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache"},
-        )
-
-    @app.get("/api/runs/{run_id}")
-    def api_run(run_id: int) -> Dict[str, Any]:
-        row = run_repo.get_run(run_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Run not found")
-        d = dict(row)
-        # don't return huge blobs
-        return d
-
-    @app.get("/api/audio-timestamp/runs/{run_id}")
-    def api_audio_timestamp_run(run_id: int) -> Dict[str, Any]:
-        row = timestamp_run_repo.get_timestamp_run(run_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Run not found")
-        return {
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "started_at": row["started_at"],
-            "finished_at": row["finished_at"],
-            "records_count": row["records_count"],
-            "error": row["error"],
-        }
 
     return app
 
