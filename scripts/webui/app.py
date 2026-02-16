@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from scripts.webui.db import get_conn, tx
+from scripts.webui.repositories import draft_repo, run_repo, timestamp_run_repo
 from scripts.webui.models import utc_now_iso
 from scripts.webui.runner import Runner, RunnerConfig, build_cli_cmd, tail_log_sse
 from scripts.webui.decode_workflow import (
@@ -70,46 +71,37 @@ except Exception:
 
 
 def _draft_create(*, mode: str = "sync") -> int:
-    conn = get_conn()
     now = utc_now_iso()
     data = {"mode": mode}
     if mode == "audio_timestamp":
         data["site"] = "nbu_lounge"
-    with tx(conn):
-        cur = conn.execute(
-            "INSERT INTO drafts(created_at, updated_at, data_json) VALUES(?, ?, ?)",
-            (now, now, json.dumps(data)),
-        )
-        return int(cur.lastrowid)
+    return draft_repo.create_draft(
+        created_at=now,
+        updated_at=now,
+        data_json=json.dumps(data),
+    )
 
 
 def _draft_get(draft_id: int) -> Dict[str, Any]:
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT data_json FROM drafts WHERE id=?", (draft_id,)
-    ).fetchone()
-    if not row:
+    data_json = draft_repo.get_draft_data_json(draft_id)
+    if data_json is None:
         raise HTTPException(status_code=404, detail="Draft not found")
     try:
-        return json.loads(row["data_json"])
+        return json.loads(data_json)
     except Exception:
         return {}
 
 
 def _draft_set(draft_id: int, data: Dict[str, Any]) -> None:
-    conn = get_conn()
-    now = utc_now_iso()
-    with tx(conn):
-        conn.execute(
-            "UPDATE drafts SET updated_at=?, data_json=? WHERE id=?",
-            (now, json.dumps(data), draft_id),
-        )
+    draft_repo.update_draft_data_json(
+        draft_id=draft_id,
+        updated_at=utc_now_iso(),
+        data_json=json.dumps(data),
+    )
 
 
 def _draft_delete(draft_id: int) -> None:
-    conn = get_conn()
-    with tx(conn):
-        conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+    draft_repo.delete_draft(draft_id)
 
 
 def _default_timestamp_output_path(data: Dict[str, Any]) -> str:
@@ -140,16 +132,13 @@ def _create_timestamp_run(
     args: Dict[str, Any], *, output_path: Optional[str] = None
 ) -> int:
     now = utc_now_iso()
-    conn = get_conn()
-    with tx(conn):
-        cur = conn.execute(
-            """
-            INSERT INTO timestamp_runs(created_at, started_at, status, args_json, output_path)
-            VALUES(?, ?, ?, ?, ?)
-            """,
-            (now, now, "running", json.dumps(args), output_path),
-        )
-        return int(cur.lastrowid)
+    return timestamp_run_repo.create_timestamp_run(
+        created_at=now,
+        started_at=now,
+        status="running",
+        args_json=json.dumps(args),
+        output_path=output_path,
+    )
 
 
 def _update_timestamp_run(
@@ -161,31 +150,14 @@ def _update_timestamp_run(
     records_count: Optional[int] = None,
     error: Optional[str] = None,
 ) -> None:
-    fields = []
-    values: List[Any] = []
-    if status is not None:
-        fields.append("status=?")
-        values.append(status)
-    if finished_at is not None:
-        fields.append("finished_at=?")
-        values.append(finished_at)
-    if output_path is not None:
-        fields.append("output_path=?")
-        values.append(output_path)
-    if records_count is not None:
-        fields.append("records_count=?")
-        values.append(records_count)
-    if error is not None:
-        fields.append("error=?")
-        values.append(error)
-    if not fields:
-        return
-    values.append(run_id)
-    conn = get_conn()
-    with tx(conn):
-        conn.execute(
-            f"UPDATE timestamp_runs SET {', '.join(fields)} WHERE id=?", values
-        )
+    timestamp_run_repo.update_timestamp_run(
+        run_id,
+        status=status,
+        finished_at=finished_at,
+        output_path=output_path,
+        records_count=records_count,
+        error=error,
+    )
 
 
 def _start_audio_timestamp_job(draft_id: int, *, run_id: int) -> None:
@@ -511,8 +483,7 @@ def create_app() -> FastAPI:
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs(request: Request) -> HTMLResponse:
-        conn = get_conn()
-        items = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 200").fetchall()
+        items = run_repo.list_runs(limit=200)
         runs_view: List[Dict[str, Any]] = []
         for row in items:
             d = dict(row)
@@ -529,10 +500,7 @@ def create_app() -> FastAPI:
 
     @app.get("/audio-timestamp/runs", response_class=HTMLResponse)
     def audio_timestamp_runs(request: Request) -> HTMLResponse:
-        conn = get_conn()
-        rows = conn.execute(
-            "SELECT * FROM timestamp_runs ORDER BY id DESC LIMIT 200"
-        ).fetchall()
+        rows = timestamp_run_repo.list_timestamp_runs(limit=200)
         runs_view: List[Dict[str, Any]] = []
         for row in rows:
             d = dict(row)
@@ -549,23 +517,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/runs")
     def api_runs() -> List[Dict[str, Any]]:
-        conn = get_conn()
-        rows = conn.execute(
-            "SELECT id, status, exit_code FROM runs ORDER BY id DESC LIMIT 200"
-        ).fetchall()
+        rows = run_repo.list_runs_summary(limit=200)
         return [dict(r) for r in rows]
 
     @app.get("/api/audio-timestamp/runs")
     def api_audio_timestamp_runs() -> List[Dict[str, Any]]:
-        conn = get_conn()
-        rows = conn.execute(
-            """
-            SELECT id, status, finished_at, records_count
-            FROM timestamp_runs
-            ORDER BY id DESC
-            LIMIT 200
-            """
-        ).fetchall()
+        rows = timestamp_run_repo.list_timestamp_runs_summary(limit=200)
         return [dict(r) for r in rows]
 
     @app.post("/runs/clear")
@@ -573,10 +530,7 @@ def create_app() -> FastAPI:
         """
         Clear run history (DB rows + log files) for all runs that are not running.
         """
-        conn = get_conn()
-        rows = conn.execute(
-            "SELECT id, status, log_path FROM runs WHERE status != 'running'"
-        ).fetchall()
+        rows = run_repo.list_non_running_runs()
         for r in rows:
             try:
                 p = Path(r["log_path"])
@@ -585,8 +539,7 @@ def create_app() -> FastAPI:
             except Exception:
                 # Best-effort deletion; DB clear still proceeds.
                 pass
-        with tx(conn):
-            conn.execute("DELETE FROM runs WHERE status != 'running'")
+        run_repo.delete_non_running_runs()
         return RedirectResponse(url="/runs", status_code=303)
 
     @app.get("/runs/new", response_class=HTMLResponse)
@@ -2257,8 +2210,8 @@ def create_app() -> FastAPI:
         logs_dir = Path(".webui") / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        conn = get_conn()
         created_run_ids: List[int] = []
+        conn = get_conn()
         with tx(conn):
             total_groups = len(run_groups)
             for idx, group in enumerate(run_groups, start=1):
@@ -2279,30 +2232,27 @@ def create_app() -> FastAPI:
                     mode_label = str(group.get("mode") or "manual")
                     title = f"{title} ({mode_label} {idx}/{total_groups})"
 
-                cur = conn.execute(
-                    """
-                    INSERT INTO runs(title, created_at, scheduled_at, status, cwd, cmd_json, args_json, log_path)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        title,
-                        now,
-                        scheduled_iso,
-                        status,
-                        str(Path.cwd()),
-                        json.dumps([]),
-                        json.dumps(args),
-                        str(logs_dir / "pending.log"),
-                    ),
+                run_id = run_repo.insert_run(
+                    conn,
+                    title=title,
+                    created_at=now,
+                    scheduled_at=scheduled_iso,
+                    status=status,
+                    cwd=str(Path.cwd()),
+                    cmd_json=json.dumps([]),
+                    args_json=json.dumps(args),
+                    log_path=str(logs_dir / "pending.log"),
                 )
-                run_id = int(cur.lastrowid)
                 args["run_id"] = run_id
                 cmd = build_cli_cmd(args)
                 created_run_ids.append(run_id)
                 log_path = logs_dir / f"run-{run_id}.log"
-                conn.execute(
-                    "UPDATE runs SET cmd_json=?, args_json=?, log_path=? WHERE id=?",
-                    (json.dumps(cmd), json.dumps(args), str(log_path), run_id),
+                run_repo.update_run_command_and_log(
+                    conn,
+                    run_id,
+                    cmd_json=json.dumps(cmd),
+                    args_json=json.dumps(args),
+                    log_path=str(log_path),
                 )
 
         _draft_delete(draft_id)
@@ -2312,8 +2262,7 @@ def create_app() -> FastAPI:
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_detail(request: Request, run_id: int) -> HTMLResponse:
-        conn = get_conn()
-        row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        row = run_repo.get_run(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         try:
@@ -2331,10 +2280,7 @@ def create_app() -> FastAPI:
 
     @app.get("/audio-timestamp/runs/{run_id}", response_class=HTMLResponse)
     def audio_timestamp_run_detail(request: Request, run_id: int) -> HTMLResponse:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT * FROM timestamp_runs WHERE id=?", (run_id,)
-        ).fetchone()
+        row = timestamp_run_repo.get_timestamp_run(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         try:
@@ -2360,16 +2306,12 @@ def create_app() -> FastAPI:
 
     @app.post("/audio-timestamp/runs/{run_id}/delete")
     def audio_timestamp_run_delete(run_id: int) -> RedirectResponse:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT status FROM timestamp_runs WHERE id=?", (run_id,)
-        ).fetchone()
-        if not row:
+        status = timestamp_run_repo.get_timestamp_run_status(run_id)
+        if status is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        if str(row["status"]) == "running":
+        if status == "running":
             raise HTTPException(status_code=400, detail="Cannot delete a running run")
-        with tx(conn):
-            conn.execute("DELETE FROM timestamp_runs WHERE id=?", (run_id,))
+        timestamp_run_repo.delete_timestamp_run(run_id)
         return RedirectResponse(url="/audio-timestamp/runs", status_code=303)
 
     # (Summary is shown before starting; see /wizard/{draft_id}/summary.)
@@ -2386,10 +2328,7 @@ def create_app() -> FastAPI:
         """
         Remove a run from history (DB row) and delete its log file (best-effort).
         """
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT status, log_path FROM runs WHERE id=?", (run_id,)
-        ).fetchone()
+        row = run_repo.get_run(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         if str(row["status"]) == "running":
@@ -2402,17 +2341,15 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        with tx(conn):
-            conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
+        run_repo.delete_run(run_id)
         return RedirectResponse(url="/runs", status_code=303)
 
     @app.get("/runs/{run_id}/logs")
     def run_logs(run_id: int) -> StreamingResponse:
-        conn = get_conn()
-        row = conn.execute("SELECT log_path FROM runs WHERE id=?", (run_id,)).fetchone()
-        if not row:
+        log_path = run_repo.get_run_log_path(run_id)
+        if log_path is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        path = Path(row["log_path"])
+        path = Path(log_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Log not found")
 
@@ -2428,11 +2365,10 @@ def create_app() -> FastAPI:
 
     @app.get("/runs/{run_id}/logs/stream")
     async def run_logs_stream(run_id: int) -> StreamingResponse:
-        conn = get_conn()
-        row = conn.execute("SELECT log_path FROM runs WHERE id=?", (run_id,)).fetchone()
-        if not row:
+        log_path = run_repo.get_run_log_path(run_id)
+        if log_path is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        path = Path(row["log_path"])
+        path = Path(log_path)
         return StreamingResponse(
             tail_log_sse(path),
             media_type="text/event-stream",
@@ -2441,8 +2377,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/runs/{run_id}")
     def api_run(run_id: int) -> Dict[str, Any]:
-        conn = get_conn()
-        row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        row = run_repo.get_run(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         d = dict(row)
@@ -2451,10 +2386,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/audio-timestamp/runs/{run_id}")
     def api_audio_timestamp_run(run_id: int) -> Dict[str, Any]:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT * FROM timestamp_runs WHERE id=?", (run_id,)
-        ).fetchone()
+        row = timestamp_run_repo.get_timestamp_run(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         return {
