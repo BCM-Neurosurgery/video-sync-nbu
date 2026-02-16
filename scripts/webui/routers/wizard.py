@@ -621,7 +621,11 @@ def create_wizard_router(
         draft_id: int, audio_dir: str = Form(...)
     ) -> RedirectResponse:
         # Validate on POST as a no-JS fallback.
-        validation_service.validate_audio(draft_id, audio_dir)
+        validation_service.validate_audio(
+            draft_id,
+            audio_dir,
+            include_timestamp_state=True,
+        )
         return RedirectResponse(url=f"/wizard/{draft_id}/audio", status_code=303)
 
     @router.get("/wizard/{draft_id}/video", response_class=HTMLResponse)

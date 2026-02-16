@@ -12,7 +12,11 @@ def create_validation_api_router(*, validation_service: ValidationService) -> AP
 
     @router.get("/api/drafts/{draft_id}/validate-audio")
     def api_validate_audio(draft_id: int, audio_dir: str) -> Dict[str, Any]:
-        return validation_service.validate_audio(draft_id, audio_dir)
+        return validation_service.validate_audio(
+            draft_id,
+            audio_dir,
+            include_timestamp_state=True,
+        )
 
     @router.get("/api/drafts/{draft_id}/validate-audio/start")
     def api_validate_audio_start(draft_id: int, audio_dir: str) -> Dict[str, Any]:
