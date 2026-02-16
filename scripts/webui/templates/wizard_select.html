@@ -15,20 +15,7 @@
   <form class="card form"
         method="post"
         action="/wizard/{{ draft_id }}/select">
-    <div class="input-row">
-      <div class="label-row field-label">
-        Site
-        <span class="help"
-              data-tip="Select the recording site preset (affects serial decoding defaults)."></span>
-      </div>
-      <select name="site" class="narrow-select">
-        {% for s in ["jamail","nbu_lounge","nbu_sleep"] %}
-          <option value="{{ s }}" {% if site==s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </div>
     <input type="hidden" name="log_level" value="INFO" />
-    <hr class="divider" />
     <h3 style="margin:0 0 8px 0">Selection mode</h3>
     <div class="input-row">
       <label class="field-label" for="selection_mode" style="margin:0">Mode</label>

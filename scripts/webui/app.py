@@ -2648,7 +2648,6 @@ def create_app() -> FastAPI:
     @app.post("/wizard/{draft_id}/select")
     async def wizard_select_post(draft_id: int, request: Request) -> RedirectResponse:
         form = await request.form()
-        site = str(form.get("site") or "nbu_lounge").strip() or "nbu_lounge"
         log_level = str(form.get("log_level") or "INFO").strip() or "INFO"
         output_json = str(form.get("output_json") or "").strip() or None
         selection_mode = str(form.get("selection_mode") or "segments").strip().lower()
@@ -2660,7 +2659,6 @@ def create_app() -> FastAPI:
 
         data = _draft_get(draft_id)
         mode = str(data.get("mode") or "sync")
-        data["site"] = site
         data["all_segments"] = False
         data["all_cameras"] = False
         data["segments"] = []
