@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -120,6 +121,8 @@ def _looks_like_segmented_wav_layout(candidates: List[Path]) -> bool:
         return False
     infos = [parse_wav_filename(p) for p in wavs]
     if any(info is None for info in infos):
+        return False
+    if any(not re.fullmatch(r"0[1-9]", info.channel) for info in infos):
         return False
     per_channel: Dict[str, int] = {}
     for info in infos:

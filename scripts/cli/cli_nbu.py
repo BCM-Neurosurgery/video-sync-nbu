@@ -289,15 +289,10 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
 
     wav_infos = [info for info in parsed if info is not None]
     for info in wav_infos:
-        try:
-            ch = int(info.channel)
-        except ValueError as e:
+        if not re.fullmatch(r"0[1-9]", info.channel):
             raise AudioGroupDiscoverError(
-                f"Invalid segmented WAV channel token: {info.channel}"
-            ) from e
-        if not (1 <= ch <= 9):
-            raise AudioGroupDiscoverError(
-                f"Segmented WAV channel out of supported range 01..09: {info.channel}"
+                "Segmented WAV channels must be zero-padded 01..09; "
+                f"got '{info.channel}' in {info.path.name}"
             )
 
     grouped = group_segmented_wavs_by_channel(wav_infos)
