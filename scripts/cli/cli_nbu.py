@@ -765,7 +765,7 @@ def run_pipeline(
         ad = AudioDiscoverer(audio_dir=prepared_audio_dir, log=logger)
         ag = ad.get_audio_group()
         logger.info("Audio(s) discovered")
-    except AudioGroupDiscoverError as e:
+    except (AudioGroupDiscoverError, ValueError) as e:
         logger.error("Audio group discovery failed: %s", e)
         return 2
 
