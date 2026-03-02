@@ -22,9 +22,11 @@ class FilePatterns:
         Example: ``TRBD002_20250806_104707.json``
 
     Audio (program/serial)
-        ``<prefix>-<chan>.<ext>``, where ``<chan>`` is two digits and ``<ext>`` is
-        ``wav`` or ``mp3``.
-        Example: ``TRBD002_08062025-01.mp3``
+        Supports both:
+        - ``<prefix>-<chan>.<ext>`` (legacy)
+        - ``<chan>-<prefix>.<ext>`` (new)
+        where ``<chan>`` is ``01``..``09`` and ``<ext>`` is ``wav`` or ``mp3``.
+        Examples: ``TRBD002_08062025-01.mp3``, ``01-260223_1012.wav``
 
     Notes
     -----
@@ -37,8 +39,13 @@ class FilePatterns:
         r"^(?P<base>.+?_\d{8}_\d{6})\.(?P<cam>[0-9A-Za-z]+)\.mp4$", re.IGNORECASE
     )
     RE_JSON = re.compile(r"^(?P<base>.+?_\d{8}_\d{6})\.json$", re.IGNORECASE)
-    RE_AUDIO = re.compile(
-        r"^(?P<prefix>.+)-(?P<chan>\d{2})\.(?P<ext>wav|mp3)$", re.IGNORECASE
+    # Legacy format: <prefix>-<chan>.<ext>
+    RE_AUDIO_SUFFIX_CHAN = re.compile(
+        r"^(?P<prefix>.+)-(?P<chan>0[1-9])\.(?P<ext>wav|mp3)$", re.IGNORECASE
+    )
+    # New format: <chan>-<prefix>.<ext>
+    RE_AUDIO_PREFIX_CHAN = re.compile(
+        r"^(?P<chan>0[1-9])-(?P<prefix>.+)\.(?P<ext>wav|mp3)$", re.IGNORECASE
     )
 
     @classmethod
@@ -92,33 +99,34 @@ class FilePatterns:
     @classmethod
     def parse_audio_filename(cls, p: Path) -> Optional[Tuple[int, str]]:
         """
-        Parse an audio basename of the form ``<prefix>-<chan>.<ext>``.
+        Parse an audio basename in either supported form:
+        - ``<prefix>-<chan>.<ext>`` (legacy)
+        - ``<chan>-<prefix>.<ext>`` (new)
 
         Parameters
         ----------
         p : pathlib.Path
-            Path to an audio file whose channel is encoded as two digits.
+            Path to an audio file whose channel is encoded as ``01``..``09``.
 
         Returns
         -------
         Optional[Tuple[int, str]]
             ``(chan, ext)`` where ``chan`` is the integer channel number and
             ``ext`` is the lowercase extension (``"wav"`` or ``"mp3"``).
-            Returns ``None`` if not matched or if channel is not an integer.
+            Returns ``None`` if not matched.
 
         Examples
         --------
         >>> FilePatterns.parse_audio_filename(Path("TRBD002_08062025-03.mp3"))
         (3, 'mp3')
+        >>> FilePatterns.parse_audio_filename(Path("03-260223_1012.wav"))
+        (3, 'wav')
         """
-        m = cls.RE_AUDIO.match(p.name)
-        if not m:
-            return None
-        try:
-            ch = int(m.group("chan"))
-        except ValueError:
-            return None
-        return ch, m.group("ext").lower()
+        for pat in (cls.RE_AUDIO_SUFFIX_CHAN, cls.RE_AUDIO_PREFIX_CHAN):
+            m = pat.match(p.name)
+            if m:
+                return int(m.group("chan")), m.group("ext").lower()
+        return None
 
     @classmethod
     def videogroup_sort_key(cls, seg_id: str) -> Tuple[int, int, str]:

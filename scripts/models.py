@@ -4,11 +4,11 @@ Define abstract dataclasses
 For each recording session, we expect to have 1 group of audios and multiple groups of videos.
 
 - Audio
-    each audio group should come with 3 audio files in the format of
+    each audio group should come with channelized audio files in the format of
         - <PREFIX>-<INDEX>.<EXT>
         e.g. Test-01.wav
-    where <INDEX> should be 01, 02, or 03.
-    audio that ends with 03 is the one that has serial encodings
+    where <INDEX> is typically 01..09.
+    channel 03 is the one that has serial encodings
 
 - Video
     comes in k-min groups. Each group has several mp4 videos in the format of

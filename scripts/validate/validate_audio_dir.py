@@ -246,7 +246,7 @@ def validate_audio_dir_progress(
     _set_check(payload["checks"], "Naming pattern", "pass")
     emit()
 
-    # Serial channel present (exactly one -03)
+    # Serial channel present (exactly one channel 03)
     _set_check(payload["checks"], "Serial channel present", "running")
     emit()
     ch_counts: Dict[int, int] = {}
@@ -256,7 +256,8 @@ def validate_audio_dir_progress(
     if serial_count != 1:
         payload["error"] = (
             f"Expected exactly one channel {ad.default_serial_channel:02d} file "
-            f"(e.g., *-{ad.default_serial_channel:02d}.wav/mp3); found {serial_count}."
+            f"(e.g., *-{ad.default_serial_channel:02d}.wav/mp3 or "
+            f"{ad.default_serial_channel:02d}-*.wav/mp3); found {serial_count}."
         )
         _set_check(
             payload["checks"], "Serial channel present", "fail", payload["error"]

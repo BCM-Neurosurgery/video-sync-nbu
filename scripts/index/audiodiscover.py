@@ -10,10 +10,13 @@ it **does determine sampling rate**:
 
 Validation rules (enforced)
 ---------------------------
-1. Filenames must match ``<prefix>-<chan>.<ext>`` where ``chan`` is two digits and
-   ``ext`` ∈ {``wav``, ``mp3``}; otherwise **raise** ``ValueError``.
-2. The directory may contain **at most 3** files for a given extension (≤3 ``.wav`` and
-   ≤3 ``.mp3``); otherwise **raise**.
+1. Filenames must match one of:
+   - ``<prefix>-<chan>.<ext>`` (legacy)
+   - ``<chan>-<prefix>.<ext>`` (new)
+   where ``chan`` is ``01``..``09`` and ``ext`` ∈ {``wav``, ``mp3``};
+   otherwise **raise** ``ValueError``.
+2. The directory may contain **at most 9** files for a given extension (≤9 ``.wav`` and
+   ≤9 ``.mp3``); otherwise **raise**.
 3. There must be **exactly one** channel ``-03`` file overall; otherwise **raise**.
 4. There must be **at least one** of channels ``-01`` or ``-02``; if neither, **raise**;
    if only one is present, **warn**.
@@ -44,6 +47,8 @@ from scripts.models import (
     AudioGroup,
 )
 
+MAX_AUDIO_FILES_PER_EXTENSION = 9
+
 
 class AudioDiscoverer(_DirMixin):
     """
@@ -54,7 +59,8 @@ class AudioDiscoverer(_DirMixin):
     ----------
     audio_dir : pathlib.Path
         Directory containing channelized audio files named as
-        ``<prefix>-<chan>.<ext>`` where ``chan`` is two digits.
+        ``<prefix>-<chan>.<ext>`` or ``<chan>-<prefix>.<ext>``, where
+        ``chan`` is ``01``..``09``.
     default_serial_channel : int, default=3
         Channel number treated as the serial channel (e.g., ``-03``).
     log : logging.Logger
@@ -109,9 +115,10 @@ class AudioDiscoverer(_DirMixin):
 
         Enforced rules
         --------------
-        1) Basename must match ``<prefix>-<chan>.<ext>`` (``chan``=2 digits,
+        1) Basename must match either ``<prefix>-<chan>.<ext>`` or
+           ``<chan>-<prefix>.<ext>`` (``chan`` in ``01``..``09``,
            ``ext`` in {wav, mp3}); else **raise**.
-        2) At most 3 files **per extension** (``.wav`` or ``.mp3``); else **raise**.
+        2) At most 9 files **per extension** (``.wav`` or ``.mp3``); else **raise**.
         3) Exactly one channel ``-03`` overall; else **raise**.
         4) At least one of ``-01`` or ``-02`` exists; if neither, **raise**; if only
            one exists, **warn**.
@@ -145,12 +152,12 @@ class AudioDiscoverer(_DirMixin):
                 + ", ".join(sorted(invalid))
             )
 
-        # Rule 1: at most 3 per extension
+        # Rule 1: at most 9 per extension (channels 01..09)
         for ext, paths in by_ext.items():
-            if len(paths) > 3:
+            if len(paths) > MAX_AUDIO_FILES_PER_EXTENSION:
                 raise ValueError(
                     f"Found {len(paths)} *.{ext} files in {self.audio_dir} "
-                    f"(max allowed per extension is 3)."
+                    f"(max allowed per extension is {MAX_AUDIO_FILES_PER_EXTENSION})."
                 )
 
         # Rule 2: exactly one -03.*
@@ -158,7 +165,8 @@ class AudioDiscoverer(_DirMixin):
         if serial_count != 1:
             raise ValueError(
                 f"Expected exactly one channel {self.default_serial_channel:02d} "
-                f"file (e.g., *-{self.default_serial_channel:02d}.wav/mp3); "
+                f"file (e.g., *-{self.default_serial_channel:02d}.wav/mp3 "
+                f"or {self.default_serial_channel:02d}-*.wav/mp3); "
                 f"found {serial_count}."
             )
 
