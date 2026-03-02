@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from scripts.cli.cli_nbu import prepare_serial_audio
+from scripts.cli.cli_nbu import prepare_serial_audio, _prepare_audio_input_dir
 from scripts.errors import (
     AudioDecodingError,
     AudioGroupDiscoverError,
@@ -40,9 +40,10 @@ def rebuild_decode_artifacts_for_draft(
     try:
         audio_dir = Path(str(data.get("audio_dir", "")).strip()).expanduser()
         out_dir_path = Path(out_dir).expanduser()
+        prepared_audio_dir = _prepare_audio_input_dir(audio_dir, out_dir_path)
         decode_log = logging.getLogger("webui.decode.audio")
         audiogroup = AudioDiscoverer(
-            audio_dir=audio_dir, log=decode_log
+            audio_dir=prepared_audio_dir, log=decode_log
         ).get_audio_group()
     except (AudioGroupDiscoverError, ValueError) as exc:
         clear_decode_state(data)

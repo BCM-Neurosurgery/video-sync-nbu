@@ -157,6 +157,11 @@ from scripts.align.sync import sync_one_video
 from scripts.index.discover import AudioDiscoverer
 from scripts.index.videodiscover import build_video_obj
 from scripts.merge.mergecsv import merge_split_csvs
+from scripts.merge.merge_wav import (
+    parse_wav_filename,
+    group_by_channel as group_segmented_wavs_by_channel,
+    merge_channel_wavs,
+)
 from scripts.split.mp3split import split_mp3_to_wav
 from scripts.utility.utils import _name
 from scripts.models import AudioGroup, Video
@@ -243,6 +248,86 @@ def _to_rel_or_abs(path: Path, root: Path) -> str:
         return str(path.resolve().relative_to(root.resolve()))
     except Exception:
         return str(path.resolve())
+
+
+def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
+    """
+    Normalize segmented WAV inputs into canonical per-channel files.
+
+    Legacy layouts are returned unchanged.
+    Segmented layouts like ``01-YYMMDD_HHMM.wav`` are merged to:
+      <artifact_root>/audio_prepared/merged_segments/merged-01.wav, ...
+    """
+    if not audio_dir.exists():
+        raise AudioGroupDiscoverError(f"Audio directory does not exist: {audio_dir}")
+    if not audio_dir.is_dir():
+        raise AudioGroupDiscoverError(f"Audio path is not a directory: {audio_dir}")
+
+    audio_files = sorted(
+        p
+        for p in audio_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".wav", ".mp3"}
+    )
+    if not audio_files:
+        return audio_dir
+
+    wav_files = [p for p in audio_files if p.suffix.lower() == ".wav"]
+    mp3_files = [p for p in audio_files if p.suffix.lower() == ".mp3"]
+    if not wav_files:
+        return audio_dir
+
+    parsed = [parse_wav_filename(p) for p in wav_files]
+    if any(info is None for info in parsed):
+        # Not segmented WAV naming; keep legacy behavior.
+        return audio_dir
+
+    if mp3_files:
+        raise AudioGroupDiscoverError(
+            "Detected segmented WAV filenames mixed with MP3 files in AUDIO_DIR. "
+            "Use either legacy channel files or segmented WAV files only."
+        )
+
+    wav_infos = [info for info in parsed if info is not None]
+    for info in wav_infos:
+        try:
+            ch = int(info.channel)
+        except ValueError as e:
+            raise AudioGroupDiscoverError(
+                f"Invalid segmented WAV channel token: {info.channel}"
+            ) from e
+        if not (1 <= ch <= 9):
+            raise AudioGroupDiscoverError(
+                f"Segmented WAV channel out of supported range 01..09: {info.channel}"
+            )
+
+    grouped = group_segmented_wavs_by_channel(wav_infos)
+    prepared_dir = artifact_root / "audio_prepared" / "merged_segments"
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear only files we own from previous runs.
+    for stale in prepared_dir.glob("merged-*.wav"):
+        stale.unlink(missing_ok=True)
+    for stale in prepared_dir.glob("merged-*.json"):
+        stale.unlink(missing_ok=True)
+
+    merged_paths: list[Path] = []
+    for channel, files in sorted(grouped.items(), key=lambda kv: int(kv[0])):
+        merged_paths.append(
+            merge_channel_wavs(f"{int(channel):02d}", files, prepared_dir)
+        )
+
+    if not merged_paths:
+        raise AudioGroupDiscoverError(
+            f"Segmented WAV preparation produced no outputs from {audio_dir}"
+        )
+
+    logger.info(
+        "Prepared segmented WAV input: %d source file(s) -> %d merged channel file(s) at %s",
+        len(wav_infos),
+        len(merged_paths),
+        _name(prepared_dir),
+    )
+    return prepared_dir
 
 
 def _write_run_manifest(
@@ -667,9 +752,17 @@ def run_pipeline(
     logger.info("Run mode=%s", run_mode)
     logger.info("Artifact root: %s", artifact_root)
 
+    # Support segmented WAV naming (e.g., 01-YYMMDD_HHMM.wav) by first
+    # normalizing into one canonical file per channel.
+    try:
+        prepared_audio_dir = _prepare_audio_input_dir(audio_dir, artifact_root)
+    except AudioGroupDiscoverError as e:
+        logger.error("Audio input preparation failed: %s", e)
+        return 2
+
     # Discover audio group once (shared across segments/cams)
     try:
-        ad = AudioDiscoverer(audio_dir=audio_dir, log=logger)
+        ad = AudioDiscoverer(audio_dir=prepared_audio_dir, log=logger)
         ag = ad.get_audio_group()
         logger.info("Audio(s) discovered")
     except AudioGroupDiscoverError as e:
@@ -823,7 +916,7 @@ def run_pipeline(
     for seg_id, cam_list in ordered_targets:
         summary = process_segment(
             video_in=video_dir,
-            audio_in=audio_dir,
+            audio_in=prepared_audio_dir,
             seg_id=seg_id,
             parent_out=run_root,
             cam_serials=cam_list,
@@ -894,6 +987,16 @@ def prepare_serial_audio(
     audio_decoded_dir.mkdir(parents=True, exist_ok=True)
 
     with log_context(seg="-", cam="-"):
+        serial_audio_path = Path(audiogroup.serial_audio.path)
+        if do_split and serial_audio_path.suffix.lower() != ".mp3":
+            logger.warning(
+                "--split requested but serial audio is %s (%s); "
+                "falling back to direct decode.",
+                serial_audio_path.suffix.lower(),
+                _name(serial_audio_path),
+            )
+            do_split = False
+
         if skip_decode:
             if do_split:
                 logger.info("--skip-decode is set; ignoring --split.")
@@ -921,7 +1024,6 @@ def prepare_serial_audio(
             return prefiltered_csv
 
         if do_split:
-            serial_mp3 = Path(audiogroup.serial_audio.path)
             chunks_dir = split_outdir or (artifact_root / "serial_audio_splitted")
             chunks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -931,7 +1033,7 @@ def prepare_serial_audio(
                 _name(chunks_dir),
             )
             split_mp3_to_wav(
-                input_mp3=serial_mp3,
+                input_mp3=serial_audio_path,
                 outdir=chunks_dir,
                 chunk_seconds=split_chunk_seconds,
                 start_number=1,
@@ -941,7 +1043,7 @@ def prepare_serial_audio(
                 ffmpeg_loglevel="info",
             )
 
-            manifest_path = chunks_dir / f"{serial_mp3.stem}_manifest.json"
+            manifest_path = chunks_dir / f"{serial_audio_path.stem}_manifest.json"
             if not manifest_path.exists():
                 logger.warning("Manifest not found: %s", _name(manifest_path))
                 manifest_path = None
@@ -954,7 +1056,7 @@ def prepare_serial_audio(
                 outdir=split_csv_dir,
                 site=site,
                 threshold=0.5,
-                pattern=f"{serial_mp3.stem}-[0-9][0-9][0-9].wav",
+                pattern=f"{serial_audio_path.stem}-[0-9][0-9][0-9].wav",
                 manifest=manifest_path,
             )
 
@@ -1017,7 +1119,7 @@ def prepare_serial_audio(
 
 def process_segment(
     video_in: str,
-    audio_in: str,
+    audio_in: Path,
     seg_id: str,
     parent_out: Path,
     cam_serials: Iterable[str],

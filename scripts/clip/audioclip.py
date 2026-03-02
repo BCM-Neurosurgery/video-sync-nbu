@@ -10,8 +10,9 @@ What it does
    → finds global s_min, s_max over all rows.
 2) Applies a safety margin (default 5s) around [s_min, s_max] using the
    provided sample rate (default 44100 Hz).
-3) Clips every audio in `audio_dir` that matches:
-      <prefix>-<chan>.(wav|mp3)   where <chan> is two digits (01, 02, 03)
+3) Clips every audio in `audio_dir` that matches either:
+      <prefix>-<chan>.(wav|mp3)  or  <chan>-<prefix>.(wav|mp3)
+   where <chan> is 01..09
    to that window, writing WAV files named:
       <prefix>-clipped-<chan>.wav
    into `out_dir`.
@@ -69,8 +70,11 @@ from scripts.log.logutils import configure_standalone_logging, log_context
 logger = logging.getLogger(__name__)
 
 
-AUDIO_NAME_RE = re.compile(
-    r"^(?P<prefix>.+)-(?P<chan>\d{2})\.(?P<ext>wav|mp3)$", re.IGNORECASE
+AUDIO_NAME_RE_SUFFIX_CHAN = re.compile(
+    r"^(?P<prefix>.+)-(?P<chan>0[1-9])\.(?P<ext>wav|mp3)$", re.IGNORECASE
+)
+AUDIO_NAME_RE_PREFIX_CHAN = re.compile(
+    r"^(?P<chan>0[1-9])-(?P<prefix>.+)\.(?P<ext>wav|mp3)$", re.IGNORECASE
 )
 
 
@@ -99,10 +103,16 @@ def _require_tool(name: str) -> None:
         raise RuntimeError(f"Required tool '{name}' not found on PATH.")
 
 
+def _parse_audio_name(name: str) -> Optional[Tuple[str, str, str]]:
+    for pat in (AUDIO_NAME_RE_SUFFIX_CHAN, AUDIO_NAME_RE_PREFIX_CHAN):
+        m = pat.match(name)
+        if m:
+            return m.group("prefix"), m.group("chan"), m.group("ext").lower()
+    return None
+
+
 def _list_audio_files(audio_dir: Path) -> List[Path]:
-    return [
-        p for p in audio_dir.iterdir() if p.is_file() and AUDIO_NAME_RE.match(p.name)
-    ]
+    return [p for p in audio_dir.iterdir() if p.is_file() and _parse_audio_name(p.name)]
 
 
 def _parse_csv_bounds(csv_path: Path) -> Tuple[int, int]:
@@ -126,10 +136,9 @@ def _parse_csv_bounds(csv_path: Path) -> Tuple[int, int]:
 
 
 def _build_out_name(in_name: str) -> str:
-    m = AUDIO_NAME_RE.match(in_name)
-    assert m, f"Bad audio name: {in_name}"
-    prefix = m.group("prefix")
-    chan = m.group("chan")
+    parsed = _parse_audio_name(in_name)
+    assert parsed is not None, f"Bad audio name: {in_name}"
+    prefix, chan, _ = parsed
     return f"{prefix}-clipped-{chan}.wav"
 
 
@@ -290,7 +299,9 @@ def _parse_args() -> argparse.Namespace:
         "csv", type=Path, help="CSV with columns serial,start_sample,end_sample"
     )
     ap.add_argument(
-        "audio_dir", type=Path, help="Directory with <prefix>-<chan>.(wav|mp3)"
+        "audio_dir",
+        type=Path,
+        help="Directory with <prefix>-<chan> or <chan>-<prefix> audio files",
     )
     ap.add_argument("out_dir", type=Path, help="Directory to write clipped WAVs")
     ap.add_argument(

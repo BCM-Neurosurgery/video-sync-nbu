@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from scripts.index.audiodiscover import AudioDiscoverer
 from scripts.index.filepatterns import FilePatterns
+from scripts.merge.merge_wav import parse_wav_filename
 
 
 def _now_iso() -> str:
@@ -103,6 +104,27 @@ def _choose_best_per_channel(parsed: List[Tuple[int, str, Path]]) -> Dict[int, P
             if existing.suffix.lower() == ".mp3" and ext == "wav":
                 chosen[ch] = p
     return chosen
+
+
+def _looks_like_segmented_wav_layout(candidates: List[Path]) -> bool:
+    """
+    True when input resembles segmented WAV capture:
+    channel-first names like 01-YYMMDD_HHMM(.ss).wav and no MP3 files.
+    """
+    if not candidates:
+        return False
+    if any(p.suffix.lower() == ".mp3" for p in candidates):
+        return False
+    wavs = [p for p in candidates if p.suffix.lower() == ".wav"]
+    if not wavs:
+        return False
+    infos = [parse_wav_filename(p) for p in wavs]
+    if any(info is None for info in infos):
+        return False
+    per_channel: Dict[str, int] = {}
+    for info in infos:
+        per_channel[info.channel] = per_channel.get(info.channel, 0) + 1
+    return any(n > 1 for n in per_channel.values())
 
 
 def _finalize_checks_on_fail(checks: List[Check]) -> None:
@@ -253,7 +275,8 @@ def validate_audio_dir_progress(
     for ch, ext, c in parsed:
         ch_counts[ch] = ch_counts.get(ch, 0) + 1
     serial_count = ch_counts.get(ad.default_serial_channel, 0)
-    if serial_count != 1:
+    segmented_layout = _looks_like_segmented_wav_layout(candidates)
+    if serial_count != 1 and not (segmented_layout and serial_count >= 1):
         payload["error"] = (
             f"Expected exactly one channel {ad.default_serial_channel:02d} file "
             f"(e.g., *-{ad.default_serial_channel:02d}.wav/mp3 or "
@@ -266,7 +289,18 @@ def validate_audio_dir_progress(
         payload["running"] = False
         emit()
         return payload
-    _set_check(payload["checks"], "Serial channel present", "pass")
+    if segmented_layout and serial_count >= 1:
+        _set_check(
+            payload["checks"],
+            "Serial channel present",
+            "pass",
+            (
+                f"Segmented WAV layout detected; found {serial_count} serial segments. "
+                "CLI will merge per channel automatically."
+            ),
+        )
+    else:
+        _set_check(payload["checks"], "Serial channel present", "pass")
     emit()
 
     # Program channel present (-01 or -02)
