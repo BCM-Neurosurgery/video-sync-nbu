@@ -165,7 +165,7 @@ class WavSerialDecoder:
         """Refuse to decode files that are too large to be handled reliably in-process.
         - Hard stop for MP3 near 4GB (pydub limitation).
         - Soft cap for any input (default 2 GiB). Override with env VIDEOSYNC_DECODE_MAX_BYTES.
-        Suggests using --split-minutes.
+        Suggests using --split / --chunk-seconds.
         """
         try:
             fbytes = os.path.getsize(self.filepath)
@@ -181,15 +181,14 @@ class WavSerialDecoder:
         if ext == ".mp3" and fbytes >= MP3_PYDUB_SIZE_HARD_LIMIT:
             raise RuntimeError(
                 "Input MP3 is ~>=4GB; direct decoding is unsafe. "
-                "Run splitting first, e.g.: \n"
-                "  python wavfileparser.py <file>.mp3 --split-minutes 5\n"
-                "This writes <stem>_chunkNNN.wav files ready for decoding."
+                "Use the --split flag to split into chunks first, e.g.:\n"
+                "  python -m scripts.cli.cli_nbu ... --split --chunk-seconds 300"
             )
         if fbytes >= soft_cap:
             raise RuntimeError(
                 f"Input file is {fbytes} bytes, exceeding safe decode cap {soft_cap} bytes. "
-                "Split into chunks first, e.g.:\n"
-                "  python wavfileparser.py <file> --split-minutes 10"
+                "Use the --split flag to split into chunks first, e.g.:\n"
+                "  python -m scripts.cli.cli_nbu ... --split --chunk-seconds 600"
             )
 
     def _read_wav_strict(self) -> None:

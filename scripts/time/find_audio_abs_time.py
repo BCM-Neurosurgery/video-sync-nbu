@@ -41,9 +41,7 @@ from scripts.align.collect_anchors import (
     _collect_anchors_for_cam,
     _extract_cam_arrays_from_video,
 )
-from scripts.fix.audiofilter import filter_audio_file
-from scripts.fix.audiogapfiller import gapfill_csv_file
-from scripts.decode.wavfileparser import decode_to_raw
+from scripts.decode.prepare import prepare_serial_csv
 
 LOGGER = logging.getLogger(__name__)
 
@@ -387,37 +385,22 @@ def _ensure_serial_csvs(
     layout: OutputLayout,
     *,
     site: str,
+    do_split: bool | None = None,
+    split_chunk_seconds: int = 3600,
 ) -> Path:
-    """Ensure raw/gapfilled/filtered CSVs exist and return the filtered path."""
+    """Ensure raw/gapfilled/filtered CSVs exist and return the filtered path.
 
-    layout.decoded_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_csv = layout.raw_csv
-    if raw_csv.exists():
-        source_raw = raw_csv
-        LOGGER.info("Reusing decoded serial CSV: %s", source_raw)
-    else:
-        source_raw, _, _, _ = decode_to_raw(
-            serial_audio_path, outdir=layout.decoded_dir, site=site
-        )
-        LOGGER.info("Decoded serial audio → %s", source_raw)
-
-    gapfilled_csv = layout.gapfilled_csv
-    if gapfilled_csv.exists():
-        gapfilled_path = gapfilled_csv
-        LOGGER.info("Reusing gapfilled CSV: %s", gapfilled_path)
-    else:
-        gapfilled_path = gapfill_csv_file(source_raw, out_path=gapfilled_csv)
-        LOGGER.info("Gapfilled serial CSV → %s", gapfilled_path)
-
-    filtered_csv = layout.filtered_csv
-    if not filtered_csv.exists():
-        filter_audio_file(gapfilled_path, out_path=filtered_csv)
-        LOGGER.info("Filtered serial CSV → %s", filtered_csv)
-    else:
-        LOGGER.info("Reusing filtered CSV: %s", filtered_csv)
-
-    return filtered_csv
+    Delegates to :func:`~scripts.decode.prepare.prepare_serial_csv` which
+    auto-detects large MP3s and routes them through the split pipeline.
+    """
+    return prepare_serial_csv(
+        serial_audio_path=serial_audio_path,
+        artifact_root=layout.root,
+        site=site,
+        do_split=do_split,
+        split_chunk_seconds=split_chunk_seconds,
+        logger=LOGGER,
+    )
 
 
 def _build_serial_index_map(
@@ -425,10 +408,17 @@ def _build_serial_index_map(
     layout: OutputLayout,
     *,
     site: str,
+    do_split: bool | None = None,
+    split_chunk_seconds: int = 3600,
 ) -> Dict[int, int]:
     """Decode/gapfill/filter serial audio and return {serial -> start_sample}."""
-
-    filtered_csv = _ensure_serial_csvs(serial_audio_path, layout, site=site)
+    filtered_csv = _ensure_serial_csvs(
+        serial_audio_path,
+        layout,
+        site=site,
+        do_split=do_split,
+        split_chunk_seconds=split_chunk_seconds,
+    )
     return load_serial_index_csv(filtered_csv)
 
 
@@ -439,6 +429,8 @@ def compute_audio_start_records(
     out_dir: Path,
     local_tz: ZoneInfo = DEFAULT_TZ,
     site: str = "jamail",
+    do_split: bool | None = None,
+    split_chunk_seconds: int = 3600,
 ) -> List[AudioStartRecord]:
     """Compute absolute start timestamps for every audio file in ``audio_dir``."""
 
@@ -456,6 +448,8 @@ def compute_audio_start_records(
         Path(serial_audio.path),
         layout,
         site=site,
+        do_split=do_split,
+        split_chunk_seconds=split_chunk_seconds,
     )
 
     anchor_match = resolve_reference_anchor(
@@ -526,6 +520,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=Path,
         help="Optional path to save the computed records as JSON.",
     )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        default=None,
+        help="Force split→decode→merge for large MP3s (auto-detected if omitted).",
+    )
+    parser.add_argument(
+        "--chunk-seconds",
+        type=int,
+        default=3600,
+        help="Chunk duration in seconds for MP3 splitting (default: 3600).",
+    )
 
     args = parser.parse_args(argv)
 
@@ -548,6 +554,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out_dir=args.out_dir,
         local_tz=local_tz,
         site=args.site,
+        do_split=args.split,
+        split_chunk_seconds=args.chunk_seconds,
     )
 
     payload = [_record_to_payload(rec) for rec in records]
