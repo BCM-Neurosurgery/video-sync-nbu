@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from scripts.index.audiodiscover import AudioDiscoverer
 from scripts.index.filepatterns import FilePatterns
 from scripts.merge.merge_wav import parse_wav_filename
+from scripts.sites import get_serial_channel
 
 
 def _now_iso() -> str:
@@ -119,8 +120,8 @@ def _looks_like_segmented_wav_layout(candidates: List[Path]) -> bool:
     wavs = [p for p in candidates if p.suffix.lower() == ".wav"]
     if not wavs:
         return False
-    infos = [parse_wav_filename(p) for p in wavs]
-    if any(info is None for info in infos):
+    infos = [info for info in (parse_wav_filename(p) for p in wavs) if info is not None]
+    if not infos:
         return False
     if any(not re.fullmatch(r"0[1-9]", info.channel) for info in infos):
         return False
@@ -139,6 +140,7 @@ def _finalize_checks_on_fail(checks: List[Check]) -> None:
 def validate_audio_dir_progress(
     audio_dir: str,
     *,
+    serial_channel: int = 3,
     logger: Optional[logging.Logger] = None,
     on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
@@ -245,7 +247,7 @@ def validate_audio_dir_progress(
     )
     emit()
 
-    ad = AudioDiscoverer(audio_dir=p, log=log)
+    ad = AudioDiscoverer(audio_dir=p, default_serial_channel=serial_channel, log=log)
 
     # Parse & naming pattern
     _set_check(payload["checks"], "Naming pattern", "running")
@@ -418,9 +420,14 @@ def validate_audio_dir_progress(
 
 
 def validate_audio_dir(
-    audio_dir: str, *, logger: Optional[logging.Logger] = None
+    audio_dir: str,
+    *,
+    serial_channel: int = 3,
+    logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
-    result = validate_audio_dir_progress(audio_dir, logger=logger, on_progress=None)
+    result = validate_audio_dir_progress(
+        audio_dir, serial_channel=serial_channel, logger=logger, on_progress=None
+    )
     result["running"] = False
     return result
 

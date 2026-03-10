@@ -67,35 +67,11 @@ MP3_PYDUB_SIZE_HARD_LIMIT = 4_000_000_000  # ~4GB; pydub/ffmpeg temp WAV header 
 MAX_DECODE_BYTES_DEFAULT = 2 * 1024**3  # 2 GiB soft cap unless overridden by env
 
 # ---- Block presets (from lab MATLAB) ----
+# Canonical source: scripts.sites.SITE_CONFIGS[site]["block_preset"]
+from scripts.sites import SITE_CONFIGS
+
 BLOCK_PRESETS: Dict[str, Dict[str, object]] = {
-    # Jamail site defaults
-    "jamail": {
-        "flip_signal": True,  # binary_signal = flip(binary_signal)
-        "flip_window": True,  # win = flip(win)
-        "window_samples": 231,  # size of one serial burst window
-        "block_stride": 1100,  # hop size to next window candidate
-        # MATLAB defined in 1-based indexing; convert to 0-based in code
-        "transition_points_1b": [6, 53, 100, 147, 194],
-        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
-    },
-    # NBU Sleep room (empirical)
-    "nbu_sleep": {
-        "flip_signal": True,
-        "flip_window": True,
-        "window_samples": 231,  # empirically observed at NBU sleep
-        "block_stride": 1100,  # keep same unless you have a measured stride
-        "transition_points_1b": [6, 53, 100, 147, 194],
-        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],  # 8 taps → drop last = 7-bit
-    },
-    # NBU Lounge (empirical)
-    "nbu_lounge": {
-        "flip_signal": True,
-        "flip_window": True,
-        "window_samples": 231,  # empirically observed at NBU lounge
-        "block_stride": 1100,  # adjust if your coworkers logged a different hop
-        "transition_points_1b": [6, 53, 100, 147, 194],
-        "bit_offsets_1b": [4, 9, 14, 19, 23, 28, 33, 37],
-    },
+    site: cfg["block_preset"] for site, cfg in SITE_CONFIGS.items()
 }
 
 

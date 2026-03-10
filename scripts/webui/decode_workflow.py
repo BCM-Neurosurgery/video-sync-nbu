@@ -12,6 +12,7 @@ from scripts.errors import (
     GapFillError,
 )
 from scripts.index.discover import AudioDiscoverer
+from scripts.sites import get_serial_channel
 from scripts.validate.validate_out_dir import validate_out_dir
 
 from .wizard_state import clear_decode_state, mark_decode_ready
@@ -42,8 +43,11 @@ def rebuild_decode_artifacts_for_draft(
         out_dir_path = Path(out_dir).expanduser()
         prepared_audio_dir = _prepare_audio_input_dir(audio_dir, out_dir_path)
         decode_log = logging.getLogger("webui.decode.audio")
+        serial_ch = get_serial_channel(site_value)
         audiogroup = AudioDiscoverer(
-            audio_dir=prepared_audio_dir, log=decode_log
+            audio_dir=prepared_audio_dir,
+            default_serial_channel=serial_ch,
+            log=decode_log,
         ).get_audio_group()
     except (AudioGroupDiscoverError, ValueError) as exc:
         clear_decode_state(data)

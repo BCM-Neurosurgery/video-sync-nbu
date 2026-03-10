@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from scripts.sites import get_serial_channel
 from scripts.validate.validate_audio_dir import (
     validate_audio_dir,
     validate_audio_dir_progress,
@@ -69,6 +70,13 @@ class ValidationService:
     def _copy(payload: Dict[str, Any]) -> Dict[str, Any]:
         return json.loads(json.dumps(payload))
 
+    def _serial_channel_for_draft(self, data: Dict[str, Any]) -> int:
+        site = str(data.get("site", "nbu_lounge")).strip()
+        try:
+            return get_serial_channel(site)
+        except KeyError:
+            return 3
+
     def validate_audio(
         self,
         draft_id: int,
@@ -85,7 +93,9 @@ class ValidationService:
         data["audio_dir"] = audio_dir
 
         result = validate_audio_dir(
-            audio_dir, logger=logging.getLogger("webui.validate.audio")
+            audio_dir,
+            serial_channel=self._serial_channel_for_draft(data),
+            logger=logging.getLogger("webui.validate.audio"),
         )
         data["audio_ok"] = bool(result.get("ok"))
         data["audio_result"] = result
@@ -144,6 +154,8 @@ class ValidationService:
                 },
             }
 
+        local_serial_ch = self._serial_channel_for_draft(data)
+
         def run_validation(local_seq: int, local_audio_dir: str) -> None:
             def on_progress(payload: Dict[str, Any]) -> None:
                 snap = self._copy(payload)
@@ -156,6 +168,7 @@ class ValidationService:
 
             result = validate_audio_dir_progress(
                 local_audio_dir,
+                serial_channel=local_serial_ch,
                 logger=logging.getLogger("webui.validate.audio"),
                 on_progress=on_progress,
             )

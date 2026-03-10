@@ -15,9 +15,10 @@ Validation rules (enforced)
    - ``<chan>-<prefix>.<ext>`` (new)
    where ``chan`` is ``01``..``09`` and ``ext`` ∈ {``wav``, ``mp3``};
    otherwise **raise** ``ValueError``.
-2. The directory may contain **at most 9** files for a given extension (≤9 ``.wav`` and
-   ≤9 ``.mp3``); otherwise **raise**.
-3. There must be **exactly one** channel ``-03`` file overall; otherwise **raise**.
+2. **Legacy layout**: at most 9 files per extension (channels 01..09); otherwise **raise**.
+   **Segmented layout** (WAV-only, multiple files per channel): this limit is relaxed.
+3. The serial channel (configurable, default ``03``) must have **at least one** file;
+   multiple files are allowed only in segmented layouts.
 4. There must be **at least one** of channels ``-01`` or ``-02``; if neither, **raise**;
    if only one is present, **warn**.
 
@@ -118,8 +119,8 @@ class AudioDiscoverer(_DirMixin):
         1) Basename must match either ``<prefix>-<chan>.<ext>`` or
            ``<chan>-<prefix>.<ext>`` (``chan`` in ``01``..``09``,
            ``ext`` in {wav, mp3}); else **raise**.
-        2) At most 9 files **per extension** (``.wav`` or ``.mp3``); else **raise**.
-        3) Exactly one channel ``-03`` overall; else **raise**.
+        2) At most 9 files per extension (legacy); relaxed for segmented WAV layouts.
+        3) Serial channel present (at least one file); multiple only in segmented layouts.
         4) At least one of ``-01`` or ``-02`` exists; if neither, **raise**; if only
            one exists, **warn**.
 
@@ -152,22 +153,39 @@ class AudioDiscoverer(_DirMixin):
                 + ", ".join(sorted(invalid))
             )
 
-        # Rule 1: at most 9 per extension (channels 01..09)
-        for ext, paths in by_ext.items():
-            if len(paths) > MAX_AUDIO_FILES_PER_EXTENSION:
-                raise ValueError(
-                    f"Found {len(paths)} *.{ext} files in {self.audio_dir} "
-                    f"(max allowed per extension is {MAX_AUDIO_FILES_PER_EXTENSION})."
-                )
+        # Detect segmented layout (multiple files per channel, WAV-only).
+        segmented = (
+            not by_ext.get("mp3")
+            and by_ext.get("wav")
+            and any(n > 1 for n in ch_counts.values())
+        )
 
-        # Rule 2: exactly one -03.*
+        # Rule 1: at most 9 per extension (channels 01..09) — skip for segmented layouts
+        if not segmented:
+            for ext, paths in by_ext.items():
+                if len(paths) > MAX_AUDIO_FILES_PER_EXTENSION:
+                    raise ValueError(
+                        f"Found {len(paths)} *.{ext} files in {self.audio_dir} "
+                        f"(max allowed per extension is "
+                        f"{MAX_AUDIO_FILES_PER_EXTENSION})."
+                    )
+
+        # Rule 2: serial channel must be present (at least one file)
         serial_count = ch_counts.get(self.default_serial_channel, 0)
-        if serial_count != 1:
+        if serial_count == 0:
             raise ValueError(
-                f"Expected exactly one channel {self.default_serial_channel:02d} "
-                f"file (e.g., *-{self.default_serial_channel:02d}.wav/mp3 "
+                f"Expected at least one channel "
+                f"{self.default_serial_channel:02d} file "
+                f"(e.g., *-{self.default_serial_channel:02d}.wav/mp3 "
                 f"or {self.default_serial_channel:02d}-*.wav/mp3); "
-                f"found {serial_count}."
+                f"found none."
+            )
+        if serial_count > 1 and not segmented:
+            raise ValueError(
+                f"Found {serial_count} channel "
+                f"{self.default_serial_channel:02d} files but layout is "
+                f"not segmented. Use segmented WAV naming or provide "
+                f"exactly one file per channel."
             )
 
         # Rule 3: at least one of -01 or -02 (warn if only one)

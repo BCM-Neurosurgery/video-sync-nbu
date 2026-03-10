@@ -153,6 +153,7 @@ from scripts.pad.videoplancreater import create_video_padding_plan
 from scripts.pad.videoplanapplier import apply_video_padding_plan
 from scripts.align.sync import sync_one_video
 from scripts.index.discover import AudioDiscoverer
+from scripts.sites import SITE_CHOICES, get_serial_channel
 from scripts.index.videodiscover import build_video_obj
 from scripts.merge.merge_wav import (
     parse_wav_filename,
@@ -187,7 +188,6 @@ from scripts.log.logutils import (
 
 logger = logging.getLogger("cli")
 
-SITE_CHOICES = ("jamail", "nbu_lounge", "nbu_sleep")
 UPSIDE_DOWN_CAMERAS: set[str] = {"24253458"}
 
 
@@ -273,17 +273,25 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
         return audio_dir
 
     parsed = [parse_wav_filename(p) for p in wav_files]
-    if any(info is None for info in parsed):
-        # Not segmented WAV naming; keep legacy behavior.
+    wav_infos = [info for info in parsed if info is not None]
+    skipped = [p for p, info in zip(wav_files, parsed) if info is None]
+
+    if not wav_infos:
+        # No files match segmented WAV naming; keep legacy behavior.
         return audio_dir
+
+    if skipped:
+        logger.warning(
+            "Skipping %d file(s) with unrecognized segmented name: %s",
+            len(skipped),
+            ", ".join(p.name for p in skipped),
+        )
 
     if mp3_files:
         raise AudioGroupDiscoverError(
             "Detected segmented WAV filenames mixed with MP3 files in AUDIO_DIR. "
             "Use either legacy channel files or segmented WAV files only."
         )
-
-    wav_infos = [info for info in parsed if info is not None]
     for info in wav_infos:
         if not re.fullmatch(r"0[1-9]", info.channel):
             raise AudioGroupDiscoverError(
@@ -753,7 +761,12 @@ def run_pipeline(
 
     # Discover audio group once (shared across segments/cams)
     try:
-        ad = AudioDiscoverer(audio_dir=prepared_audio_dir, log=logger)
+        serial_ch = get_serial_channel(site)
+        ad = AudioDiscoverer(
+            audio_dir=prepared_audio_dir,
+            default_serial_channel=serial_ch,
+            log=logger,
+        )
         ag = ad.get_audio_group()
         logger.info("Audio(s) discovered")
     except (AudioGroupDiscoverError, ValueError) as e:
