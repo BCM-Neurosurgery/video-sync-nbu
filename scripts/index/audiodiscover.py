@@ -308,24 +308,19 @@ class AudioDiscoverer(_DirMixin):
         except Exception:
             return 0
 
-    def _sniff_mp3_samplerate(self, p: Path) -> int:
+    def _sniff_samplerate_ffprobe(self, p: Path) -> int:
         """
-        Use `ffprobe` to obtain MP3 stream sample rate.
+        Use `ffprobe` to obtain audio stream sample rate (works for any format).
 
         Parameters
         ----------
         p : pathlib.Path
-            Path to an MP3 file.
+            Path to an audio file (WAV, RF64, MP3, etc.).
 
         Returns
         -------
         int
             Sample rate in Hz, or ``0`` if ffprobe is unavailable or fails.
-
-        Notes
-        -----
-        - Fast query (no full decode): reads container/stream headers.
-        - Falls back to a larger probe window if the first attempt yields nothing.
         """
         if shutil.which("ffprobe") is None:
             self.log.error(
@@ -403,12 +398,13 @@ class AudioDiscoverer(_DirMixin):
             WAV header or ffprobe (MP3); falls back to ``0`` if detection fails.
         """
         ext = p.suffix.lower().lstrip(".")
+        sr = 0
+        # Fast path: try RIFF header for standard WAV.
         if ext == "wav":
             sr = self._sniff_wav_samplerate(p)
-        elif ext == "mp3":
-            sr = self._sniff_mp3_samplerate(p)
-        else:
-            sr = 0
+        # Fallback: ffprobe handles any format (RF64, MP3, etc.).
+        if sr <= 0:
+            sr = self._sniff_samplerate_ffprobe(p)
         if sr <= 0:
             msg = (
                 f"Could not determine sample rate for {p.name} (ext={ext}). "

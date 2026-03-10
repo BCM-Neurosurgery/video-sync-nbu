@@ -4,18 +4,19 @@ import argparse
 import json
 import logging
 import re
+import shutil
+import subprocess
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
-import wave
 
 
 WAV_NAME_PATTERN = re.compile(
     r"^(?P<channel>\d+)[-_](?P<date>\d{6})[-_](?P<time>\d{4,6})\.wav$", re.IGNORECASE
 )
-CHUNK_FRAMES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -70,60 +71,65 @@ def group_by_channel(wavs: Iterable[WavFileInfo]) -> dict[str, list[WavFileInfo]
     return grouped
 
 
-def stream_frames(
-    reader: wave.Wave_read, writer: wave.Wave_write, chunk_frames: int = CHUNK_FRAMES
-) -> None:
-    while True:
-        data = reader.readframes(chunk_frames)
-        if not data:
-            break
-        writer.writeframes(data)
+def _require_ffmpeg() -> str:
+    """Return the ffmpeg binary path, or raise if not found."""
+    path = shutil.which("ffmpeg")
+    if path is None:
+        raise FileNotFoundError(
+            "ffmpeg is required for merging WAV segments but was not found on PATH."
+        )
+    return path
 
 
 def merge_channel_wavs(
     channel: str, files: Iterable[WavFileInfo], output_dir: Path
 ) -> Path:
+    """Concatenate per-channel WAV segments into a single file using ffmpeg.
+
+    Uses ffmpeg's concat demuxer with ``-rf64 auto`` so that files exceeding
+    the 4 GiB RIFF limit are automatically promoted to RF64 format.  Files
+    under the limit remain standard WAV.  The output keeps a ``.wav``
+    extension in both cases — downstream tools (ffmpeg, soundfile, libsndfile)
+    read RF64 transparently.
+    """
     ordered_files = list(files)
     if not ordered_files:
         raise ValueError(f"No files provided for channel {channel}.")
 
+    ffmpeg = _require_ffmpeg()
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"merged-{channel}.wav"
 
-    params_reference = None
-    with wave.open(str(output_path), "wb") as writer:
-        for info in ordered_files:
-            with wave.open(str(info.path), "rb") as reader:
-                params = reader.getparams()
-                if params_reference is None:
-                    params_reference = params
-                    writer.setparams(params)
-                else:
-                    if reader.getnchannels() != params_reference.nchannels:
-                        raise ValueError(
-                            f"Channel count mismatch for {info.path}: "
-                            f"expected {params_reference.nchannels}, found {reader.getnchannels()}"
-                        )
-                    if reader.getsampwidth() != params_reference.sampwidth:
-                        raise ValueError(
-                            f"Sample width mismatch for {info.path}: "
-                            f"expected {params_reference.sampwidth}, found {reader.getsampwidth()}"
-                        )
-                    if reader.getframerate() != params_reference.framerate:
-                        raise ValueError(
-                            f"Sample rate mismatch for {info.path}: "
-                            f"expected {params_reference.framerate}, found {reader.getframerate()}"
-                        )
-                    if params.comptype != params_reference.comptype:
-                        raise ValueError(
-                            f"Compression type mismatch for {info.path}: "
-                            f"expected {params_reference.comptype}, found {params.comptype}"
-                        )
+    # Build ffmpeg concat list in a temp file.
+    concat_fd, concat_path = tempfile.mkstemp(suffix=".txt", prefix="ffconcat_")
+    try:
+        with open(concat_fd, "w", encoding="utf-8") as f:
+            for info in ordered_files:
+                # Escape single quotes in paths for ffmpeg concat format.
+                escaped = str(info.path.resolve()).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
 
-                logging.debug(
-                    "Appending %s to channel %s output", info.path.name, channel
-                )
-                stream_frames(reader, writer)
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_path,
+            "-c", "copy",
+            "-rf64", "auto",
+            str(output_path),
+        ]
+        logging.debug("ffmpeg merge cmd: %s", " ".join(cmd))
+        proc = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg concat failed for channel {channel} "
+                f"(rc={proc.returncode}):\n{proc.stderr}"
+            )
+    finally:
+        Path(concat_path).unlink(missing_ok=True)
 
     logging.info(
         "Merged %d file(s) for channel %s into %s",

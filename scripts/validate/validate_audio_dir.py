@@ -32,18 +32,8 @@ def _format_duration(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _sniff_wav_duration(path: Path) -> float:
-    import wave
-
-    with wave.open(str(path), "rb") as wf:
-        frames = wf.getnframes()
-        rate = wf.getframerate()
-    if rate <= 0:
-        return 0.0
-    return float(frames) / float(rate)
-
-
-def _sniff_mp3_duration(path: Path) -> float:
+def _sniff_duration_ffprobe(path: Path) -> float:
+    """Get audio duration via ffprobe (works for WAV, RF64, MP3, etc.)."""
     if shutil.which("ffprobe") is None:
         return 0.0
     cmd = [
@@ -345,11 +335,8 @@ def validate_audio_dir_progress(
         sr = 0
         if ext == "wav":
             sr = ad._sniff_wav_samplerate(path)  # type: ignore[attr-defined]
-        elif ext == "mp3":
-            if shutil.which("ffprobe") is None:
-                sr = 0
-            else:
-                sr = ad._sniff_mp3_samplerate(path)  # type: ignore[attr-defined]
+        if sr <= 0:
+            sr = ad._sniff_samplerate_ffprobe(path)  # type: ignore[attr-defined]
 
         if sr <= 0:
             payload["error"] = (
@@ -389,12 +376,7 @@ def validate_audio_dir_progress(
         path = Path(str(f.get("path") or ""))
         dur = 0.0
         try:
-            if ext == "wav":
-                dur = _sniff_wav_duration(path)
-            elif ext == "mp3":
-                dur = _sniff_mp3_duration(path)
-            else:
-                dur = 0.0
+            dur = _sniff_duration_ffprobe(path)
         except Exception:
             dur = 0.0
 

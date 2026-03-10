@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import os
 import csv
-import wave
-import contextlib
 import argparse
 from pathlib import Path
 from dataclasses import dataclass
@@ -11,6 +9,8 @@ import numpy as np
 from datetime import datetime
 import json
 import logging
+
+import soundfile as sf
 
 from scripts.log.logutils import (
     configure_standalone_logging,
@@ -168,48 +168,32 @@ class WavSerialDecoder:
             )
 
     def _read_wav_strict(self) -> None:
-        """Original WAV reader; enforces mono input and converts to float32 in [-1, 1]."""
-        with contextlib.closing(wave.open(self.filepath, "rb")) as wf:
-            self.sample_rate = wf.getframerate()
-            self.n_channels = wf.getnchannels()
-            self.sampwidth = wf.getsampwidth()
-            n_frames = wf.getnframes()
-            raw = wf.readframes(n_frames)
+        """Read WAV/RF64 via soundfile; enforces mono and produces float32 in [-1, 1]."""
+        data, sr = sf.read(self.filepath, dtype="float32", always_2d=False)
+        self.sample_rate = sr
 
-        if self.n_channels != 1:
-            raise ValueError(f"Expected mono WAV (1 channel), got {self.n_channels}")
+        if data.ndim == 2:
+            if data.shape[1] != 1:
+                raise ValueError(
+                    f"Expected mono WAV (1 channel), got {data.shape[1]}"
+                )
+            data = data[:, 0]
+        self.n_channels = 1
 
-        if self.sampwidth == 1:
-            dtype = np.uint8
-            data = np.frombuffer(raw, dtype=dtype).astype(np.int16) - 128
-            norm = 127.0
-        elif self.sampwidth == 2:
-            dtype = np.int16
-            data = np.frombuffer(raw, dtype=dtype)
-            norm = float(np.iinfo(dtype).max)
-        elif self.sampwidth == 3:
-            # 24-bit little-endian PCM: pack 3 bytes into signed int32
-            raw_bytes = np.frombuffer(raw, dtype=np.uint8)
-            if raw_bytes.size % 3 != 0:
-                raise ValueError("24-bit WAV payload has incomplete frames.")
-            triples = raw_bytes.reshape(-1, 3)
-            ints = (
-                triples[:, 0].astype(np.int32)
-                | (triples[:, 1].astype(np.int32) << 8)
-                | (triples[:, 2].astype(np.int32) << 16)
-            )
-            sign_bit = 1 << 23
-            ints = np.where(ints & sign_bit, ints - (1 << 24), ints)
-            data = ints
-            norm = float(sign_bit - 1)
-        elif self.sampwidth == 4:
-            dtype = np.int32
-            data = np.frombuffer(raw, dtype=dtype)
-            norm = float(np.iinfo(dtype).max)
+        info = sf.info(self.filepath)
+        subtype = info.subtype
+        if "PCM_8" in subtype:
+            self.sampwidth = 1
+        elif "PCM_16" in subtype:
+            self.sampwidth = 2
+        elif "PCM_24" in subtype:
+            self.sampwidth = 3
+        elif "PCM_32" in subtype or "FLOAT" in subtype:
+            self.sampwidth = 4
         else:
-            raise ValueError(f"Unsupported sample width: {self.sampwidth} bytes")
+            self.sampwidth = 2  # safe default
 
-        self.audio = (data.astype(np.float32) / norm).astype(np.float32)
+        self.audio = data
 
     def _read_mp3_with_pydub(self) -> None:
         """MP3 reader using pydub+ffmpeg (single enforced path). Raises if unavailable.
