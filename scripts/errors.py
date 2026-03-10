@@ -94,3 +94,7 @@ class FFmpegNotFoundError(RuntimeError):
 
 class SplitFailureError(RuntimeError):
     """Raised when ffmpeg completes without producing expected output."""
+
+
+class MP4RecoveryError(RuntimeError):
+    """Raised when MP4 moov-atom recovery fails."""
