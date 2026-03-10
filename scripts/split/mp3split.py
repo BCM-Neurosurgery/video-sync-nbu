@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-mp3split.py — Split a long MP3 into fixed-length WAV chunks (default: 1 hour)
+mp3split.py — Split a long audio file (MP3 or WAV) into fixed-length WAV chunks (default: 1 hour)
 
 - Uses FFmpeg's segment muxer; decodes to WAV (pcm_s16le) per chunk.
-- Public API: split_mp3_to_wav(...)
-- CLI: python -m scripts.split.mp3split INPUT.mp3 [--outdir DIR] [--chunk-seconds 3600]
+- Public API: split_audio_to_wav(...) (legacy alias: split_mp3_to_wav)
+- CLI: python -m scripts.split.mp3split INPUT.(mp3|wav) [--outdir DIR] [--chunk-seconds 3600]
        [--overwrite | --clean] [-v] [--seg SEG] [--cam CAM] [--print-paths]
 - Logs a readable line RIGHT AFTER each chunk is finished (size stabilized).
 - Writes a manifest JSON alongside the chunks with absolute offsets.
@@ -48,6 +48,7 @@ from scripts.log.logutils import configure_standalone_logging, log_context
 from scripts.errors import FFmpegNotFoundError, SplitFailureError
 
 __all__ = [
+    "split_audio_to_wav",
     "split_mp3_to_wav",
     "FFmpegNotFoundError",
     "SplitFailureError",
@@ -71,7 +72,7 @@ def _ensure_ffmpeg_available(ffmpeg_bin: str = "ffmpeg") -> str:
 
 def _build_ffmpeg_cmd(
     ffmpeg_bin: str,
-    input_mp3: Path,
+    input_audio: Path,
     out_pattern: Path,
     chunk_seconds: int,
     start_number: int,
@@ -85,7 +86,7 @@ def _build_ffmpeg_cmd(
         ffmpeg_loglevel,  # "error" | "warning" | "info" | "debug"
         "-y" if overwrite else "-n",
         "-i",
-        str(input_mp3),
+        str(input_audio),
         "-map",
         "0:a:0",
         "-c:a",
@@ -172,8 +173,8 @@ def _wav_frames_and_rate(path: Path) -> Tuple[int, int, int]:
 # -----------------------------
 # Public API
 # -----------------------------
-def split_mp3_to_wav(
-    input_mp3: str | Path,
+def split_audio_to_wav(
+    input_audio: str | Path,
     outdir: Optional[str | Path] = None,
     *,
     chunk_seconds: int = 3600,
@@ -185,7 +186,7 @@ def split_mp3_to_wav(
     poll_interval: float = 0.5,
 ) -> List[Path]:
     """
-    Split an MP3 file into fixed-length WAV chunks using FFmpeg and log each chunk as it finishes.
+    Split an audio file (MP3 or WAV) into fixed-length WAV chunks using FFmpeg.
 
     Policy
     ------
@@ -195,8 +196,8 @@ def split_mp3_to_wav(
 
     Parameters
     ----------
-    input_mp3 : str | Path
-        Input MP3 path.
+    input_audio : str | Path
+        Input audio path (MP3 or WAV).
     outdir : str | Path, optional
         Output directory (default: "<stem>_chunks" alongside input).
     chunk_seconds : int, default 3600
@@ -219,7 +220,7 @@ def split_mp3_to_wav(
     List[Path]
         List of all produced chunk paths (sorted).
     """
-    input_path = Path(input_mp3)
+    input_path = Path(input_audio)
     if not input_path.exists():
         raise FileNotFoundError(f"Input not found: {input_path}")
     if chunk_seconds < 1:
@@ -263,7 +264,7 @@ def split_mp3_to_wav(
 
     cmd = _build_ffmpeg_cmd(
         ffmpeg_bin=ffmpeg_path,
-        input_mp3=input_path,
+        input_audio=input_path,
         out_pattern=out_pattern,
         chunk_seconds=chunk_seconds,
         start_number=start_number,
@@ -368,15 +369,21 @@ def split_mp3_to_wav(
     return produced
 
 
+# Legacy alias
+split_mp3_to_wav = split_audio_to_wav
+
+
 # -----------------------------
 # CLI
 # -----------------------------
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Split a long MP3 into fixed-length WAV chunks using FFmpeg.",
+        description="Split a long audio file (MP3 or WAV) into fixed-length WAV chunks using FFmpeg.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("input", type=Path, help="Path to the input MP3 file.")
+    p.add_argument(
+        "input", type=Path, help="Path to the input audio file (MP3 or WAV)."
+    )
     p.add_argument(
         "--outdir",
         type=Path,
@@ -432,8 +439,8 @@ def main() -> None:
 
     try:
         with log_context(seg=args.seg, cam=args.cam):
-            produced = split_mp3_to_wav(
-                input_mp3=args.input,
+            produced = split_audio_to_wav(
+                input_audio=args.input,
                 outdir=args.outdir,
                 chunk_seconds=args.chunk_seconds,
                 start_number=args.start_number,

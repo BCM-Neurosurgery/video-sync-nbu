@@ -20,14 +20,15 @@ from scripts.decode.wavfileparser import (
 from scripts.fix.audiogapfiller import gapfill_csv_file
 from scripts.fix.audiofilter import filter_audio_file
 from scripts.merge.mergecsv import merge_split_csvs
-from scripts.split.mp3split import split_mp3_to_wav
+from scripts.split.mp3split import split_audio_to_wav
 
 _LOG = logging.getLogger(__name__)
 
 
 def _needs_split(path: Path) -> bool:
-    """Return True if *path* is an MP3 that exceeds the safe direct-decode cap."""
-    if path.suffix.lower() != ".mp3":
+    """Return True if *path* is an audio file that exceeds the safe direct-decode cap."""
+    ext = path.suffix.lower()
+    if ext not in (".mp3", ".wav"):
         return False
     try:
         fbytes = os.path.getsize(path)
@@ -38,7 +39,9 @@ def _needs_split(path: Path) -> bool:
         soft_cap = int(env) if env else MAX_DECODE_BYTES_DEFAULT
     except Exception:
         soft_cap = MAX_DECODE_BYTES_DEFAULT
-    return fbytes >= soft_cap or fbytes >= MP3_PYDUB_SIZE_HARD_LIMIT
+    if ext == ".mp3" and fbytes >= MP3_PYDUB_SIZE_HARD_LIMIT:
+        return True
+    return fbytes >= soft_cap
 
 
 def prepare_serial_csv(
@@ -71,9 +74,9 @@ def prepare_serial_csv(
         If *True*, assume decoded artifacts already exist and skip all
         decoding.  Raises :class:`FileNotFoundError` if they are missing.
     do_split:
-        ``True``  – force the split→decode→merge path (MP3 only).
+        ``True``  – force the split→decode→merge path.
         ``False`` – force direct single-file decode.
-        ``None``  – auto-detect based on file size and extension.
+        ``None``  – auto-detect based on file size.
     split_chunk_seconds:
         Chunk duration for MP3 splitting (default 3600 s = 1 hour).
     split_overwrite:
@@ -104,18 +107,9 @@ def prepare_serial_csv(
         do_split = _needs_split(serial_audio_path)
         if do_split:
             log.info(
-                "Auto-detected large MP3 (%s); using split→decode→merge path.",
+                "Auto-detected large audio (%s); using split→decode→merge path.",
                 serial_audio_path.name,
             )
-
-    if do_split and serial_audio_path.suffix.lower() != ".mp3":
-        log.warning(
-            "--split requested but serial audio is %s (%s); "
-            "falling back to direct decode.",
-            serial_audio_path.suffix.lower(),
-            serial_audio_path.name,
-        )
-        do_split = False
 
     # -- Skip-decode path ------------------------------------------------------
     if skip_decode:
@@ -151,12 +145,12 @@ def prepare_serial_csv(
         chunks_dir.mkdir(parents=True, exist_ok=True)
 
         log.info(
-            "Splitting serial MP3 into %ds chunks at %s",
+            "Splitting serial audio into %ds chunks at %s",
             split_chunk_seconds,
             chunks_dir.name,
         )
-        split_mp3_to_wav(
-            input_mp3=serial_audio_path,
+        split_audio_to_wav(
+            input_audio=serial_audio_path,
             outdir=chunks_dir,
             chunk_seconds=split_chunk_seconds,
             start_number=1,
