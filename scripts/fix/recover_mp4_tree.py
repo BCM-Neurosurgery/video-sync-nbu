@@ -192,6 +192,25 @@ def _make_record(
     }
 
 
+def _read_cached_report(output_dir: Path) -> dict[str, Any] | None:
+    """Read recovery_report.json from output_dir if it exists and is complete.
+
+    Returns the parsed report dict if the cache is valid (no pending or failed
+    files), otherwise None.
+    """
+    report_path = output_dir / "recovery_report.json"
+    if not report_path.is_file():
+        return None
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        recovery = report.get("recovery", {})
+        if recovery.get("pending", 1) > 0 or recovery.get("failed", 1) > 0:
+            return None
+        return report
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -237,6 +256,11 @@ def _make_parser() -> argparse.ArgumentParser:
         "--run",
         action="store_true",
         help="Execute recovery; default is scan-only dry run",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Ignore cached recovery_report.json and re-scan all directories",
     )
     parser.add_argument(
         "--log-dir",
@@ -294,6 +318,66 @@ def main() -> None:
             date,
             site,
         )
+
+        # Fast path: use cached recovery_report.json if available
+        if not args.no_cache:
+            cached = _read_cached_report(output_dir)
+            if cached is not None:
+                scan_c = cached.get("scan", {})
+                rec_c = cached.get("recovery", {})
+                total_mp4s_c = int(scan_c.get("total_mp4s_in_directory", 0))
+                good_c = int(scan_c.get("good_files", 0))
+                corrupted_c = int(scan_c.get("corrupted_files", 0))
+                recovered_c = int(rec_c.get("recovered", 0))
+                empty_c = int(rec_c.get("empty_stubs", 0))
+                frames_c = int(rec_c.get("total_recovered_frames", 0))
+                dur_c = float(rec_c.get("total_recovered_duration_s", 0))
+
+                record = _make_record(
+                    patient=patient,
+                    date=date,
+                    site=site,
+                    video_dir=video_dir,
+                    output_dir=output_dir,
+                    total_mp4s=total_mp4s_c,
+                    good_mp4s=good_c,
+                    corrupted_mp4s=corrupted_c,
+                    targeted_corrupted_mp4s=corrupted_c,
+                    already_fixed_outputs=recovered_c,
+                    pending_outputs_before=0,
+                )
+                record["status"] = "already_recovered"
+                record["report_recovered_status"] = recovered_c
+                record["report_empty_stub"] = empty_c
+                record["report_recovered_frames"] = frames_c
+                record["report_recovered_duration_s"] = round(dur_c, 2)
+
+                file_counts["total_mp4s"] += total_mp4s_c
+                file_counts["good_mp4s"] += good_c
+                file_counts["corrupted_mp4s"] += corrupted_c
+                file_counts["targeted_corrupted_mp4s"] += corrupted_c
+                file_counts["already_fixed_outputs"] += recovered_c
+                file_counts["empty_stub_detected"] += empty_c
+                file_counts["recovered_frames"] += frames_c
+                file_counts["recovered_duration_s"] += dur_c
+
+                summary_counts["dirs_with_any_corruption"] += 1 if corrupted_c else 0
+                summary_counts["dirs_with_target_corruption"] += 1 if corrupted_c else 0
+                summary_counts["dirs_already_recovered"] += 1
+                if not corrupted_c:
+                    summary_counts["dirs_clean"] += 1
+                    summary_counts["dirs_already_recovered"] -= 1
+
+                log.info(
+                    "[%d/%d] Cached: already_recovered (%d files, %d frames, %.1fs)",
+                    idx,
+                    total_dirs,
+                    recovered_c,
+                    frames_c,
+                    dur_c,
+                )
+                dir_records.append(record)
+                continue
 
         ref_dir = args.ref_dir.expanduser().resolve() if args.ref_dir else None
 
