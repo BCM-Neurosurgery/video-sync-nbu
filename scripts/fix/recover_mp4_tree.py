@@ -139,7 +139,16 @@ def _scan_failed_record(
         "report_pending": 0,
         "report_recovered_status": 0,
         "report_newly_recovered": 0,
+        "report_recovered_frames": 0,
+        "report_recovered_duration_s": 0,
     }
+
+
+def _sum_file_records(records: list[dict]) -> tuple[int, float]:
+    """Sum recovered_frames and recovered_duration_s across file records."""
+    frames = sum(int(r.get("recovered_frames", 0)) for r in records)
+    dur = sum(float(r.get("recovered_duration_s", 0)) for r in records)
+    return frames, round(dur, 2)
 
 
 def _make_record(
@@ -178,6 +187,8 @@ def _make_record(
         "report_pending": 0,
         "report_recovered_status": 0,
         "report_newly_recovered": 0,
+        "report_recovered_frames": 0,
+        "report_recovered_duration_s": 0,
     }
 
 
@@ -487,12 +498,19 @@ def main() -> None:
         record["report_no_reference"] = int(counts.get("no_reference", 0))
         record["report_pending"] = int(counts.get("pending", 0))
 
+        file_records = recover_result.get("records", [])
+        dir_frames, dir_dur = _sum_file_records(file_records)
+        record["report_recovered_frames"] = dir_frames
+        record["report_recovered_duration_s"] = dir_dur
+
         file_counts["recovered"] += record["report_recovered"]
         file_counts["recovered_status"] += record["report_recovered_status"]
         file_counts["failed"] += record["report_failed"]
         file_counts["empty_stub"] += record["report_empty_stub"]
         file_counts["no_reference"] += record["report_no_reference"]
         file_counts["pending_after_run"] += record["report_pending"]
+        file_counts["recovered_frames"] += dir_frames
+        file_counts["recovered_duration_s"] += dir_dur
         summary_counts["dirs_recovered"] += 1
         log.info(
             "[%d/%d] Status: recovered | new=%d failed=%d empty=%d no_ref=%d",
@@ -556,6 +574,13 @@ def main() -> None:
             "files_empty_stub": file_counts.get("empty_stub", 0),
             "files_no_reference": file_counts.get("no_reference", 0),
             "files_pending_after_run": file_counts.get("pending_after_run", 0),
+            "files_recovered_frames": file_counts.get("recovered_frames", 0),
+            "files_recovered_duration_s": round(
+                file_counts.get("recovered_duration_s", 0), 2
+            ),
+            "files_recovered_duration_hours": round(
+                file_counts.get("recovered_duration_s", 0) / 3600, 2
+            ),
         },
         "directories": dir_records,
     }
@@ -586,6 +611,8 @@ def main() -> None:
         "report_empty_stub",
         "report_no_reference",
         "report_pending",
+        "report_recovered_frames",
+        "report_recovered_duration_s",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -614,6 +641,11 @@ def main() -> None:
         aggregate["summary"]["files_pending_outputs_before"],
         aggregate["summary"]["files_recovered"],
         aggregate["summary"]["files_failed"],
+    )
+    log.info(
+        "Recovered video: %d frames, %.1f hours",
+        aggregate["summary"]["files_recovered_frames"],
+        aggregate["summary"]["files_recovered_duration_hours"],
     )
 
 
