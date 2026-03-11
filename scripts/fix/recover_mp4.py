@@ -428,18 +428,18 @@ def _classify_corrupted_files(
             "recovered_duration_s": 0,
         }
 
-        if camera not in ref_by_cam:
-            counts["no_reference"] += 1
-            record["status"] = "no_reference"
-        elif fsize < EMPTY_STUB_THRESHOLD:
-            counts["empty_stub"] += 1
-            record["status"] = "empty_stub"
-        elif out.exists():
+        if out.exists():
             counts["already_done"] += 1
             frames, dur = _probe_fixed_file(out)
             record["status"] = "recovered"
             record["recovered_frames"] = frames
             record["recovered_duration_s"] = dur
+        elif fsize < EMPTY_STUB_THRESHOLD:
+            counts["empty_stub"] += 1
+            record["status"] = "empty_stub"
+        elif camera not in ref_by_cam:
+            counts["no_reference"] += 1
+            record["status"] = "no_reference"
         else:
             counts["pending"] += 1
             record["status"] = "pending"
@@ -506,7 +506,7 @@ def plan_recovery(
         status = "no_mp4"
     elif not corrupted:
         status = "no_corrupted"
-    elif not ref_by_cam:
+    elif not ref_by_cam and counts["pending"] > 0:
         status = "no_reference_files"
         error = "No good reference files found. Cannot recover."
     elif targeted_corrupted == 0:
