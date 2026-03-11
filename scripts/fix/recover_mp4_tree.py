@@ -361,12 +361,19 @@ def main() -> None:
             pending_outputs_before=pending_outputs,
         )
 
+        # Estimate durations using reference file duration as proxy
+        ref_dur = float(plan.get("ref_duration_s", 0))
+        est_good_dur = good_count * ref_dur
+        est_corrupted_dur = (corrupted_count - empty_stub_count) * ref_dur
+
         file_counts["total_mp4s"] += total_mp4s
         file_counts["good_mp4s"] += good_count
         file_counts["corrupted_mp4s"] += corrupted_count
         file_counts["targeted_corrupted_mp4s"] += targeted_corrupted_count
         file_counts["already_fixed_outputs"] += already_fixed
         file_counts["pending_outputs_before"] += pending_outputs
+        file_counts["est_good_duration_s"] += est_good_dur
+        file_counts["est_corrupted_duration_s"] += est_corrupted_dur
         file_counts["no_reference_detected"] += no_reference_count
         file_counts["empty_stub_detected"] += empty_stub_count
 
@@ -581,6 +588,33 @@ def main() -> None:
             "files_recovered_duration_hours": round(
                 file_counts.get("recovered_duration_s", 0) / 3600, 2
             ),
+            "est_total_duration_hours": round(
+                (
+                    file_counts.get("est_good_duration_s", 0)
+                    + file_counts.get("est_corrupted_duration_s", 0)
+                )
+                / 3600,
+                2,
+            ),
+            "est_corrupted_duration_hours": round(
+                file_counts.get("est_corrupted_duration_s", 0) / 3600, 2
+            ),
+            "est_corrupted_pct": round(
+                file_counts.get("est_corrupted_duration_s", 0)
+                / max(
+                    file_counts.get("est_good_duration_s", 0)
+                    + file_counts.get("est_corrupted_duration_s", 0),
+                    1,
+                )
+                * 100,
+                1,
+            ),
+            "recovered_pct_of_corrupted": round(
+                file_counts.get("recovered_duration_s", 0)
+                / max(file_counts.get("est_corrupted_duration_s", 0), 1)
+                * 100,
+                1,
+            ),
         },
         "directories": dir_records,
     }
@@ -642,10 +676,14 @@ def main() -> None:
         aggregate["summary"]["files_recovered"],
         aggregate["summary"]["files_failed"],
     )
+    s = aggregate["summary"]
     log.info(
-        "Recovered video: %d frames, %.1f hours",
-        aggregate["summary"]["files_recovered_frames"],
-        aggregate["summary"]["files_recovered_duration_hours"],
+        "Video: est_total=%.1fh est_corrupted=%.1fh (%.1f%%) recovered=%.1fh (%.1f%% of corrupted)",
+        s["est_total_duration_hours"],
+        s["est_corrupted_duration_hours"],
+        s["est_corrupted_pct"],
+        s["files_recovered_duration_hours"],
+        s["recovered_pct_of_corrupted"],
     )
 
 

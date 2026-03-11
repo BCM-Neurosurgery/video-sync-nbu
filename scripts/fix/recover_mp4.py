@@ -515,17 +515,20 @@ def plan_recovery(
     vol_header = b""
     framerate_str = ""
     fps_float = 0.0
-    if status == "ok" and counts["pending"] > 0:
+    ref_duration_s = 0.0
+    if ref_by_cam:
         first_ref = next(iter(ref_by_cam.values()))
-        vol_header = extract_vol_header(first_ref)
-        if vol_header[:4] != _M4V_VOS_START:
-            log.warning(
-                "VOL header from %s lacks VOS start code (only %d bytes). "
-                "Recovery may fail on older ffmpeg versions.",
-                first_ref.name,
-                len(vol_header),
-            )
-        framerate_str, fps_float, _ = detect_reference_info(first_ref)
+        framerate_str, fps_float, ref_frame_count = detect_reference_info(first_ref)
+        ref_duration_s = ref_frame_count / fps_float if fps_float else 0.0
+        if status == "ok" and counts["pending"] > 0:
+            vol_header = extract_vol_header(first_ref)
+            if vol_header[:4] != _M4V_VOS_START:
+                log.warning(
+                    "VOL header from %s lacks VOS start code (only %d bytes). "
+                    "Recovery may fail on older ffmpeg versions.",
+                    first_ref.name,
+                    len(vol_header),
+                )
 
     return {
         "status": status,
@@ -547,6 +550,7 @@ def plan_recovery(
         "vol_header": vol_header,
         "framerate_str": framerate_str,
         "fps_float": fps_float,
+        "ref_duration_s": round(ref_duration_s, 2),
     }
 
 
