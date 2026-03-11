@@ -56,6 +56,10 @@ CONTAINER_HEADER_SIZE = 44
 # Files smaller than this are considered empty stubs (no recoverable frames)
 EMPTY_STUB_THRESHOLD = 1000
 
+# MPEG-4 Visual Object Sequence start code — a valid VOL header must begin
+# with this so that older ffmpeg versions can parse the raw m4v stream.
+_M4V_VOS_START = b"\x00\x00\x01\xb0"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,11 +140,15 @@ def scan_directory(input_dir: Path) -> tuple[list[Path], list[Path], dict[str, P
         (corrupted, good, ref_by_cam)
         - corrupted: MP4s missing moov atom
         - good: MP4s with moov atom
-        - ref_by_cam: first good file per camera serial
+        - ref_by_cam: best good file per camera serial (prefers files whose
+          VOL header starts with the MPEG-4 VOS start code for broad ffmpeg
+          compatibility)
     """
     corrupted = []
     good = []
     ref_by_cam: dict[str, Path] = {}
+    # Keep all good files per camera so we can pick the best reference
+    _good_by_cam: dict[str, list[Path]] = {}
 
     mp4s = sorted(p for p in input_dir.iterdir() if p.suffix.lower() == ".mp4")
     for path in mp4s:
@@ -148,10 +156,23 @@ def scan_directory(input_dir: Path) -> tuple[list[Path], list[Path], dict[str, P
         if "moov" in atoms:
             good.append(path)
             cam = _cam_from_path(path)
-            if cam and cam not in ref_by_cam:
-                ref_by_cam[cam] = path
+            if cam:
+                _good_by_cam.setdefault(cam, []).append(path)
         else:
             corrupted.append(path)
+
+    # Pick the best reference per camera: prefer one with a full VOL header
+    for cam, paths in _good_by_cam.items():
+        best = paths[0]
+        for p in paths:
+            try:
+                vol = extract_vol_header(p)
+                if vol[:4] == _M4V_VOS_START:
+                    best = p
+                    break
+            except MP4RecoveryError:
+                continue
+        ref_by_cam[cam] = best
 
     return corrupted, good, ref_by_cam
 
@@ -255,7 +276,15 @@ def recover_one(
     tmp_m4v.unlink(missing_ok=True)
 
     if result.returncode != 0:
-        return False, result.stderr.strip().split("\n")[-1]
+        # Find the last meaningful error line (skip ffmpeg's
+        # "Last message repeated N times" filler lines)
+        lines = result.stderr.strip().split("\n")
+        msg = lines[-1]
+        for line in reversed(lines):
+            if "Last message repeated" not in line and line.strip():
+                msg = line.strip()
+                break
+        return False, msg
 
     try:
         vfp = VideoFileParser(str(out))
@@ -455,7 +484,7 @@ def plan_recovery(
     if ref_dir is not None:
         ref_dir = ref_dir.resolve()
         if ref_dir.is_dir():
-            _, ext_good, ext_ref_by_cam = scan_directory(ref_dir)
+            _, _ext_good, ext_ref_by_cam = scan_directory(ref_dir)
             for ext_cam, ext_path in ext_ref_by_cam.items():
                 if ext_cam not in ref_by_cam:
                     ref_by_cam[ext_cam] = ext_path
@@ -489,6 +518,13 @@ def plan_recovery(
     if status == "ok" and counts["pending"] > 0:
         first_ref = next(iter(ref_by_cam.values()))
         vol_header = extract_vol_header(first_ref)
+        if vol_header[:4] != _M4V_VOS_START:
+            log.warning(
+                "VOL header from %s lacks VOS start code (only %d bytes). "
+                "Recovery may fail on older ffmpeg versions.",
+                first_ref.name,
+                len(vol_header),
+            )
         framerate_str, fps_float, _ = detect_reference_info(first_ref)
 
     return {
