@@ -431,8 +431,17 @@ def plan_recovery(
     output_dir: Path,
     *,
     cam: str = "",
+    ref_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Build a reusable recovery plan without mutating files."""
+    """Build a reusable recovery plan without mutating files.
+
+    Args:
+        ref_dir: Optional external directory to scan for reference files.
+            Used when the input directory has no good (uncorrupted) files
+            that can serve as references. The external directory is scanned
+            for MP4s with moov atoms, and any cameras not already covered
+            by local references are added from there.
+    """
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
 
@@ -441,6 +450,22 @@ def plan_recovery(
 
     corrupted, good, ref_by_cam = scan_directory(input_dir)
     total_mp4s = len(corrupted) + len(good)
+
+    # Supplement references from an external directory if provided
+    if ref_dir is not None:
+        ref_dir = ref_dir.resolve()
+        if ref_dir.is_dir():
+            _, ext_good, ext_ref_by_cam = scan_directory(ref_dir)
+            for ext_cam, ext_path in ext_ref_by_cam.items():
+                if ext_cam not in ref_by_cam:
+                    ref_by_cam[ext_cam] = ext_path
+                    log.info(
+                        "Using external reference for cam %s: %s",
+                        ext_cam,
+                        ext_path.name,
+                    )
+        else:
+            log.warning("ref_dir does not exist: %s", ref_dir)
 
     classified = _classify_corrupted_files(corrupted, ref_by_cam, output_dir, cam)
     counts = classified["counts"]
@@ -497,6 +522,7 @@ def run_recovery(
     cam: str = "",
     write_report: bool = True,
     plan: dict[str, Any] | None = None,
+    ref_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run MP4 recovery for one directory and return structured results."""
     if plan is None:
@@ -504,7 +530,9 @@ def run_recovery(
         if not input_dir.is_dir():
             raise NotADirectoryError(f"{input_dir} is not a directory")
         log.info("Scanning %s ...", input_dir)
-        plan = plan_recovery(input_dir=input_dir, output_dir=output_dir, cam=cam)
+        plan = plan_recovery(
+            input_dir=input_dir, output_dir=output_dir, cam=cam, ref_dir=ref_dir
+        )
         scan = plan["scan"]
         log.info(
             "Total MP4s: %d  |  Good: %d  |  Corrupted: %d",
@@ -743,6 +771,13 @@ def main() -> None:
         help="Only recover files from this camera serial",
     )
     parser.add_argument(
+        "--ref-dir",
+        type=Path,
+        default=None,
+        help="External directory with good MP4s to use as references "
+        "(for when input_dir has no uncorrupted files)",
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -759,6 +794,7 @@ def main() -> None:
             run=args.run,
             cam=args.cam,
             write_report=True,
+            ref_dir=args.ref_dir,
         )
     except NotADirectoryError as exc:
         log.error("%s", exc)

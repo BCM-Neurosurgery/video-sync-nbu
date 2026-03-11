@@ -189,6 +189,13 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Optional camera serial filter forwarded to recover_mp4",
     )
     parser.add_argument(
+        "--ref-dir",
+        type=Path,
+        default=None,
+        help="External directory with good MP4s to use as references "
+        "(for when a video directory has no uncorrupted files)",
+    )
+    parser.add_argument(
         "--run",
         action="store_true",
         help="Execute recovery; default is scan-only dry run",
@@ -248,9 +255,14 @@ def main() -> None:
             site,
         )
 
+        ref_dir = args.ref_dir.expanduser().resolve() if args.ref_dir else None
+
         try:
             plan = plan_recovery(
-                input_dir=video_dir, output_dir=output_dir, cam=args.cam
+                input_dir=video_dir,
+                output_dir=output_dir,
+                cam=args.cam,
+                ref_dir=ref_dir,
             )
         except Exception as exc:
             log.error(
