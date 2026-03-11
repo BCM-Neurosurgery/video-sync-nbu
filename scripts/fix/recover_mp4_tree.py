@@ -52,37 +52,59 @@ def _normalize_list(values: list[str]) -> list[str]:
     return out
 
 
+def _discover_patients(root: Path) -> list[str]:
+    """Auto-discover patient directories under a root.
+
+    A subdirectory is considered a patient if it contains an NBU/ folder.
+    """
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and (p / "NBU").is_dir())
+
+
 def _discover_video_dirs(
-    root: Path,
+    roots: list[Path],
     patients: list[str],
     sites: list[str],
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
 
-    for patient in patients:
-        nbu_dir = root / patient / "NBU"
-        if not nbu_dir.is_dir():
-            log.warning("Missing NBU directory: %s", nbu_dir)
+    for root in roots:
+        if not root.is_dir():
+            log.warning("Root directory does not exist: %s", root)
             continue
 
-        for date_dir in sorted(p for p in nbu_dir.iterdir() if p.is_dir()):
-            video_root = date_dir / "video"
-            if not video_root.is_dir():
+        # Auto-discover patients if none specified, otherwise filter
+        available = _discover_patients(root)
+        if patients:
+            use_patients = [p for p in patients if p in available]
+        else:
+            use_patients = available
+
+        for patient in use_patients:
+            nbu_dir = root / patient / "NBU"
+            if not nbu_dir.is_dir():
+                log.warning("Missing NBU directory: %s", nbu_dir)
                 continue
 
-            for site in sites:
-                video_dir = video_root / site
-                if not video_dir.is_dir():
+            for date_dir in sorted(p for p in nbu_dir.iterdir() if p.is_dir()):
+                video_root = date_dir / "video"
+                if not video_root.is_dir():
                     continue
-                records.append(
-                    {
-                        "patient": patient,
-                        "date": date_dir.name,
-                        "site": site,
-                        "video_dir": video_dir,
-                        "output_dir": video_root / f"{site}_recovered",
-                    }
-                )
+
+                for site in sites:
+                    video_dir = video_root / site
+                    if not video_dir.is_dir():
+                        continue
+                    records.append(
+                        {
+                            "patient": patient,
+                            "date": date_dir.name,
+                            "site": site,
+                            "video_dir": video_dir,
+                            "output_dir": video_root / f"{site}_recovered",
+                        }
+                    )
     return records
 
 
@@ -165,16 +187,21 @@ def _make_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--root",
+        "--roots",
+        nargs="+",
         type=Path,
-        default=Path("~/mnt/datalake/TRBD-53761").expanduser(),
-        help="Root datalake path (default: ~/mnt/datalake/TRBD-53761)",
+        default=[
+            Path("~/mnt/datalake/TRBD-53761").expanduser(),
+            Path("~/mnt/datalake/AA-56119").expanduser(),
+        ],
+        help="Root datalake paths (default: ~/mnt/datalake/TRBD-53761 ~/mnt/datalake/AA-56119)",
     )
     parser.add_argument(
         "--patients",
         nargs="+",
-        default=["TRBD001", "TRBD002"],
-        help="Patient IDs; supports comma-separated and/or space-separated values",
+        default=[],
+        help="Patient IDs to process; if omitted, auto-discovers all patients "
+        "under each root. Supports comma-separated and/or space-separated values",
     )
     parser.add_argument(
         "--sites",
@@ -221,16 +248,18 @@ def main() -> None:
 
     configure_standalone_logging(level=args.log_level)
 
-    root = args.root.expanduser().resolve()
+    roots = [r.expanduser().resolve() for r in args.roots]
     patients = _normalize_list(args.patients)
     sites = _normalize_list(args.sites)
     log_dir = (
-        args.log_dir.expanduser().resolve() if args.log_dir else root / "recovery_logs"
+        args.log_dir.expanduser().resolve()
+        if args.log_dir
+        else roots[0] / "recovery_logs"
     )
     log_dir.mkdir(parents=True, exist_ok=True)
 
     run_started_at = _now_iso()
-    discovered = _discover_video_dirs(root, patients, sites)
+    discovered = _discover_video_dirs(roots, patients, sites)
     log.info("Discovered %d video directories.", len(discovered))
 
     dir_records: list[dict[str, Any]] = []
@@ -483,7 +512,7 @@ def main() -> None:
         "run_started_at": run_started_at,
         "run_finished_at": run_finished_at,
         "mode": "run" if args.run else "dry_run",
-        "root": str(root),
+        "roots": [str(r) for r in roots],
         "patients": patients,
         "sites": sites,
         "cam_filter": args.cam or None,
