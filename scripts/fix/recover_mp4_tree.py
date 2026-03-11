@@ -141,6 +141,8 @@ def _scan_failed_record(
         "report_newly_recovered": 0,
         "report_recovered_frames": 0,
         "report_recovered_duration_s": 0,
+        "report_total_fixed_frames": 0,
+        "report_total_fixed_duration_s": 0,
     }
 
 
@@ -189,6 +191,8 @@ def _make_record(
         "report_newly_recovered": 0,
         "report_recovered_frames": 0,
         "report_recovered_duration_s": 0,
+        "report_total_fixed_frames": 0,
+        "report_total_fixed_duration_s": 0,
     }
 
 
@@ -349,8 +353,8 @@ def main() -> None:
                 record["status"] = "already_recovered"
                 record["report_recovered_status"] = recovered_c
                 record["report_empty_stub"] = empty_c
-                record["report_recovered_frames"] = frames_c
-                record["report_recovered_duration_s"] = round(dur_c, 2)
+                record["report_total_fixed_frames"] = frames_c
+                record["report_total_fixed_duration_s"] = round(dur_c, 2)
 
                 file_counts["total_mp4s"] += total_mp4s_c
                 file_counts["good_mp4s"] += good_c
@@ -358,8 +362,8 @@ def main() -> None:
                 file_counts["targeted_corrupted_mp4s"] += corrupted_c
                 file_counts["already_fixed_outputs"] += recovered_c
                 file_counts["empty_stub_detected"] += empty_c
-                file_counts["recovered_frames"] += frames_c
-                file_counts["recovered_duration_s"] += dur_c
+                file_counts["total_fixed_frames"] += frames_c
+                file_counts["total_fixed_duration_s"] += dur_c
 
                 summary_counts["dirs_with_any_corruption"] += 1 if corrupted_c else 0
                 summary_counts["dirs_with_target_corruption"] += 1 if corrupted_c else 0
@@ -508,7 +512,20 @@ def main() -> None:
 
         if pending_outputs == 0:
             record["status"] = "already_recovered"
-            log.info("[%d/%d] Status: already_recovered", idx, total_dirs)
+            plan_frames, plan_dur = _sum_file_records(plan.get("records", []))
+            record["report_recovered_status"] = already_fixed
+            record["report_empty_stub"] = empty_stub_count
+            record["report_total_fixed_frames"] = plan_frames
+            record["report_total_fixed_duration_s"] = round(plan_dur, 2)
+            file_counts["total_fixed_frames"] += plan_frames
+            file_counts["total_fixed_duration_s"] += plan_dur
+            log.info(
+                "[%d/%d] Status: already_recovered (%d frames, %.1fs)",
+                idx,
+                total_dirs,
+                plan_frames,
+                plan_dur,
+            )
             summary_counts["dirs_already_recovered"] += 1
             dir_records.append(record)
             continue
@@ -583,9 +600,13 @@ def main() -> None:
         record["report_pending"] = int(counts.get("pending", 0))
 
         file_records = recover_result.get("records", [])
-        dir_frames, dir_dur = _sum_file_records(file_records)
-        record["report_recovered_frames"] = dir_frames
-        record["report_recovered_duration_s"] = dir_dur
+        all_frames, all_dur = _sum_file_records(file_records)
+        new_recs = [r for r in file_records if r.get("status") == "recovered"]
+        new_frames, new_dur = _sum_file_records(new_recs)
+        record["report_recovered_frames"] = new_frames
+        record["report_recovered_duration_s"] = round(new_dur, 2)
+        record["report_total_fixed_frames"] = all_frames
+        record["report_total_fixed_duration_s"] = round(all_dur, 2)
 
         file_counts["recovered"] += record["report_recovered"]
         file_counts["recovered_status"] += record["report_recovered_status"]
@@ -593,8 +614,10 @@ def main() -> None:
         file_counts["empty_stub"] += record["report_empty_stub"]
         file_counts["no_reference"] += record["report_no_reference"]
         file_counts["pending_after_run"] += record["report_pending"]
-        file_counts["recovered_frames"] += dir_frames
-        file_counts["recovered_duration_s"] += dir_dur
+        file_counts["recovered_frames"] += new_frames
+        file_counts["recovered_duration_s"] += new_dur
+        file_counts["total_fixed_frames"] += all_frames
+        file_counts["total_fixed_duration_s"] += all_dur
         summary_counts["dirs_recovered"] += 1
         log.info(
             "[%d/%d] Status: recovered | new=%d failed=%d empty=%d no_ref=%d",
@@ -665,6 +688,13 @@ def main() -> None:
             "files_recovered_duration_hours": round(
                 file_counts.get("recovered_duration_s", 0) / 3600, 2
             ),
+            "files_total_fixed_frames": file_counts.get("total_fixed_frames", 0),
+            "files_total_fixed_duration_s": round(
+                file_counts.get("total_fixed_duration_s", 0), 2
+            ),
+            "files_total_fixed_duration_hours": round(
+                file_counts.get("total_fixed_duration_s", 0) / 3600, 2
+            ),
         },
         "directories": dir_records,
     }
@@ -697,6 +727,8 @@ def main() -> None:
         "report_pending",
         "report_recovered_frames",
         "report_recovered_duration_s",
+        "report_total_fixed_frames",
+        "report_total_fixed_duration_s",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -727,9 +759,14 @@ def main() -> None:
         aggregate["summary"]["files_failed"],
     )
     log.info(
-        "Recovered video: %d frames, %.1f hours",
+        "This run: recovered %d frames, %.1f hours",
         aggregate["summary"]["files_recovered_frames"],
         aggregate["summary"]["files_recovered_duration_hours"],
+    )
+    log.info(
+        "Total fixed: %d frames, %.1f hours",
+        aggregate["summary"]["files_total_fixed_frames"],
+        aggregate["summary"]["files_total_fixed_duration_hours"],
     )
 
 
