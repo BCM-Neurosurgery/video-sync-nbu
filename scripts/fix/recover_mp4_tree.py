@@ -9,19 +9,9 @@ For each discovered video directory:
   - Detect corrupted MP4s (missing moov atom)
   - Check whether corresponding *_fixed.mp4 already exists in sibling
     <site>_recovered
-  - Recover only missing outputs by invoking scripts.fix.recover_mp4
+  - Recover only missing outputs via scripts.fix.recover_mp4 public API
 
 Writes one aggregated run log (JSON + CSV) with per-directory and total stats.
-
-Examples:
-  # Dry run (scan + quantify only)
-  python -m scripts.fix.recover_mp4_tree
-
-  # Execute recovery
-  python -m scripts.fix.recover_mp4_tree --run
-
-  # Limit scope
-  python -m scripts.fix.recover_mp4_tree --patients TRBD001 --sites lounge --run
 """
 
 from __future__ import annotations
@@ -30,15 +20,12 @@ import argparse
 import csv
 import json
 import logging
-import subprocess
-import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.fix.recover_mp4 import scan_directory
-from scripts.index.filepatterns import FilePatterns
+from scripts.fix.recover_mp4 import plan_recovery, run_recovery
 from scripts.log.logutils import configure_standalone_logging
 
 log = logging.getLogger(__name__)
@@ -53,7 +40,6 @@ def _run_stamp() -> str:
 
 
 def _normalize_list(values: list[str]) -> list[str]:
-    """Split comma-separated and space-separated values, de-duplicated."""
     out: list[str] = []
     seen: set[str] = set()
     for item in values:
@@ -64,14 +50,6 @@ def _normalize_list(values: list[str]) -> list[str]:
             seen.add(token)
             out.append(token)
     return out
-
-
-def _cam_from_path(path: Path) -> str:
-    parsed = FilePatterns.parse_video_filename(path)
-    if parsed:
-        return parsed[1]
-    parts = path.stem.rsplit(".", 1)
-    return parts[-1] if len(parts) >= 2 else ""
 
 
 def _discover_video_dirs(
@@ -108,50 +86,77 @@ def _discover_video_dirs(
     return records
 
 
-def _report_status_counts(report_path: Path) -> dict[str, int]:
-    """Read a per-directory recovery_report.json and count file statuses."""
-    if not report_path.exists():
-        return {}
-
-    try:
-        payload = json.loads(report_path.read_text(encoding="utf-8"))
-        files = payload.get("files", [])
-        counts = Counter(str(entry.get("status", "unknown")) for entry in files)
-        return {key: int(value) for key, value in counts.items()}
-    except Exception as exc:
-        log.warning("Could not parse report %s: %s", report_path, exc)
-        return {}
-
-
-def _invoke_recover_mp4(
-    python_exec: str,
-    input_dir: Path,
+def _scan_failed_record(
+    *,
+    patient: str,
+    date: str,
+    site: str,
+    video_dir: Path,
     output_dir: Path,
-    cam: str,
-    log_level: str,
-) -> tuple[int, str]:
-    cmd = [
-        python_exec,
-        "-m",
-        "scripts.fix.recover_mp4",
-        str(input_dir),
-        str(output_dir),
-        "--run",
-        "--log-level",
-        log_level,
-    ]
-    if cam:
-        cmd.extend(["--cam", cam])
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "patient": patient,
+        "date": date,
+        "site": site,
+        "video_dir": str(video_dir),
+        "output_dir": str(output_dir),
+        "total_mp4s": 0,
+        "good_mp4s": 0,
+        "corrupted_mp4s": 0,
+        "targeted_corrupted_mp4s": 0,
+        "already_fixed_outputs": 0,
+        "pending_outputs_before": 0,
+        "recover_api_rc": None,
+        "recover_api_note": error,
+        "status": "scan_failed",
+        "report_recovered": 0,
+        "report_failed": 0,
+        "report_empty_stub": 0,
+        "report_no_reference": 0,
+        "report_pending": 0,
+        "report_recovered_status": 0,
+        "report_newly_recovered": 0,
+    }
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    stderr_lines = result.stderr.strip().splitlines()
-    stdout_lines = result.stdout.strip().splitlines()
-    tail = ""
-    if stderr_lines:
-        tail = stderr_lines[-1]
-    elif stdout_lines:
-        tail = stdout_lines[-1]
-    return result.returncode, tail
+
+def _make_record(
+    *,
+    patient: str,
+    date: str,
+    site: str,
+    video_dir: Path,
+    output_dir: Path,
+    total_mp4s: int,
+    good_mp4s: int,
+    corrupted_mp4s: int,
+    targeted_corrupted_mp4s: int,
+    already_fixed_outputs: int,
+    pending_outputs_before: int,
+) -> dict[str, Any]:
+    return {
+        "patient": patient,
+        "date": date,
+        "site": site,
+        "video_dir": str(video_dir),
+        "output_dir": str(output_dir),
+        "total_mp4s": total_mp4s,
+        "good_mp4s": good_mp4s,
+        "corrupted_mp4s": corrupted_mp4s,
+        "targeted_corrupted_mp4s": targeted_corrupted_mp4s,
+        "already_fixed_outputs": already_fixed_outputs,
+        "pending_outputs_before": pending_outputs_before,
+        "recover_api_rc": None,
+        "recover_api_note": "",
+        "status": "",
+        "report_recovered": 0,
+        "report_failed": 0,
+        "report_empty_stub": 0,
+        "report_no_reference": 0,
+        "report_pending": 0,
+        "report_recovered_status": 0,
+        "report_newly_recovered": 0,
+    }
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -187,12 +192,6 @@ def _make_parser() -> argparse.ArgumentParser:
         "--run",
         action="store_true",
         help="Execute recovery; default is scan-only dry run",
-    )
-    parser.add_argument(
-        "--python-exec",
-        type=str,
-        default=sys.executable,
-        help="Python executable used to invoke recover_mp4 (default: current Python)",
     )
     parser.add_argument(
         "--log-dir",
@@ -231,160 +230,221 @@ def main() -> None:
     summary_counts: Counter[str] = Counter()
     file_counts: Counter[str] = Counter()
 
-    for entry in discovered:
+    total_dirs = len(discovered)
+    for idx, entry in enumerate(discovered, start=1):
         patient = entry["patient"]
         date = entry["date"]
         site = entry["site"]
         video_dir: Path = entry["video_dir"]
         output_dir: Path = entry["output_dir"]
 
+        log.info(
+            "[%d/%d] Scanning %s | patient=%s date=%s site=%s",
+            idx,
+            total_dirs,
+            video_dir,
+            patient,
+            date,
+            site,
+        )
+
         try:
-            corrupted, good, _ = scan_directory(video_dir)
-            total_mp4s = len(corrupted) + len(good)
+            plan = plan_recovery(
+                input_dir=video_dir, output_dir=output_dir, cam=args.cam
+            )
         except Exception as exc:
+            log.error(
+                "[%d/%d] Scan failed for %s: %s",
+                idx,
+                total_dirs,
+                video_dir,
+                exc,
+            )
             summary_counts["dirs_scan_failed"] += 1
             dir_records.append(
-                {
-                    "patient": patient,
-                    "date": date,
-                    "site": site,
-                    "video_dir": str(video_dir),
-                    "output_dir": str(output_dir),
-                    "total_mp4s": 0,
-                    "good_mp4s": 0,
-                    "corrupted_mp4s": 0,
-                    "targeted_corrupted_mp4s": 0,
-                    "already_fixed_outputs": 0,
-                    "pending_outputs_before": 0,
-                    "recover_invocation_rc": None,
-                    "recover_invocation_note": str(exc),
-                    "status": "scan_failed",
-                    "report_recovered": 0,
-                    "report_failed": 0,
-                    "report_empty_stub": 0,
-                    "report_no_reference": 0,
-                    "report_pending": 0,
-                    "report_recovered_status": 0,
-                    "report_newly_recovered_est": 0,
-                }
+                _scan_failed_record(
+                    patient=patient,
+                    date=date,
+                    site=site,
+                    video_dir=video_dir,
+                    output_dir=output_dir,
+                    error=str(exc),
+                )
             )
             continue
 
-        already_fixed = 0
-        pending_outputs = 0
-        targeted_corrupted = (
-            [p for p in corrupted if _cam_from_path(p) == args.cam]
-            if args.cam
-            else corrupted
+        scan = plan["scan"]
+        plan_counts = plan["counts"]
+        plan_status = str(plan["status"])
+
+        total_mp4s = int(scan["total_mp4s"])
+        good_count = int(scan["good_files"])
+        corrupted_count = int(scan["corrupted_files"])
+        targeted_corrupted_count = int(plan["targeted_corrupted_files"])
+        already_fixed = int(plan_counts["already_done"])
+        pending_outputs = int(plan_counts["pending"])
+        no_reference_count = int(plan_counts["no_reference"])
+        empty_stub_count = int(plan_counts["empty_stub"])
+
+        log.info(
+            "[%d/%d] Scan done: total=%d good=%d corrupted=%d",
+            idx,
+            total_dirs,
+            total_mp4s,
+            good_count,
+            corrupted_count,
         )
 
-        for src in targeted_corrupted:
-            fixed_path = output_dir / f"{src.stem}_fixed.mp4"
-            if fixed_path.exists():
-                already_fixed += 1
-            else:
-                pending_outputs += 1
-
-        record: dict[str, Any] = {
-            "patient": patient,
-            "date": date,
-            "site": site,
-            "video_dir": str(video_dir),
-            "output_dir": str(output_dir),
-            "total_mp4s": total_mp4s,
-            "good_mp4s": len(good),
-            "corrupted_mp4s": len(corrupted),
-            "targeted_corrupted_mp4s": len(targeted_corrupted),
-            "already_fixed_outputs": already_fixed,
-            "pending_outputs_before": pending_outputs,
-            "recover_invocation_rc": None,
-            "recover_invocation_note": "",
-            "status": "",
-            "report_recovered": 0,
-            "report_failed": 0,
-            "report_empty_stub": 0,
-            "report_no_reference": 0,
-            "report_pending": 0,
-            "report_recovered_status": 0,
-            "report_newly_recovered_est": 0,
-        }
+        record = _make_record(
+            patient=patient,
+            date=date,
+            site=site,
+            video_dir=video_dir,
+            output_dir=output_dir,
+            total_mp4s=total_mp4s,
+            good_mp4s=good_count,
+            corrupted_mp4s=corrupted_count,
+            targeted_corrupted_mp4s=targeted_corrupted_count,
+            already_fixed_outputs=already_fixed,
+            pending_outputs_before=pending_outputs,
+        )
 
         file_counts["total_mp4s"] += total_mp4s
-        file_counts["good_mp4s"] += len(good)
-        file_counts["corrupted_mp4s"] += len(corrupted)
-        file_counts["targeted_corrupted_mp4s"] += len(targeted_corrupted)
+        file_counts["good_mp4s"] += good_count
+        file_counts["corrupted_mp4s"] += corrupted_count
+        file_counts["targeted_corrupted_mp4s"] += targeted_corrupted_count
         file_counts["already_fixed_outputs"] += already_fixed
         file_counts["pending_outputs_before"] += pending_outputs
+        file_counts["no_reference_detected"] += no_reference_count
+        file_counts["empty_stub_detected"] += empty_stub_count
 
-        if total_mp4s == 0:
+        if plan_status == "no_mp4":
             record["status"] = "no_mp4"
+            log.info("[%d/%d] Status: no_mp4", idx, total_dirs)
             summary_counts["dirs_no_mp4"] += 1
             dir_records.append(record)
             continue
 
-        if not corrupted:
+        if plan_status == "no_corrupted":
             record["status"] = "clean"
+            log.info("[%d/%d] Status: clean (no corrupted files)", idx, total_dirs)
             summary_counts["dirs_clean"] += 1
             dir_records.append(record)
             continue
 
         summary_counts["dirs_with_any_corruption"] += 1
 
-        if not targeted_corrupted:
+        if plan_status == "no_target_corruption":
             record["status"] = "no_target_corruption"
+            log.info(
+                "[%d/%d] Status: no_target_corruption%s",
+                idx,
+                total_dirs,
+                f" (cam={args.cam})" if args.cam else "",
+            )
             summary_counts["dirs_no_target_corruption"] += 1
             dir_records.append(record)
             continue
 
         summary_counts["dirs_with_target_corruption"] += 1
+        log.info(
+            "[%d/%d] Targeted corrupted=%d | already_fixed=%d | pending=%d",
+            idx,
+            total_dirs,
+            targeted_corrupted_count,
+            already_fixed,
+            pending_outputs,
+        )
+
+        if plan_status == "no_reference_files":
+            record["status"] = "no_reference_files"
+            record["recover_api_rc"] = 1
+            record["recover_api_note"] = str(plan.get("error", "no_reference_files"))
+            log.warning(
+                "[%d/%d] Status: no_reference_files (%s)",
+                idx,
+                total_dirs,
+                record["recover_api_note"],
+            )
+            summary_counts["dirs_no_reference_files"] += 1
+            dir_records.append(record)
+            continue
 
         if pending_outputs == 0:
             record["status"] = "already_recovered"
+            log.info("[%d/%d] Status: already_recovered", idx, total_dirs)
             summary_counts["dirs_already_recovered"] += 1
             dir_records.append(record)
             continue
 
         if not args.run:
             record["status"] = "needs_recovery"
+            log.info("[%d/%d] Status: needs_recovery (dry-run)", idx, total_dirs)
             summary_counts["dirs_needing_recovery"] += 1
             dir_records.append(record)
             continue
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        rc, tail = _invoke_recover_mp4(
-            python_exec=args.python_exec,
-            input_dir=video_dir,
-            output_dir=output_dir,
-            cam=args.cam,
-            log_level=args.log_level,
-        )
-        record["recover_invocation_rc"] = rc
-        record["recover_invocation_note"] = tail
-
-        if rc != 0:
-            record["status"] = "recover_invocation_failed"
-            summary_counts["dirs_recover_invocation_failed"] += 1
+        try:
+            recover_result = run_recovery(
+                input_dir=video_dir,
+                output_dir=output_dir,
+                run=True,
+                cam=args.cam,
+                write_report=True,
+                plan=plan,
+            )
+        except Exception as exc:
+            record["recover_api_rc"] = 1
+            record["recover_api_note"] = str(exc)
+            record["status"] = "recover_api_failed"
+            log.error(
+                "[%d/%d] Status: recover_api_failed (%s)",
+                idx,
+                total_dirs,
+                exc,
+            )
+            summary_counts["dirs_recover_api_failed"] += 1
             dir_records.append(record)
             continue
 
-        report_path = output_dir / "recovery_report.json"
-        report_counts = _report_status_counts(report_path)
-        if not report_path.exists():
+        if recover_result.get("status") == "no_reference_files":
+            record["recover_api_rc"] = 1
+            record["recover_api_note"] = str(
+                recover_result.get("error", "no_reference_files")
+            )
+            record["status"] = "recover_api_failed"
+            log.error(
+                "[%d/%d] Status: recover_api_failed (%s)",
+                idx,
+                total_dirs,
+                record["recover_api_note"],
+            )
+            summary_counts["dirs_recover_api_failed"] += 1
+            dir_records.append(record)
+            continue
+
+        record["recover_api_rc"] = 0
+        record["recover_api_note"] = str(recover_result.get("status", "ok"))
+
+        if not recover_result.get("report_written", False):
             record["status"] = "recovered_no_report"
+            log.warning("[%d/%d] Status: recovered_no_report", idx, total_dirs)
             summary_counts["dirs_recovered_no_report"] += 1
             dir_records.append(record)
             continue
 
+        counts = recover_result.get("counts", {})
+        recovered_new = int(counts.get("recovered", 0))
+        recovered_already = int(counts.get("already_done", 0))
+
         record["status"] = "recovered"
-        record["report_recovered_status"] = report_counts.get("recovered", 0)
-        record["report_newly_recovered_est"] = max(
-            record["report_recovered_status"] - already_fixed, 0
-        )
-        record["report_recovered"] = record["report_newly_recovered_est"]
-        record["report_failed"] = report_counts.get("failed", 0)
-        record["report_empty_stub"] = report_counts.get("empty_stub", 0)
-        record["report_no_reference"] = report_counts.get("no_reference", 0)
-        record["report_pending"] = report_counts.get("pending", 0)
+        record["report_recovered"] = recovered_new
+        record["report_recovered_status"] = recovered_new + recovered_already
+        record["report_newly_recovered"] = recovered_new
+        record["report_failed"] = int(counts.get("failed", 0))
+        record["report_empty_stub"] = int(counts.get("empty_stub", 0))
+        record["report_no_reference"] = int(counts.get("no_reference", 0))
+        record["report_pending"] = int(counts.get("pending", 0))
 
         file_counts["recovered"] += record["report_recovered"]
         file_counts["recovered_status"] += record["report_recovered_status"]
@@ -393,6 +453,15 @@ def main() -> None:
         file_counts["no_reference"] += record["report_no_reference"]
         file_counts["pending_after_run"] += record["report_pending"]
         summary_counts["dirs_recovered"] += 1
+        log.info(
+            "[%d/%d] Status: recovered | new=%d failed=%d empty=%d no_ref=%d",
+            idx,
+            total_dirs,
+            record["report_recovered"],
+            record["report_failed"],
+            record["report_empty_stub"],
+            record["report_no_reference"],
+        )
         dir_records.append(record)
 
     run_finished_at = _now_iso()
@@ -419,15 +488,14 @@ def main() -> None:
             "dirs_no_target_corruption": summary_counts.get(
                 "dirs_no_target_corruption", 0
             ),
+            "dirs_no_reference_files": summary_counts.get("dirs_no_reference_files", 0),
             "dirs_already_recovered": summary_counts.get("dirs_already_recovered", 0),
             "dirs_needing_recovery": summary_counts.get("dirs_needing_recovery", 0),
             "dirs_recovered": summary_counts.get("dirs_recovered", 0),
             "dirs_recovered_no_report": summary_counts.get(
                 "dirs_recovered_no_report", 0
             ),
-            "dirs_recover_invocation_failed": summary_counts.get(
-                "dirs_recover_invocation_failed", 0
-            ),
+            "dirs_recover_api_failed": summary_counts.get("dirs_recover_api_failed", 0),
             "dirs_scan_failed": summary_counts.get("dirs_scan_failed", 0),
             "files_total_mp4s": file_counts.get("total_mp4s", 0),
             "files_good_mp4s": file_counts.get("good_mp4s", 0),
@@ -439,6 +507,8 @@ def main() -> None:
             "files_pending_outputs_before": file_counts.get(
                 "pending_outputs_before", 0
             ),
+            "files_no_reference_detected": file_counts.get("no_reference_detected", 0),
+            "files_empty_stub_detected": file_counts.get("empty_stub_detected", 0),
             "files_recovered": file_counts.get("recovered", 0),
             "files_recovered_status": file_counts.get("recovered_status", 0),
             "files_failed": file_counts.get("failed", 0),
@@ -466,11 +536,11 @@ def main() -> None:
         "targeted_corrupted_mp4s",
         "already_fixed_outputs",
         "pending_outputs_before",
-        "recover_invocation_rc",
-        "recover_invocation_note",
+        "recover_api_rc",
+        "recover_api_note",
         "report_recovered",
         "report_recovered_status",
-        "report_newly_recovered_est",
+        "report_newly_recovered",
         "report_failed",
         "report_empty_stub",
         "report_no_reference",
@@ -493,7 +563,7 @@ def main() -> None:
         aggregate["summary"]["dirs_already_recovered"],
         aggregate["summary"]["dirs_needing_recovery"],
         aggregate["summary"]["dirs_recovered"],
-        aggregate["summary"]["dirs_recover_invocation_failed"],
+        aggregate["summary"]["dirs_recover_api_failed"],
     )
     log.info(
         "Files: total=%d corrupted=%d already_fixed=%d pending_before=%d recovered=%d failed=%d",
