@@ -398,6 +398,21 @@ def build_manifest(
     _write_csv(skipped, skip_path)
     log.info("Skipped: %d records -> %s", len(skipped), skip_path)
 
+    # Check for dst_path collisions (e.g., DST fall-back producing duplicate names)
+    dst_counts: dict[str, list[str]] = {}
+    for r in manifest:
+        dst_counts.setdefault(r.dst_path, []).append(r.src_path)
+    collisions = {dst: srcs for dst, srcs in dst_counts.items() if len(srcs) > 1}
+    if collisions:
+        log.warning("%d destination path collisions detected!", len(collisions))
+        collision_path = output.with_name(f"{output.stem}_collisions{output.suffix}")
+        with open(collision_path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["dst_path", "src_paths"])
+            for dst, srcs in sorted(collisions.items()):
+                w.writerow([dst, "; ".join(srcs)])
+        log.warning("Collisions written to %s", collision_path)
+
     _print_summary(all_records)
 
 
