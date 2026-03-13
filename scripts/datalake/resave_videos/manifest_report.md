@@ -28,6 +28,11 @@ Verified: grand total matches `find ... -name "*.mp4" | wc -l` across both datal
 | **Total copy** | | | **6,422** | **1,060.3** | |
 | **All actionable** | | | **24,630** | **3,337.5** | |
 
+The 10,530 "FPS only wrong" files are first segments of each session — their filename comes
+from `datetime.now()` which matches `real_times[0]` in the JSON. The drift bug only
+accumulates on 2nd+ segments. Whether the first segment shows a mismatch depends on
+sub-second rounding between the two clocks.
+
 ## Skipped Files by Reason
 
 | Reason | Files | Description |
