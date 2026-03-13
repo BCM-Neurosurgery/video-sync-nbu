@@ -313,10 +313,17 @@ def process_directory(
     dir_info: DirInfo, out_root: Path, cache: dict[str, VideoRecord] | None = None
 ) -> list[VideoRecord]:
     """Process all MP4s in one video directory, using cache to skip ffprobe."""
+    mp4s = sorted(dir_info.path.glob("*.mp4"))
+
+    # Fast path: if every file is cached, skip all JSON parsing and probing
+    if cache and all(str(mp4) in cache for mp4 in mp4s):
+        return [cache[str(mp4)] for mp4 in mp4s]
+
+    # Some files need processing — parse JSONs for timestamp lookup
     json_map = build_json_map(dir_info.path)
     json_ts = precompute_json_timestamps(json_map)
     results: list[VideoRecord] = []
-    for mp4 in sorted(dir_info.path.glob("*.mp4")):
+    for mp4 in mp4s:
         cached = cache.get(str(mp4)) if cache else None
         if cached is not None:
             results.append(cached)
