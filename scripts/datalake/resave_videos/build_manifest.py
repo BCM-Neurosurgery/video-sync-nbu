@@ -37,6 +37,7 @@ TARGET_FPS = 30.0
 FPS_TOLERANCE = 1.0  # |fps - TARGET_FPS| > tolerance → re-encode
 UTC = ZoneInfo("UTC")
 _RE_TIMESTAMP_TAIL = re.compile(r"_(\d{8}_\d{6})$")
+_RE_FIXED_SUFFIX = re.compile(r"_fixed\.mp4$", re.IGNORECASE)
 
 
 # ── Data types ──────────────────────────────────────────────────────
@@ -253,6 +254,10 @@ def _process_file(
 ) -> VideoRecord:
     """Process a single MP4 into a manifest record."""
     parsed = FilePatterns.parse_video_filename(mp4)
+    # Handle *_fixed.mp4 from previous manual recovery — strip suffix and re-parse
+    if not parsed and _RE_FIXED_SUFFIX.search(mp4.name):
+        clean = mp4.with_name(_RE_FIXED_SUFFIX.sub(".mp4", mp4.name))
+        parsed = FilePatterns.parse_video_filename(clean)
     if not parsed:
         return _make_record(dir_info, mp4, skip_reason="unparseable_filename")
 
@@ -304,14 +309,20 @@ def _process_file(
     )
 
 
-def process_directory(dir_info: DirInfo, out_root: Path) -> list[VideoRecord]:
-    """Process all MP4s in one video directory."""
+def process_directory(
+    dir_info: DirInfo, out_root: Path, cache: dict[str, VideoRecord] | None = None
+) -> list[VideoRecord]:
+    """Process all MP4s in one video directory, using cache to skip ffprobe."""
     json_map = build_json_map(dir_info.path)
     json_ts = precompute_json_timestamps(json_map)
-    return [
-        _process_file(mp4, json_ts, dir_info, out_root)
-        for mp4 in sorted(dir_info.path.glob("*.mp4"))
-    ]
+    results: list[VideoRecord] = []
+    for mp4 in sorted(dir_info.path.glob("*.mp4")):
+        cached = cache.get(str(mp4)) if cache else None
+        if cached is not None:
+            results.append(cached)
+        else:
+            results.append(_process_file(mp4, json_ts, dir_info, out_root))
+    return results
 
 
 # ── Output ──────────────────────────────────────────────────────────
@@ -327,6 +338,50 @@ def _write_csv(records: list[VideoRecord], path: Path) -> None:
         w.writeheader()
         for r in records:
             w.writerow(asdict(r))
+
+
+def _row_to_record(row: dict) -> VideoRecord:
+    """Convert a CSV row dict back into a VideoRecord."""
+    return VideoRecord(
+        src_path=row["src_path"],
+        root_name=row["root_name"],
+        patient=row["patient"],
+        visit_date=row["visit_date"],
+        site=row["site"],
+        segment_id=row["segment_id"],
+        cam_serial=row["cam_serial"],
+        filename_timestamp=row["filename_timestamp"],
+        json_timestamp=row["json_timestamp"],
+        timestamp_mismatch=row["timestamp_mismatch"] == "True",
+        current_fps=float(row["current_fps"] or 0),
+        needs_reencode=row["needs_reencode"] == "True",
+        has_companion_json=row["has_companion_json"] == "True",
+        duration_sec=float(row["duration_sec"] or 0),
+        frame_count=int(row["frame_count"] or 0),
+        action=row["action"],
+        skip_reason=row["skip_reason"],
+        dst_path=row["dst_path"],
+    )
+
+
+def _load_cache(output: Path) -> dict[str, VideoRecord]:
+    """Load previous manifest + skipped CSVs as probe cache keyed by src_path.
+
+    Skips 'unparseable_filename' entries so they get re-processed (code changes
+    may now parse them, e.g. *_fixed.mp4 support).
+    """
+    cache: dict[str, VideoRecord] = {}
+    for suffix in ("", "_skipped"):
+        p = output.with_name(f"{output.stem}{suffix}{output.suffix}")
+        if not p.exists():
+            continue
+        with open(p) as fh:
+            for row in csv.DictReader(fh):
+                if row.get("skip_reason") == "unparseable_filename":
+                    continue
+                cache[row["src_path"]] = _row_to_record(row)
+        log.info("Cache: loaded %d entries from %s", len(cache), p.name)
+    return cache
 
 
 def _print_summary(records: list[VideoRecord]) -> None:
@@ -356,7 +411,11 @@ def _print_summary(records: list[VideoRecord]) -> None:
 
 
 def build_manifest(
-    roots: list[Path], out_root: Path, output: Path, workers: int
+    roots: list[Path],
+    out_root: Path,
+    output: Path,
+    workers: int,
+    use_cache: bool = False,
 ) -> None:
     """Discover -> scan -> classify -> write manifest."""
     dirs = discover_video_dirs(roots)
@@ -364,12 +423,18 @@ def build_manifest(
         log.error("No video directories found")
         sys.exit(1)
 
+    cache: dict[str, VideoRecord] | None = None
+    if use_cache:
+        cache = _load_cache(output)
+        if cache:
+            log.info("Probe cache: %d files (will skip ffprobe for these)", len(cache))
+
     all_records: list[VideoRecord] = []
     done = 0
     total = len(dirs)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(process_directory, d, out_root): d for d in dirs}
+        futs = {pool.submit(process_directory, d, out_root, cache): d for d in dirs}
         for fut in as_completed(futs):
             d = futs[fut]
             done += 1
@@ -445,8 +510,13 @@ def main() -> None:
     ap.add_argument(
         "--workers",
         type=int,
-        default=4,
-        help="Parallel directory workers (default: 4)",
+        default=8,
+        help="Parallel directory workers (default: 8)",
+    )
+    ap.add_argument(
+        "--cache",
+        action="store_true",
+        help="Reuse probe results from previous manifest/skipped CSVs at --output path",
     )
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -457,7 +527,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    build_manifest(args.roots, args.out_root, args.output, args.workers)
+    build_manifest(args.roots, args.out_root, args.output, args.workers, args.cache)
 
 
 if __name__ == "__main__":

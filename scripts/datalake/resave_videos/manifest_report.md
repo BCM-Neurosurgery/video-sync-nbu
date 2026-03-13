@@ -65,10 +65,37 @@ No DST collisions detected (no `manifest_collisions.csv` generated).
 | TRBD000 | 0 | 0 | 0 | 0 |
 | **Total** | **949** | **692** | **172** | **1,813** |
 
+## The 12 Remux Files — 1-Second Rounding, Not Drift
+
+These 12 files have correct FPS (29.995) but a 1-second timestamp mismatch between the
+filename and the companion JSON. They are **not** caused by the multi-minute drift bug
+(which only affects 2025 data). Instead, this is a sub-second rounding difference between
+`datetime.now()` in the recording software and `real_times[0]` from the hardware timestamps.
+
+All 12 come from 2 segments across 2 patients, each with 6 cameras:
+
+| Source file | Filename TS | JSON TS |
+|-------------|-------------|---------|
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253448.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253450.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253452.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253459.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253460.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD001/NBU/2026-02-20/video/sleep/TRBD001_20260220_061353.24253466.mp4` | `20260220_061353` | `20260220_061352` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253448.mp4` | `20260128_041721` | `20260128_041720` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253450.mp4` | `20260128_041721` | `20260128_041720` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253452.mp4` | `20260128_041721` | `20260128_041720` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253459.mp4` | `20260128_041721` | `20260128_041720` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253460.mp4` | `20260128_041721` | `20260128_041720` |
+| `.../TRBD002/NBU/2026-01-28/video/sleep/TRBD002_20260128_041721.24253466.mp4` | `20260128_041721` | `20260128_041720` |
+
+In both cases the filename is exactly 1 second ahead of the JSON timestamp. The JSON
+`real_times[0]` (hardware clock, UTC-converted) is the authoritative source, so these files
+are remuxed (stream-copied with the corrected filename) — no re-encoding needed.
+
 ## Notes
 
 - TRBD000 and TRBD003 have all correct FPS (2026 recordings) — only need copying
 - AA006 has zero correct files — all 4,503 need re-encoding
-- The 12 remux files are split evenly between TRBD001 (6) and TRBD002 (6) — these have correct FPS but drifted filenames
 - The 949 ffprobe failures match the corrupted file count from the MP4 recovery project (2026-03-11)
 - The 692 unparseable files are `*_fixed.mp4` outputs from previous manual recovery work
