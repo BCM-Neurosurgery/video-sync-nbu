@@ -82,8 +82,11 @@ class VideoRecord:
 # ── Discovery ───────────────────────────────────────────────────────
 
 
-def discover_video_dirs(roots: list[Path]) -> list[DirInfo]:
-    """Walk <root>/<patient>/NBU/<date>/video/<site>/, yield dirs with MP4s."""
+LAYOUTS = ("nbu", "clinic")
+
+
+def _discover_nbu(roots: list[Path]) -> list[DirInfo]:
+    """Walk <root>/<patient>/NBU/<date>/video/<site>/."""
     dirs: list[DirInfo] = []
     for root in roots:
         if not root.is_dir():
@@ -116,7 +119,52 @@ def discover_video_dirs(roots: list[Path]) -> list[DirInfo]:
                             path=site_dir,
                         )
                     )
-    log.info("Discovered %d video directories", len(dirs))
+    return dirs
+
+
+def _discover_clinic(roots: list[Path]) -> list[DirInfo]:
+    """Walk <root>/<patient>/clinic/<date>/video/FLIR/."""
+    dirs: list[DirInfo] = []
+    for root in roots:
+        if not root.is_dir():
+            log.warning("Root not found: %s", root)
+            continue
+        for patient_dir in sorted(root.iterdir()):
+            if not patient_dir.is_dir():
+                continue
+            clinic = patient_dir / "clinic"
+            if not clinic.is_dir():
+                continue
+            for date_dir in sorted(clinic.iterdir()):
+                if not date_dir.is_dir():
+                    continue
+                flir_dir = date_dir / "video" / "FLIR"
+                if not flir_dir.is_dir():
+                    continue
+                if not any(flir_dir.glob("*.mp4")):
+                    continue
+                dirs.append(
+                    DirInfo(
+                        root=root,
+                        root_name=root.name,
+                        patient=patient_dir.name,
+                        visit_date=date_dir.name,
+                        site="FLIR",
+                        path=flir_dir,
+                    )
+                )
+    return dirs
+
+
+def discover_video_dirs(roots: list[Path], layout: str = "nbu") -> list[DirInfo]:
+    """Discover video directories using the given layout."""
+    if layout == "nbu":
+        dirs = _discover_nbu(roots)
+    elif layout == "clinic":
+        dirs = _discover_clinic(roots)
+    else:
+        raise ValueError(f"Unknown layout: {layout!r}. Choose from: {LAYOUTS}")
+    log.info("Discovered %d video directories (layout=%s)", len(dirs), layout)
     return dirs
 
 
@@ -423,9 +471,10 @@ def build_manifest(
     output: Path,
     workers: int,
     use_cache: bool = False,
+    layout: str = "nbu",
 ) -> None:
     """Discover -> scan -> classify -> write manifest."""
-    dirs = discover_video_dirs(roots)
+    dirs = discover_video_dirs(roots, layout=layout)
     if not dirs:
         log.error("No video directories found")
         sys.exit(1)
@@ -515,6 +564,12 @@ def main() -> None:
         help="Manifest CSV output path (default: manifest.csv)",
     )
     ap.add_argument(
+        "--layout",
+        default="nbu",
+        choices=LAYOUTS,
+        help="Directory layout to scan (default: nbu)",
+    )
+    ap.add_argument(
         "--workers",
         type=int,
         default=8,
@@ -534,7 +589,9 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    build_manifest(args.roots, args.out_root, args.output, args.workers, args.cache)
+    build_manifest(
+        args.roots, args.out_root, args.output, args.workers, args.cache, args.layout
+    )
 
 
 if __name__ == "__main__":
