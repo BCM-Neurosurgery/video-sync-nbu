@@ -20,8 +20,12 @@ set -euo pipefail
 
 REPO=/scratch/yewen/BCM/video-sync-nbu
 MANIFEST=${REPO}/scripts/datalake/resave_videos/manifest.csv
-PYTHON=/scratch/yewen/miniconda3/envs/videosyncnbu/bin/python
+CONDA_ENV=/scratch/yewen/miniconda3/envs/videosyncnbu
+PYTHON=${CONDA_ENV}/bin/python
 CHUNK_SIZE=100
+
+# Ensure conda env binaries (ffmpeg, ffprobe) are on PATH
+export PATH="${CONDA_ENV}/bin:${PATH}"
 
 cd "${REPO}"
 
