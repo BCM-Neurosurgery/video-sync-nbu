@@ -679,7 +679,8 @@ def run_pipeline(
     log_level: str = "INFO",
     skip_decode: bool = False,
     *,
-    do_split: bool = False,
+    serial_channel: int | None = None,
+    do_split: bool | None = None,
     split_chunk_seconds: int = 3600,
     split_overwrite: bool = False,
     split_clean: bool = False,
@@ -760,18 +761,54 @@ def run_pipeline(
         return 2
 
     # Discover audio group once (shared across segments/cams)
-    try:
+    # Serial channel: explicit override > site config > fallback (5↔3)
+    if serial_channel is not None:
+        serial_ch = serial_channel
+        logger.info("Using user-specified serial channel %02d", serial_ch)
+    else:
         serial_ch = get_serial_channel(site)
-        ad = AudioDiscoverer(
-            audio_dir=prepared_audio_dir,
-            default_serial_channel=serial_ch,
-            log=logger,
-        )
-        ag = ad.get_audio_group()
+
+    def _try_discover(ch: int) -> AudioGroup | None:
+        """Attempt audio discovery with a given serial channel, return None on failure."""
+        try:
+            ad = AudioDiscoverer(
+                audio_dir=prepared_audio_dir,
+                default_serial_channel=ch,
+                log=logger,
+            )
+            return ad.get_audio_group()
+        except (AudioGroupDiscoverError, ValueError):
+            return None
+
+    ag = _try_discover(serial_ch)
+    if ag is not None:
         logger.info("Audio(s) discovered")
-    except (AudioGroupDiscoverError, ValueError) as e:
-        logger.error("Audio group discovery failed: %s", e)
+    elif serial_channel is not None:
+        # User explicitly chose this channel — don't second-guess
+        logger.error(
+            "Audio group discovery failed: serial channel %02d not found", serial_ch
+        )
         return 2
+    else:
+        fallback_ch = 3 if serial_ch == 5 else 5
+        logger.warning(
+            "Serial channel %02d not found, falling back to channel %02d "
+            "(older recording format)",
+            serial_ch,
+            fallback_ch,
+        )
+        ag = _try_discover(fallback_ch)
+        if ag is not None:
+            logger.info(
+                "Audio(s) discovered (using fallback channel %02d)", fallback_ch
+            )
+        else:
+            logger.error(
+                "Audio group discovery failed: neither channel %02d nor %02d found",
+                serial_ch,
+                fallback_ch,
+            )
+            return 2
 
     try:
         targets = build_targets(video_dir, segments, cameras, target_pairs)
@@ -1364,6 +1401,12 @@ if __name__ == "__main__":
         help="Explicit segment+camera pair to process (repeatable). Format: <segment>::<camera>.",
     )
     parser.add_argument(
+        "--serial-channel",
+        type=int,
+        default=None,
+        help="Override the serial data channel number (default: auto-detect from site config, with fallback).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -1378,7 +1421,8 @@ if __name__ == "__main__":
         "--split",
         dest="do_split",
         action="store_true",
-        help="Batch mode: split the serial MP3 into chunks, then decode+merge (manifest used automatically).",
+        default=None,
+        help="Force split→decode→merge path. If omitted, auto-detects based on file size.",
     )
     parser.add_argument(
         "--split-chunk-seconds",
@@ -1459,6 +1503,7 @@ if __name__ == "__main__":
         target_pairs=args.target_pairs,
         log_level=args.log_level,
         skip_decode=args.skip_decode,
+        serial_channel=args.serial_channel,
         do_split=args.do_split,
         split_chunk_seconds=args.split_chunk_seconds,
         split_overwrite=args.split_overwrite,
