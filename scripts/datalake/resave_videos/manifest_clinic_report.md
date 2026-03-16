@@ -9,9 +9,11 @@
 
 | Category | Files |
 |----------|------:|
-| Actionable (in manifest_clinic.csv) | 3,038 |
+| Actionable (in manifest_clinic.csv) | 3,030 |
 | Skipped (in manifest_clinic_skipped.csv) | 176 |
-| **Grand Total** | **3,214** |
+| **Grand Total** | **3,206** |
+
+Note: `test*`/`TEST*` patient directories (8 files) are excluded from the manifest.
 
 ## Actionable Files by Category
 
@@ -21,8 +23,8 @@
 | Both wrong | Yes | Yes | 3 | reencode + rename |
 | Both correct | No | No | 502 | copy to new location |
 | **Total reencode** | | | **2,536** | |
-| **Total copy** | | | **502** | |
-| **All actionable** | | | **3,038** | **230.4 hours** |
+| **Total copy** | | | **494** | |
+| **All actionable** | | | **3,030** | **230.1 hours** |
 
 Nearly all clinic files have correct filenames (only 3 with drift). Clinic visits are
 shorter than NBU stays, so most segments are first segments where `datetime.now()` produces
@@ -53,9 +55,7 @@ the correct filename.
 | TRBD001 | 212 | 18 | 230 | 14.8 |
 | TRBD002 | 333 | 60 | 393 | 24.7 |
 | TRBD003 | 0 | 33 | 33 | 5.4 |
-| TEST1208 | 0 | 2 | 2 | 0.0 |
-| test | 0 | 6 | 6 | 0.3 |
-| **Total** | **2,536** | **502** | **3,038** | **230.4** |
+| **Total** | **2,536** | **494** | **3,030** | **230.1** |
 
 ### Skipped
 
@@ -76,5 +76,6 @@ the correct filename.
 - 63 clinic directories discovered across both datalake roots
 - Directory layout: `<root>/<patient>/clinic/<date>/video/FLIR/`
 - 3 cameras at Jamail (vs 6-8 at NBU), hence lower file counts
-- AA001, AA007, AA009, AA010, TEST1208, test are patients not seen in the NBU manifest
+- AA001, AA007, AA009, AA010 are patients not seen in the NBU manifest
+- `test*`/`TEST*` directories are excluded (test data, not real patients)
 - The 104 ffprobe failures are candidates for the video recovery pipeline

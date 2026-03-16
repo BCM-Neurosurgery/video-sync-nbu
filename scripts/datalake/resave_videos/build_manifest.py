@@ -38,6 +38,7 @@ FPS_TOLERANCE = 1.0  # |fps - TARGET_FPS| > tolerance → re-encode
 UTC = ZoneInfo("UTC")
 _RE_TIMESTAMP_TAIL = re.compile(r"_(\d{8}_\d{6})$")
 _RE_FIXED_SUFFIX = re.compile(r"_fixed\.mp4$", re.IGNORECASE)
+_RE_TEST_PATIENT = re.compile(r"^test", re.IGNORECASE)
 
 
 # ── Data types ──────────────────────────────────────────────────────
@@ -95,6 +96,8 @@ def _discover_nbu(roots: list[Path]) -> list[DirInfo]:
         for patient_dir in sorted(root.iterdir()):
             if not patient_dir.is_dir():
                 continue
+            if _RE_TEST_PATIENT.match(patient_dir.name):
+                continue
             nbu = patient_dir / "NBU"
             if not nbu.is_dir():
                 continue
@@ -131,6 +134,8 @@ def _discover_clinic(roots: list[Path]) -> list[DirInfo]:
             continue
         for patient_dir in sorted(root.iterdir()):
             if not patient_dir.is_dir():
+                continue
+            if _RE_TEST_PATIENT.match(patient_dir.name):
                 continue
             clinic = patient_dir / "clinic"
             if not clinic.is_dir():
