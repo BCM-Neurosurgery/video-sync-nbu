@@ -37,14 +37,16 @@ segment of each session is always correct (set by `datetime.now()`). Affected pe
 | File | Purpose |
 |------|---------|
 | `build_manifest.py` | Phase 0: scan datalake, probe each MP4, classify into reencode/remux/copy/skip |
-| `build_manifest.sh` | Shell wrapper to run `build_manifest.py` on elias |
+| `build_manifest.sh` | Shell wrapper for NBU manifest |
+| `build_manifest_clinic.sh` | Shell wrapper for clinic (Jamail) manifest |
 | `fix_video.py` | Phase 1: per-chunk worker that re-encodes, remuxes, or copies based on manifest |
-| `fix_videos.sbatch` | Phase 2: SLURM job array definition (247 tasks, 100 files each) |
+| `fix_videos.sbatch` | Phase 2: SLURM job array definition |
 | `fix_videos.sh` | Shell wrapper to submit the SLURM job array |
-| `manifest.csv` | Output of Phase 0 — 24,601 actionable files (generated on server, not committed) |
-| `manifest_skipped.csv` | Output of Phase 0 — 1,813 skipped files (generated on server, not committed) |
-| `manifest_report.md` | Summary statistics and verification of manifest results |
-| `status/` | Per-task status CSVs written by `fix_video.py` (generated on server) |
+| `manifest.csv` | NBU manifest — 24,630 actionable files (on server, not committed) |
+| `manifest_clinic.csv` | Clinic manifest — 3,038 actionable files (on server, not committed) |
+| `manifest_nbu_report.md` | NBU manifest statistics and verification |
+| `manifest_clinic_report.md` | Clinic manifest statistics and verification |
+| `status/` | Per-task status CSVs written by `fix_video.py` (on server) |
 
 ## How to Run
 
