@@ -930,12 +930,22 @@ def run_pipeline(
         )
         return 0
 
-    try:
-        run_folder_id, run_root = _allocate_run_dir(artifact_root, preferred_id=run_id)
-    except (ValueError, FileExistsError) as e:
-        logger.error("Unable to allocate run output folder: %s", e)
-        return 3
-    logger.info("Run %s output root: %s", run_folder_id, run_root)
+    # When --run-id is provided (WebUI), create runs/runNNNN/ subfolder.
+    # Otherwise (CLI), write directly to --out-dir for simpler output.
+    if run_id is not None:
+        try:
+            run_folder_id, run_root = _allocate_run_dir(
+                artifact_root, preferred_id=run_id
+            )
+        except (ValueError, FileExistsError) as e:
+            logger.error("Unable to allocate run output folder: %s", e)
+            return 3
+        logger.info("Run %s output root: %s", run_folder_id, run_root)
+    else:
+        run_folder_id = "cli"
+        run_root = artifact_root
+        logger.info("Output root: %s", run_root)
+
     selected_pairs = _flatten_target_pairs(ordered_targets)
     _write_run_manifest(
         run_root=run_root,
