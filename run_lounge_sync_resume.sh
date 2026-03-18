@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Resume TRBD001 2026-02-19 lounge sync from segment 102334 onward.
-# The first 7 segments (091142–101318) were synced in a previous run.
+# Resume TRBD001 2026-02-19 lounge sync from segment 101318 onward.
+# Segments 091142–100302 (6 segments, all 8 cameras) were fully synced in run0001.
+# Segment 101318 was interrupted (7/8 cameras done, missing 25290590).
 # Uses --skip-decode to reuse the existing decoded serial CSV.
+#
+# Note: old output is in runs/run0001/. This run writes flat to out-dir
+# since --run-id is not used (CLI mode).
 #
 # Run on elias in a tmux session:
 #   cd /scratch/yewen/BCM/video-sync-nbu
@@ -19,6 +23,6 @@ python -m scripts.cli.cli_nbu \
   --out-dir "$OUT_DIR" \
   --site nbu_lounge \
   --skip-decode \
-  --resume-from-segment TRBD001_20260219_102334 \
+  --resume-from-segment TRBD001_20260219_101318 \
   --log-level INFO \
   "$@"
