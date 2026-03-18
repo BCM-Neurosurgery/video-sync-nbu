@@ -303,7 +303,17 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
     prepared_dir = artifact_root / "audio_prepared" / "merged_segments"
     prepared_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clear only files we own from previous runs.
+    # Reuse existing merged files if they match the expected channel count
+    existing_merged = sorted(prepared_dir.glob("merged-*.wav"))
+    if existing_merged and len(existing_merged) == len(grouped):
+        logger.info(
+            "Reusing %d existing merged channel file(s) at %s",
+            len(existing_merged),
+            prepared_dir.name,
+        )
+        return prepared_dir
+
+    # Clear stale files from previous runs before re-merging
     for stale in prepared_dir.glob("merged-*.wav"):
         stale.unlink(missing_ok=True)
     for stale in prepared_dir.glob("merged-*.json"):
