@@ -40,6 +40,86 @@ from scripts.models import AudioGroup, Video
 logger = logging.getLogger(__name__)
 
 
+# ── Hardware encoder detection ───────────────────────────────────────
+
+_hw_encoder: str | None = None  # cached result
+
+
+def _detect_hw_encoder() -> str:
+    """Detect the best available H.264 encoder. Cached after first call.
+
+    Priority: h264_nvenc (NVIDIA) > h264_videotoolbox (Apple) > libx264 (CPU).
+    """
+    global _hw_encoder
+    if _hw_encoder is not None:
+        return _hw_encoder
+
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except Exception:
+        _hw_encoder = "libx264"
+        return _hw_encoder
+
+    for encoder in ("h264_nvenc", "h264_videotoolbox"):
+        if encoder in out:
+            _hw_encoder = encoder
+            logger.info("Using hardware encoder: %s", encoder)
+            return _hw_encoder
+
+    _hw_encoder = "libx264"
+    logger.info("No hardware encoder found, using libx264 (CPU)")
+    return _hw_encoder
+
+
+def _h264_encode_args() -> list[str]:
+    """Return ffmpeg args for H.264 encoding using the best available encoder."""
+    encoder = _detect_hw_encoder()
+    if encoder == "h264_nvenc":
+        return [
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p6",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            "19",
+            "-b:v",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    elif encoder == "h264_videotoolbox":
+        return [
+            "-c:v",
+            "h264_videotoolbox",
+            "-q:v",
+            "70",
+            "-profile:v",
+            "high",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    else:
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+
+
 @dataclass
 class ClipWindow:
     start: int
@@ -167,21 +247,9 @@ def mux_video_audio(
     ]
 
     if fps is not None:
-        # Enforce CFR by re-encoding video. Keep this conservative & fast.
-        cmd += [
-            "-r",
-            f"{fps:.6f}",
-            "-vsync",
-            "cfr",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-        ]
+        # Enforce CFR by re-encoding video with best available encoder.
+        cmd += ["-r", f"{fps:.6f}", "-vsync", "cfr"]
+        cmd += _h264_encode_args()
     else:
         # Preserve original video stream/timestamps
         cmd += ["-c:v", "copy"]
@@ -313,14 +381,7 @@ def clip_video_by_frames(
         "-vsync",
         "vfr",
         "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
+        *_h264_encode_args(),
         str(out_path),
     ]
 
