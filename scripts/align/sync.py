@@ -88,11 +88,7 @@ def clip_program_audio(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         base = f"atrim=start={start_sec:.9f}:end={end_sec:.9f},asetpts=PTS-STARTPTS"
-        filt = (
-            base
-            if out_fs is None
-            else f"{base},aresample=sample_rate={out_fs}:resampler=soxr"
-        )
+        filt = base if out_fs is None else f"{base},aresample=sample_rate={out_fs}"
         logger.info("Trimming %s → %s", in_path.name, out_path.name)
         cmd = [
             "ffmpeg",
