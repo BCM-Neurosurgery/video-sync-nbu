@@ -25,16 +25,18 @@ Notes
 """
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Tuple, Union
 import shutil
 import subprocess
 
+from scripts.align.output_template import DEFAULT_TEMPLATE, format_synced_tag
 from scripts.index.audiodiscover import AudioDiscoverer
+from scripts.index.common import DEFAULT_TZ
 from scripts.models import AudioGroup, Video
 
 logger = logging.getLogger(__name__)
@@ -420,6 +422,7 @@ def sync_one_video(
     anchors_json: Union[str, Path],
     out_audio_dir: Union[str, Path],
     out_video_dir: Union[str, Path],
+    output_template: str | None = None,
 ) -> Path:
     """
     Programmatic API to sync exactly one (segment_id, cam_serial) pair using anchors,
@@ -472,7 +475,7 @@ def sync_one_video(
     fs = int(ag.serial_audio.sample_rate)
     audio_len_samples = int(fs * float(ag.serial_audio.duration))
 
-    tag = f"{video.segment_id}.serial{cam_serial}"
+    log_label = f"{video.segment_id}:{cam_serial}"
     logger.info(
         "Syncing single video: segment=%s, cam=%s → %s",
         video.segment_id,
@@ -495,7 +498,7 @@ def sync_one_video(
         raise RuntimeError(
             f"No anchors found for segment '{video.segment_id}' cam '{cam_serial}'."
         )
-    logger.info("%s: %d anchors", tag, len(cand))
+    logger.info("%s: %d anchors", log_label, len(cand))
 
     # ---- Compute matched window ---------------------------------------------
     mw = compute_window_from_anchors(
@@ -507,12 +510,25 @@ def sync_one_video(
     # Expect mw: s0, s1 (audio sample indices); fid0, fid1 (inclusive frame ids); fps (CFR)
     logger.info(
         "%s: matched window audio=[%d, %d) frames=[%d..%d] @ %.6f fps",
-        tag,
+        log_label,
         mw.s0,
         mw.s1,
         mw.fid0,
         mw.fid1,
         mw.fps,
+    )
+
+    # ---- Build output tag from template -------------------------------------
+    # Compute synced clip start time from authoritative JSON metadata.
+    # Both mw.fid0 and mw.fps are in the same (post-padding) reference frame.
+    # start_realtime is UTC; convert to local time for filename timestamps.
+    synced_start_utc = video.start_realtime + timedelta(seconds=mw.fid0 / mw.fps)
+    synced_start = synced_start_utc.astimezone(DEFAULT_TZ)
+    tag = format_synced_tag(
+        template=output_template or DEFAULT_TEMPLATE,
+        segment_id=video.segment_id,
+        cam_serial=cam_serial,
+        synced_start=synced_start,
     )
 
     # ---- Prepare outputs -----------------------------------------------------
@@ -528,7 +544,9 @@ def sync_one_video(
     )
 
     # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
-    clip_mp4 = out_video / f"{tag}_clip.mp4"
+    work_dir = out_video.parent / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    clip_mp4 = work_dir / f"{tag}_clip.mp4"
     logger.info(
         "%s: clipping video frames [%d..%d] @ %.6f fps → %s",
         tag,
@@ -540,77 +558,10 @@ def sync_one_video(
     clip_video_by_frames(vpath, mw.fid0, mw.fid1, mw.fps, clip_mp4)
 
     # 3) Mux: copy (clipped) video timing, add program audio
-    out_path = out_video / f"{tag}_synced.mp4"
+    out_path = out_video / f"{tag}.mp4"
     logger.info("%s: muxing video+audio → %s", tag, out_path.name)
     # If muxer supports it, letting fps=None preserves the clipped video timestamps.
     mux_video_audio(clip_mp4, a1_clip, a2_clip, fps=None, out_path=out_path)
 
     logger.info("Single-video sync complete → %s", out_path.name)
     return out_path.resolve()
-
-
-# ---------------------------------------------------------------------------
-# CLI — single segment/camera sync
-# ---------------------------------------------------------------------------
-
-
-def cmd_sync_one(args: argparse.Namespace) -> int:
-    """Anchor-driven sync for exactly one (segment_id, cam_serial) pair."""
-    try:
-        out_path = sync_one_video(
-            audio_dir=args.audio_dir,
-            video_dir=args.video_dir,
-            segment_id=str(args.segment_id),
-            cam_serial=str(args.cam_serial),
-            anchors_json=args.anchors,
-            out_audio_dir=args.out_audio,
-            out_video_dir=args.out_video,
-            serial_channel=args.serial_channel,
-        )
-        logger.info("Wrote %s", out_path)
-        return 0
-    except Exception as e:
-        logger.exception(e)
-        return 2
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="sync",
-        description="Audio/Video sync orchestrator (models.py + discover.py)",
-    )
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    one = sub.add_parser(
-        "sync-one",
-        help="Sync exactly one (segment_id, cam_serial) using anchors; trims A1/A2 and muxes",
-    )
-    one.add_argument("--audio-dir", required=True)
-    one.add_argument("--video-dir", required=True)
-    one.add_argument("--serial-channel", type=int, default=3)
-    one.add_argument("--segment-id", required=True, help="Target segment/group id")
-    one.add_argument("--cam-serial", required=True, help="Target camera serial")
-    one.add_argument("--anchors", required=True, help="Path to anchors JSON")
-    one.add_argument("--out-audio", required=True)
-    one.add_argument("--out-video", required=True)
-    one.set_defaults(func=cmd_sync_one)
-
-    return p
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
-    try:
-        return args.func(args)
-    except Exception as e:
-        logger.exception(e)
-        return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

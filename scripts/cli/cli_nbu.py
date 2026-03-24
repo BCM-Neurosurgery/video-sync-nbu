@@ -478,7 +478,7 @@ def concatenate_segments_for_camera(
     video_paths = []
     for seg_id in sorted(segments):
         seg_dir = parent_out / seg_id / cam_serial / "synced_video"
-        synced_videos = list(seg_dir.glob(f"{seg_id}.serial{cam_serial}_synced.mp4"))
+        synced_videos = list(seg_dir.glob("*.mp4"))
         if synced_videos:
             video_paths.append(synced_videos[0])
 
@@ -703,6 +703,7 @@ def run_pipeline(
     audio_sample_start: int | None = None,
     audio_sample_end: int | None = None,
     run_id: int | None = None,
+    output_template: str | None = None,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -983,6 +984,7 @@ def run_pipeline(
             cam_serials=cam_list,
             filtered_csv=filtered_csv,
             overwrite_clips=overwrite_clips,
+            output_template=output_template,
         )
         if summary["fail"]:
             failures += 1
@@ -1069,6 +1071,7 @@ def process_segment(
     filtered_csv: Path,
     *,
     overwrite_clips: bool,
+    output_template: str | None = None,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
     segment_out = parent_out / seg_id
@@ -1346,6 +1349,7 @@ def process_segment(
                         anchors_json=padded_anchors,
                         out_audio_dir=cam_out / "synced_audio",
                         out_video_dir=cam_out / "synced_video",
+                        output_template=output_template,
                     )
                 except SyncError as e:
                     clog.error("sync failed: %s", e)
@@ -1508,6 +1512,19 @@ if __name__ == "__main__":
         default=None,
         help="Optional external run identifier (used by WebUI to align output folder naming).",
     )
+    parser.add_argument(
+        "--output-template",
+        type=str,
+        default=None,
+        help=(
+            "Template for synced video filenames (without .mp4 extension). Placeholders: "
+            "{segment_id}, {patient}, {cam_serial}, {datetime}, {date}, {time}. "
+            "The {datetime}/{date}/{time} values reflect the synced clip start, "
+            "not the recording start. "
+            "Default: '{segment_id}.serial{cam_serial}_synced' "
+            "(e.g. TRBD001_20250603_133409.serial23512909_synced.mp4)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1537,5 +1554,6 @@ if __name__ == "__main__":
         audio_sample_start=args.audio_sample_start,
         audio_sample_end=args.audio_sample_end,
         run_id=args.run_id,
+        output_template=args.output_template,
     )
     raise SystemExit(rc)
