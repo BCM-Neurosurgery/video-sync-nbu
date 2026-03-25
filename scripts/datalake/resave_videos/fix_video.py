@@ -29,7 +29,13 @@ log = logging.getLogger(__name__)
 
 
 def _reencode(src: Path, dst: Path) -> subprocess.CompletedProcess:
-    """Re-encode video to 30 FPS using NVIDIA h264_nvenc."""
+    """Re-encode video to 30 FPS using NVIDIA h264_nvenc.
+
+    The -r 30 BEFORE -i overrides the container's wrong FPS metadata
+    (~39.58) so ffmpeg interprets the input as 30 FPS.  This keeps all
+    frames and produces the correct (longer) real-time duration instead
+    of dropping ~24 % of frames to match the original wrong duration.
+    """
     return subprocess.run(
         [
             "ffmpeg",
@@ -38,16 +44,14 @@ def _reencode(src: Path, dst: Path) -> subprocess.CompletedProcess:
             "warning",
             "-hwaccel",
             "cuda",
+            "-r",
+            "30",
             "-i",
             str(src),
             "-c:v",
             "h264_nvenc",
             "-preset",
             "p4",
-            "-r",
-            "30",
-            "-fps_mode",
-            "cfr",
             str(dst),
         ],
         check=True,

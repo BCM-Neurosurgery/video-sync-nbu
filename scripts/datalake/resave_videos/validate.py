@@ -47,6 +47,7 @@ def validate_row(row: dict) -> dict:
     json_ts = row["json_timestamp"]
     was_reencoded = row["needs_reencode"] == "True"
     was_renamed = row["timestamp_mismatch"] == "True"
+    src_frame_count = int(row.get("frame_count") or 0)
 
     result = {
         "dst_path": str(dst),
@@ -54,6 +55,8 @@ def validate_row(row: dict) -> dict:
         "exists": False,
         "fps_ok": "",
         "fps_actual": "",
+        "frames_ok": "",
+        "frames_actual": "",
         "filename_ok": "",
         "status": "pending",
         "errors": [],
@@ -66,24 +69,41 @@ def validate_row(row: dict) -> dict:
         return result
     result["exists"] = True
 
-    # Check 2: FPS (only for re-encoded files)
+    # Probe once, reuse for checks 2 and 3
+    vfp = None
     if was_reencoded:
         try:
             vfp = VideoFileParser(dst)
-            fps = vfp.fps
-            result["fps_actual"] = f"{fps:.3f}"
-            if abs(fps - TARGET_FPS) <= FPS_TOLERANCE:
-                result["fps_ok"] = "pass"
-            else:
-                result["fps_ok"] = "FAIL"
-                result["errors"].append(f"fps={fps:.3f}")
         except Exception as e:
             result["fps_ok"] = "FAIL"
+            result["frames_ok"] = "FAIL"
             result["errors"].append(f"ffprobe error: {str(e)[:200]}")
-    else:
+
+    # Check 2: FPS (only for re-encoded files)
+    if was_reencoded and vfp is not None:
+        fps = vfp.fps
+        result["fps_actual"] = f"{fps:.3f}"
+        if abs(fps - TARGET_FPS) <= FPS_TOLERANCE:
+            result["fps_ok"] = "pass"
+        else:
+            result["fps_ok"] = "FAIL"
+            result["errors"].append(f"fps={fps:.3f}")
+    elif not was_reencoded:
         result["fps_ok"] = "skip"
 
-    # Check 3: filename timestamp (only for renamed files)
+    # Check 3: frame count (only for re-encoded files with known source count)
+    if was_reencoded and vfp is not None and src_frame_count > 0:
+        dst_frames = vfp.frame_count
+        result["frames_actual"] = str(dst_frames)
+        if dst_frames == src_frame_count:
+            result["frames_ok"] = "pass"
+        else:
+            result["frames_ok"] = "FAIL"
+            result["errors"].append(f"frames: src={src_frame_count}, dst={dst_frames}")
+    elif not was_reencoded:
+        result["frames_ok"] = "skip"
+
+    # Check 4: filename timestamp (only for renamed files)
     if was_renamed and json_ts:
         actual_ts = _extract_filename_timestamp(str(dst))
         if actual_ts == json_ts:
@@ -106,6 +126,8 @@ REPORT_FIELDS = [
     "exists",
     "fps_ok",
     "fps_actual",
+    "frames_ok",
+    "frames_actual",
     "filename_ok",
     "status",
     "errors",
