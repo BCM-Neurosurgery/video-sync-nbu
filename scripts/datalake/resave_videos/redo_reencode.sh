@@ -21,6 +21,7 @@ MANIFEST_CLINIC=scripts/datalake/resave_videos/manifest_clinic.csv
 
 extract_reencode_paths() {
     awk -F',' '
+        { gsub(/\r/, "") }
         NR==1 { for(i=1;i<=NF;i++) {if($i=="action") a=i; if($i=="dst_path") d=i} next }
         $a=="reencode" { print $d }
     ' "$1"
