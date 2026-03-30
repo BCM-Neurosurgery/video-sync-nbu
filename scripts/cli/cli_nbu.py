@@ -499,7 +499,7 @@ def concatenate_segments_for_camera(
             f.write(f"file '{abs_path}'\n")
 
     # Output concatenated video
-    output_path = concat_dir / f"{cam_serial}_synced_concat.mp4"
+    output_path = concat_dir / f"{video_paths[0].stem}_concat.mp4"
     if output_path.exists():
         output_path.unlink()
 
