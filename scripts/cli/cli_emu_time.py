@@ -270,20 +270,16 @@ def _resolve_first_chunk_nev(
     stitched_nev: Path,
     *,
     first_chunk_mapping: Optional[Dict[str, str]] = None,
-    stitched_base: Optional[Path] = None,
-    chunk_base: Optional[Path] = None,
+    stitched_base: Path,
+    chunk_base: Path,
 ) -> Path:
     """Return the path to the first chunk NEV for a stitched NEV.
 
-    Tries the pre-loaded JSON map first.  Falls back to the DataJoint
-    subprocess if the map is not provided or the key is missing.
+    Tries the pre-loaded JSON map first.  Falls back to a direct DataJoint
+    query if the map is not provided or the key is missing.
     """
     # --- Fast path: JSON map lookup ---
-    if (
-        first_chunk_mapping is not None
-        and stitched_base is not None
-        and chunk_base is not None
-    ):
+    if first_chunk_mapping is not None:
         result = resolve_from_map(
             first_chunk_mapping, stitched_nev, stitched_base, chunk_base
         )
@@ -295,29 +291,25 @@ def _resolve_first_chunk_nev(
             stitched_nev,
         )
 
-    # --- Slow path: DB subprocess ---
-    script = (
-        Path(__file__).resolve().parent.parent
-        / "dj"
-        / "find_first_nev_from_stitched.py"
-    )
-    if not script.exists():
-        raise FileNotFoundError(
-            f"find_first_nev_from_stitched.py not found at {script}"
-        )
-    proc = subprocess.run(
-        [sys.executable, str(script), str(stitched_nev)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if proc.returncode != 0:
-        message = proc.stderr.strip() or "unknown error"
-        raise RuntimeError(f"find_first_nev_from_stitched failed: {message}")
-    output = proc.stdout.strip()
-    if not output:
-        raise RuntimeError("find_first_nev_from_stitched returned no path")
-    return Path(output)
+    # --- Slow path: direct DataJoint query ---
+    try:
+        import datajoint as dj
+        from scripts.dj.connect import connect
+        from scripts.dj.find_first_nev_from_stitched import fetch_start_chunk_abs
+    except ImportError as exc:
+        raise RuntimeError(
+            "datajoint is not installed and no first-chunk map is available. "
+            "Either install datajoint or provide --first-nev-map."
+        ) from exc
+
+    connect()
+    conn = dj.conn()
+    result, found = fetch_start_chunk_abs(conn, stitched_nev, stitched_base, chunk_base)
+    if not found:
+        raise RuntimeError(f"Stitched NEV not found in DataJoint: {stitched_nev}")
+    if result is None:
+        raise RuntimeError(f"Start chunk path missing in DataJoint for: {stitched_nev}")
+    return result
 
 
 def discover_task_contexts(
@@ -325,8 +317,8 @@ def discover_task_contexts(
     keywords: Optional[Sequence[str]],
     *,
     first_chunk_mapping: Optional[Dict[str, str]] = None,
-    stitched_base: Optional[Path] = None,
-    chunk_base: Optional[Path] = None,
+    stitched_base: Path,
+    chunk_base: Path,
 ) -> List[TaskContext]:
     """Discover NS5 tasks and calibrate their UTC range via the first NEV chunk."""
     contexts: List[TaskContext] = []
@@ -1802,10 +1794,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     LOGGER.info("Validated video directory structure under %s", video_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- Resolve base paths (used by both map and DB paths) ---
+    stitched_base = patient_dir.parent
+    chunk_base = (
+        args.chunk_base.resolve()
+        if args.chunk_base
+        else Path(dj_settings.DATALAKE_PATH)
+    )
+
     # --- Load first-chunk map (optional; falls back to DB if absent) ---
     first_chunk_mapping: Optional[Dict[str, str]] = None
-    stitched_base: Optional[Path] = None
-    chunk_base: Optional[Path] = None
 
     map_path = args.first_nev_map
     if map_path is None:
@@ -1816,17 +1814,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if map_path is not None:
         try:
             first_chunk_mapping = load_first_chunk_map(map_path)
-            stitched_base = map_path.parent
-            chunk_base = (
-                args.chunk_base.resolve()
-                if args.chunk_base
-                else Path(dj_settings.DATALAKE_PATH)
-            )
             LOGGER.info(
-                "Using first-chunk map (%d entries) from %s (chunk_base=%s)",
+                "Using first-chunk map (%d entries) from %s",
                 len(first_chunk_mapping),
                 map_path,
-                chunk_base,
             )
         except (FileNotFoundError, RuntimeError) as exc:
             LOGGER.warning(
@@ -1834,6 +1825,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
     else:
         LOGGER.info("No first-chunk map found; will query DataJoint for each task")
+
+    LOGGER.info("stitched_base=%s, chunk_base=%s", stitched_base, chunk_base)
 
     contexts = discover_task_contexts(
         patient_dir,
