@@ -24,6 +24,8 @@ class TimeSyncRunConfig:
     room_mic: str = "roommic1"
     log_level: str = "INFO"
     overwrite: bool = False
+    first_nev_map: Optional[Path] = None
+    chunk_base: Optional[Path] = None
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> "TimeSyncRunConfig":
@@ -71,6 +73,13 @@ class TimeSyncRunConfig:
             if name_str:
                 name = name_str
 
+        first_nev_map_raw = payload.get("first_nev_map")
+        first_nev_map = (
+            Path(str(first_nev_map_raw)).expanduser() if first_nev_map_raw else None
+        )
+        chunk_base_raw = payload.get("chunk_base")
+        chunk_base = Path(str(chunk_base_raw)).expanduser() if chunk_base_raw else None
+
         return cls(
             patient_dir=Path(str(payload["patient_dir"])).expanduser(),
             video_dir=Path(str(payload["video_dir"])).expanduser(),
@@ -83,6 +92,8 @@ class TimeSyncRunConfig:
             room_mic=str(payload.get("room_mic", "roommic1")),
             log_level=str(payload.get("log_level", "INFO")),
             overwrite=_as_bool(payload.get("overwrite", False)),
+            first_nev_map=first_nev_map,
+            chunk_base=chunk_base,
         )
 
     def as_cli_args(self) -> List[str]:
@@ -107,6 +118,10 @@ class TimeSyncRunConfig:
                 args.extend(["--cam-serial", serial])
         if self.overwrite:
             args.append("--overwrite")
+        if self.first_nev_map is not None:
+            args.extend(["--first-nev-map", str(self.first_nev_map)])
+        if self.chunk_base is not None:
+            args.extend(["--chunk-base", str(self.chunk_base)])
         return args
 
     @property
