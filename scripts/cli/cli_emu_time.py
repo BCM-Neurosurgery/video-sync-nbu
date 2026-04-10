@@ -399,10 +399,46 @@ def _iter_date_dirs(video_dir: Path) -> List[Path]:
     return valid_dirs
 
 
-def _iter_segment_entries(video_dir: Path):
-    """Yield segment IDs with their JSON companions and per-camera MP4s."""
+def _bisect_first_overlap(json_paths: List[Path], window_start: datetime) -> int:
+    """Binary-search for the first segment whose end realtime >= *window_start*.
+
+    Opens O(log N) JSON files instead of scanning all N linearly.
+    Returns the index into *json_paths* from which to start iterating.
+    """
+    lo, hi = 0, len(json_paths)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        try:
+            jp = JsonParser(str(json_paths[mid]))
+            end_rt = jp.get_end_realtime()
+        except Exception:
+            # Can't parse — be conservative, search left.
+            hi = mid
+            continue
+        if end_rt is not None and end_rt < window_start:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def _iter_segment_entries(video_dir: Path, window_start: datetime):
+    """Yield segment IDs with their JSON companions and per-camera MP4s.
+
+    Uses binary search within each date directory to skip segments that
+    end before *window_start* (opens O(log N) JSONs instead of all N).
+    """
     for date_dir in _iter_date_dirs(video_dir):
-        for json_path in sorted(date_dir.glob("*.json")):
+        json_paths = sorted(date_dir.glob("*.json"))
+        start_idx = _bisect_first_overlap(json_paths, window_start)
+        LOGGER.debug(
+            "Binary search in %s: skipping %d/%d segments before window",
+            date_dir.name,
+            start_idx,
+            len(json_paths),
+        )
+        json_paths = json_paths[start_idx:]
+        for json_path in json_paths:
             seg_id = json_path.stem
             mp4s: Dict[str, Path] = {}
             for mp4_path in date_dir.glob(f"{seg_id}.*.mp4"):
@@ -570,7 +606,9 @@ def collect_videos_by_time(
             return "after"
         return "include"
 
-    for seg_id, _date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
+    for seg_id, _date_dir, json_path, mp4s in _iter_segment_entries(
+        video_dir, window_start=window_start
+    ):
         ts = FilePatterns.parse_tail_datetime(seg_id)
         try:
             jp = JsonParser(str(json_path))
