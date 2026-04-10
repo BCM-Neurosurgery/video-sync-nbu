@@ -38,6 +38,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from scripts.ffutil import h264_encode_args, hwaccel_decode_args
 from scripts.log.logutils import configure_standalone_logging, log_context
 from scripts.parsers.videofileparser import VideoFileParser
 from scripts.models import Video
@@ -162,6 +163,7 @@ def _spawn_decoder(video: Path) -> subprocess.Popen:
         "-nostdin",
         "-loglevel",
         "error",
+        *hwaccel_decode_args(),
         "-i",
         str(video),
         "-map",
@@ -179,7 +181,7 @@ def _spawn_decoder(video: Path) -> subprocess.Popen:
 
 
 def _spawn_encoder(
-    out_path: Path, width: int, height: int, target_fps: float, crf: int, preset: str
+    out_path: Path, width: int, height: int, target_fps: float
 ) -> subprocess.Popen:
     # With raw input, specify -r BEFORE -i to interpret incoming frames at target_fps (CFR).
     cmd = [
@@ -200,14 +202,7 @@ def _spawn_encoder(
         "-i",
         "-",  # stdin raw frames
         "-an",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-preset",
-        str(preset),
-        "-crf",
-        str(crf),
+        *h264_encode_args(),
         str(out_path),
     ]
     log.debug("Encoder cmd: %s", " ".join(cmd))
@@ -341,7 +336,7 @@ def apply_video_padding_plan(
 
         # Spawn processes
         dec = _spawn_decoder(video_path)
-        enc = _spawn_encoder(out_path, src_w, src_h, target_fps, crf=crf, preset=preset)
+        enc = _spawn_encoder(out_path, src_w, src_h, target_fps)
         if not dec.stdout or not enc.stdin:
             dec.kill()
             enc.kill()

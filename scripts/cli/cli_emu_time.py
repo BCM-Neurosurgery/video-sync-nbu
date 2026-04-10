@@ -38,6 +38,7 @@ from scipy.io.wavfile import write as wav_write
 
 from scripts.align.sync import clip_video_by_frames
 from scripts.analysis.video_analysis import FrameIDAnalysisResult, analyze_video
+from scripts.ffutil import h264_encode_args, hwaccel_decode_args
 from scripts.index.filepatterns import FilePatterns
 from scripts.models import CamJson, RoomAudio, StitchedNS5, Video
 from scripts.scan.find_camera_serials import find_shared_camera_serials
@@ -1040,21 +1041,24 @@ def pad_video_if_needed(
     padded_dir = work_dir / "padded"
     padded_dir.mkdir(parents=True, exist_ok=True)
 
+    # Probe the clip to get its actual fps (may differ from source if
+    # clip_video encoded at a pre-computed target fps).
+    probe = VideoFileParser(str(clip_path))
+    clip_fps = float(probe.fps)
+
     plan_payload = {
         "version": 1,
         "segment_id": plan.video.segment_id,
         "cam_serial": plan.video.cam_serial,
         "source_video": str(clip_path),
-        "source_fps": float(plan.video.frame_rate),
-        "target_fps": float(plan.video.frame_rate),
+        "source_fps": clip_fps,
+        "target_fps": clip_fps,
         "policy": "dup-prev",
         "total_insertions": int(sum(op["insert"] for op in ops)),
         "operations": ops,
     }
     plan_json = padded_dir / f"{clip_path.stem}-videopad.json"
     plan_json.write_text(json.dumps(plan_payload, indent=2), encoding="utf-8")
-
-    probe = VideoFileParser(str(clip_path))
     cam_json = CamJson(
         cam_serial=plan.video.cam_serial,
         timestamp=plan.video.timestamp,
@@ -1083,8 +1087,17 @@ def pad_video_if_needed(
     return padded_path
 
 
-def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Path:
-    """Trim the source video to the frames described by the clip plan."""
+def clip_video(
+    plan: VideoSegmentClipPlan,
+    out_dir: Path,
+    overwrite: bool,
+    target_fps: Optional[float] = None,
+) -> Path:
+    """Trim the source video to the frames described by the clip plan.
+
+    When *target_fps* is provided the clip is encoded at that frame rate
+    so downstream muxing can stream-copy instead of re-encoding.
+    """
     _ensure_tool("ffmpeg")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1096,19 +1109,13 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
         plan.frame_ids[-1],
     )
 
-    real_times: Optional[Sequence[datetime]] = None
-    if video.companion_json and getattr(video.companion_json, "real_times", None):
-        existing = video.companion_json.real_times
-        if existing and isinstance(existing[0], datetime):
-            real_times = existing
-        else:
-            real_times = _coerce_real_times(existing)
-
     fps = float(video.frame_rate or 0.0)
     if fps <= 0:
         raise ValueError(
             f"Video {video.path} missing frame rate and realtime metadata for clipping"
         )
+
+    encode_fps = target_fps if target_fps is not None else fps
 
     start_frame = int(plan.frame_ids[0])
     end_frame = int(plan.frame_ids[-1])
@@ -1121,7 +1128,9 @@ def clip_video(plan: VideoSegmentClipPlan, out_dir: Path, overwrite: bool) -> Pa
     if out_path.exists() and not overwrite:
         return out_path
 
-    return clip_video_by_frames(Path(video.path), start_frame, end_frame, fps, out_path)
+    return clip_video_by_frames(
+        Path(video.path), start_frame, end_frame, encode_fps, out_path
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1197,7 @@ def concat_videos(
         "-loglevel",
         "error",
         "-y" if overwrite else "-n",
+        *hwaccel_decode_args(),
         "-f",
         "concat",
         "-safe",
@@ -1196,14 +1206,7 @@ def concat_videos(
         str(concat_file),
         "-vsync",
         "passthrough",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
+        *h264_encode_args(),
         "-an",
         str(out_path),
     ]
@@ -1220,78 +1223,40 @@ def concat_videos(
 def mux_audio(
     video_path: Path, audio_path: Path, out_path: Path, overwrite: bool
 ) -> Tuple[Path, float]:
+    """Mux video with audio using stream-copy for video (no re-encode).
+
+    The video is assumed to already be encoded at the correct target CFR
+    by the upstream clip step, so we only need to add the audio track.
+    """
     _ensure_tool("ffmpeg")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # --- Measure audio duration exactly ---
-    with wave.open(str(audio_path), "rb") as wav_in:
-        audio_frames = wav_in.getnframes()
-        audio_rate = wav_in.getframerate()
-    if audio_rate <= 0:
-        raise RuntimeError("Invalid audio sample rate when muxing")
-    audio_duration = audio_frames / float(audio_rate)
-    if audio_duration <= 0:
-        raise RuntimeError("Invalid audio duration when muxing")
-
-    # --- Probe merged video for frame count (we keep every frame) ---
     video_probe = VideoFileParser(str(video_path))
-    frame_count = int(video_probe.frame_count)
-    video_duration = float(video_probe.duration)
-    if frame_count <= 0 or video_duration <= 0:
-        raise RuntimeError("Invalid video probe data when muxing")
-
-    # --- Compute CFR that matches audio duration with NO frame drop ---
-    #     All frames preserved; timestamps rewritten onto a CFR grid.
-    target_fps = frame_count / audio_duration
-    if not math.isfinite(target_fps) or target_fps <= 0:
-        target_fps = max(float(video_probe.fps) or 1.0, 1.0)
+    target_fps = float(video_probe.fps)
 
     LOGGER.debug(
-        "Muxing %s with %s -> CFR target_fps=%.8f (frames=%d, video_dur=%.6f, audio_dur=%.6f)",
+        "Muxing %s (stream-copy) with %s → %s",
         video_path.name,
         audio_path.name,
-        target_fps,
-        frame_count,
-        video_duration,
-        audio_duration,
+        out_path.name,
     )
-
-    # setpts=N/(fps*TB) assigns evenly-spaced timestamps: CFR, no drop/dup of originals.
-    setpts_expr = f"N/({target_fps:.12f}*TB)"
 
     cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "error",
-        "-progress",
-        "pipe:1",
-        "-nostats",
         "-y" if overwrite else "-n",
         "-i",
         str(video_path),
         "-i",
         str(audio_path),
-        # CFR enforcement (timestamps & muxer):
-        "-filter:v",
-        f"setpts={setpts_expr}",
-        "-vsync",
-        "cfr",
-        "-r",
-        f"{target_fps:.12f}",
-        # Map streams & encode
         "-map",
         "0:v:0",
         "-map",
         "1:a:0",
         "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "20",
-        "-pix_fmt",
-        "yuv420p",
+        "copy",
         "-c:a",
         "aac",
         "-b:a",
@@ -1303,48 +1268,9 @@ def mux_audio(
     ]
 
     log_path = out_path.with_suffix(f"{out_path.suffix}.ffmpeg.log")
-    ferr = log_path.open("w")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=ferr,
-        text=True,
-        encoding="utf-8",
-    )
-
-    progress_step = 0
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            continue
-        line = line.strip()
-        if line.startswith("frame="):
-            try:
-                current_frame = int(line.split("=", 1)[1])
-            except ValueError:
-                continue
-            if frame_count > 0:
-                percent = int(min(100, (current_frame * 100) // frame_count))
-                if percent >= progress_step:
-                    LOGGER.info(
-                        "Muxing %s: %d%% (%d/%d frames)",
-                        video_path.name,
-                        percent,
-                        current_frame,
-                        frame_count,
-                    )
-                    progress_step = percent + 10
-        elif line == "progress=end":
-            LOGGER.info("Muxing %s: 100%% (%d frames)", video_path.name, frame_count)
-            break
-
-    if proc.stdout is not None:
-        proc.stdout.close()
-    return_code = proc.wait()
-    ferr.close()
-    if return_code != 0:
+    with log_path.open("w") as ferr:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=ferr, text=True)
+    if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg mux failed. See log: {log_path}")
     return out_path, target_fps
 
@@ -1366,8 +1292,38 @@ def _execute_sync_plan(
         raise RuntimeError("Time sync requires a prepared audio track")
 
     diagnostics = sync_plan.diagnostics
+
+    # --- Measure audio duration once (shared across all cameras) ---
+    with wave.open(str(sync_plan.audio_path), "rb") as wav_in:
+        audio_frames = wav_in.getnframes()
+        audio_rate = wav_in.getframerate()
+    if audio_rate <= 0:
+        raise RuntimeError("Invalid audio sample rate")
+    audio_duration = audio_frames / float(audio_rate)
+    if audio_duration <= 0:
+        raise RuntimeError("Invalid audio duration")
+
     success = False
     for cam_serial, cam_plans in sorted(sync_plan.clip_plans_by_cam.items()):
+        # --- Compute target CFR fps so clips encode at the final rate ---
+        # Total frames = clipped frames + padding insertions across all segments.
+        total_frames = 0
+        for cp in cam_plans:
+            total_frames += len(cp.frame_ids)
+            for op in build_padding_operations(cp):
+                total_frames += op["insert"]
+        target_fps = total_frames / audio_duration
+        if not math.isfinite(target_fps) or target_fps <= 0:
+            target_fps = None  # fall back to source fps in clip_video
+        else:
+            LOGGER.debug(
+                "Camera %s target CFR: %.8f fps (%d frames / %.3fs audio)",
+                cam_serial,
+                target_fps,
+                total_frames,
+                audio_duration,
+            )
+
         cam_dir = out_dir / cam_serial
         work_dir = cam_dir / "work"
         clips_dir = work_dir / "clips"
@@ -1396,7 +1352,9 @@ def _execute_sync_plan(
                         )
                         analysis_result = None
 
-                clip_path = clip_video(clip_plan, clips_dir, overwrite)
+                clip_path = clip_video(
+                    clip_plan, clips_dir, overwrite, target_fps=target_fps
+                )
                 padded_path = pad_video_if_needed(clip_plan, clip_path, clips_dir)
                 clip_paths.append(padded_path)
                 clip_entry = {
