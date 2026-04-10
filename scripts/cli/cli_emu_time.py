@@ -75,7 +75,6 @@ _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
 EXPECTED_MUX_FPS = 29.96
 MUX_FPS_TOLERANCE = 0.2
-_MAX_SEGMENT_DURATION = timedelta(minutes=45)
 _DATE_PRUNE_BUFFER = timedelta(days=1)
 
 
@@ -411,8 +410,10 @@ def _iter_date_dirs(
     Parameters
     ----------
     date_range : optional (start_date, end_date)
-        When provided, skip directories whose date falls outside
-        ``[start - 1 day, end + 1 day]``.
+        When provided, skip directories whose start date falls after
+        ``end + 1 day``.  Directories *before* the window are never
+        pruned because a session starting on an earlier date may
+        contain recordings that extend into the target window.
     validate : bool
         When *True* (default), glob for ``*.json`` / ``*.mp4`` in each dir
         and check for stray files.  Set to *False* when the caller will
@@ -436,9 +437,6 @@ def _iter_date_dirs(
             )
         if date_range is not None:
             dir_date = date(int(sub.name[:4]), int(sub.name[4:6]), int(sub.name[6:8]))
-            if dir_date < date_range[0] - _DATE_PRUNE_BUFFER:
-                LOGGER.debug("Skipping date dir %s (before window)", sub.name)
-                continue
             if dir_date > date_range[1] + _DATE_PRUNE_BUFFER:
                 LOGGER.debug("Skipping date dir %s (after window); stopping", sub.name)
                 break
@@ -638,13 +636,6 @@ def collect_videos_by_time(
         video_dir, date_range=date_range
     ):
         ts = FilePatterns.parse_tail_datetime(seg_id)
-
-        # Coarse pre-filter on filename timestamp (free — no NFS I/O).
-        if ts is not None:
-            if ts + _MAX_SEGMENT_DURATION < window_start:
-                continue
-            if ts > window_end + _MAX_SEGMENT_DURATION:
-                break
 
         try:
             jp = JsonParser(str(json_path))
