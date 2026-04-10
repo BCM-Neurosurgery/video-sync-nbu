@@ -68,10 +68,37 @@ def _detect_hw_encoder() -> str:
         return _hw_encoder
 
     for encoder in ("h264_nvenc", "h264_videotoolbox"):
-        if encoder in out:
+        if encoder not in out:
+            continue
+        # Probe whether the encoder actually works (e.g. GPU present).
+        probe = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "nullsrc=s=64x64:d=0.1",
+                "-c:v",
+                encoder,
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        if probe.returncode == 0:
             _hw_encoder = encoder
             logger.info("Using hardware encoder: %s", encoder)
             return _hw_encoder
+        logger.debug(
+            "Encoder %s compiled-in but not usable: %s",
+            encoder,
+            probe.stderr.decode(errors="replace").strip(),
+        )
 
     _hw_encoder = "libx264"
     logger.info("No hardware encoder found, using libx264 (CPU)")
