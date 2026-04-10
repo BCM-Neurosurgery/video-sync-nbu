@@ -459,18 +459,54 @@ def _iter_date_dirs(
     return valid_dirs
 
 
+def _bisect_first_overlap(json_paths: List[Path], window_start: datetime) -> int:
+    """Binary-search for the first segment whose end realtime >= *window_start*.
+
+    Opens O(log N) JSON files instead of scanning all N linearly.
+    Returns the index into *json_paths* from which to start iterating.
+    """
+    lo, hi = 0, len(json_paths)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        try:
+            jp = JsonParser(str(json_paths[mid]))
+            end_rt = jp.get_end_realtime()
+        except Exception:
+            # Can't parse — be conservative, search left.
+            hi = mid
+            continue
+        if end_rt is not None and end_rt < window_start:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def _iter_segment_entries_lazy(
     video_dir: Path,
     date_range: Optional[Tuple[date, date]] = None,
+    window_start: Optional[datetime] = None,
 ):
     """Yield ``(seg_id, date_dir, json_path)`` without globbing for MP4s.
 
     Skips date directories outside *date_range* and defers MP4 discovery
     to the caller so that only segments passing the time filter incur the
-    NFS readdir cost.
+    NFS readdir cost.  When *window_start* is provided, uses binary search
+    within each date directory to skip segments that end before the window
+    (opens O(log N) JSONs instead of yielding all N for linear scan).
     """
     for date_dir in _iter_date_dirs(video_dir, date_range=date_range, validate=False):
-        for json_path in sorted(date_dir.glob("*.json")):
+        json_paths = sorted(date_dir.glob("*.json"))
+        if window_start is not None:
+            start_idx = _bisect_first_overlap(json_paths, window_start)
+            LOGGER.debug(
+                "Binary search in %s: skipping %d/%d segments before window",
+                date_dir.name,
+                start_idx,
+                len(json_paths),
+            )
+            json_paths = json_paths[start_idx:]
+        for json_path in json_paths:
             yield json_path.stem, date_dir, json_path
 
 
@@ -633,7 +669,7 @@ def collect_videos_by_time(
 
     date_range = (window_start.date(), window_end.date())
     for seg_id, seg_date_dir, json_path in _iter_segment_entries_lazy(
-        video_dir, date_range=date_range
+        video_dir, date_range=date_range, window_start=window_start
     ):
         ts = FilePatterns.parse_tail_datetime(seg_id)
 
