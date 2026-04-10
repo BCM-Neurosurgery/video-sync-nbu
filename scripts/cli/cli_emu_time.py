@@ -29,7 +29,7 @@ import subprocess
 import sys
 import wave
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -75,6 +75,8 @@ _REALTIME_STRICT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 DATE_DIR_RE = re.compile(r"\d{8}")
 EXPECTED_MUX_FPS = 29.96
 MUX_FPS_TOLERANCE = 0.2
+_MAX_SEGMENT_DURATION = timedelta(minutes=45)
+_DATE_PRUNE_BUFFER = timedelta(days=1)
 
 
 @dataclass(frozen=True)
@@ -399,8 +401,23 @@ def discover_task_contexts(
 # ---------------------------------------------------------------------------
 
 
-def _iter_date_dirs(video_dir: Path) -> List[Path]:
-    """Return sorted YYYYMMDD subdirectories that contain MP4/JSON assets."""
+def _iter_date_dirs(
+    video_dir: Path,
+    date_range: Optional[Tuple[date, date]] = None,
+    validate: bool = True,
+) -> List[Path]:
+    """Return sorted YYYYMMDD subdirectories that contain MP4/JSON assets.
+
+    Parameters
+    ----------
+    date_range : optional (start_date, end_date)
+        When provided, skip directories whose date falls outside
+        ``[start - 1 day, end + 1 day]``.
+    validate : bool
+        When *True* (default), glob for ``*.json`` / ``*.mp4`` in each dir
+        and check for stray files.  Set to *False* when the caller will
+        discover files itself (avoids redundant NFS readdir calls).
+    """
 
     if not video_dir.exists() or not video_dir.is_dir():
         raise FileNotFoundError(f"Video directory not found: {video_dir}")
@@ -417,35 +434,46 @@ def _iter_date_dirs(video_dir: Path) -> List[Path]:
             raise RuntimeError(
                 f"Unexpected subdirectory '{sub.name}' in video dir; expected YYYYMMDD folders."
             )
-        jsons = list(sub.glob("*.json"))
-        mp4s = list(sub.glob("*.mp4"))
-        if not jsons or not mp4s:
-            raise RuntimeError(
-                f"Date folder '{sub.name}' must contain both MP4 and JSON files."
-            )
+        if date_range is not None:
+            dir_date = date(int(sub.name[:4]), int(sub.name[4:6]), int(sub.name[6:8]))
+            if dir_date < date_range[0] - _DATE_PRUNE_BUFFER:
+                LOGGER.debug("Skipping date dir %s (before window)", sub.name)
+                continue
+            if dir_date > date_range[1] + _DATE_PRUNE_BUFFER:
+                LOGGER.debug("Skipping date dir %s (after window); stopping", sub.name)
+                break
+        if validate:
+            jsons = list(sub.glob("*.json"))
+            mp4s = list(sub.glob("*.mp4"))
+            if not jsons or not mp4s:
+                raise RuntimeError(
+                    f"Date folder '{sub.name}' must contain both MP4 and JSON files."
+                )
         valid_dirs.append(sub)
 
-    stray_files = [p for p in video_dir.iterdir() if p.is_file()]
-    if stray_files:
-        raise RuntimeError(
-            "Video directory should not contain files directly; only date subdirectories."
-        )
+    if validate:
+        stray_files = [p for p in video_dir.iterdir() if p.is_file()]
+        if stray_files:
+            raise RuntimeError(
+                "Video directory should not contain files directly; only date subdirectories."
+            )
 
     return valid_dirs
 
 
-def _iter_segment_entries(video_dir: Path):
-    """Yield segment IDs with their JSON companions and per-camera MP4s."""
-    for date_dir in _iter_date_dirs(video_dir):
+def _iter_segment_entries_lazy(
+    video_dir: Path,
+    date_range: Optional[Tuple[date, date]] = None,
+):
+    """Yield ``(seg_id, date_dir, json_path)`` without globbing for MP4s.
+
+    Skips date directories outside *date_range* and defers MP4 discovery
+    to the caller so that only segments passing the time filter incur the
+    NFS readdir cost.
+    """
+    for date_dir in _iter_date_dirs(video_dir, date_range=date_range, validate=False):
         for json_path in sorted(date_dir.glob("*.json")):
-            seg_id = json_path.stem
-            mp4s: Dict[str, Path] = {}
-            for mp4_path in date_dir.glob(f"{seg_id}.*.mp4"):
-                parsed = FilePatterns.parse_video_filename(mp4_path)
-                if parsed:
-                    _, cam = parsed
-                    mp4s[str(cam)] = mp4_path
-            yield seg_id, date_dir, json_path, mp4s
+            yield json_path.stem, date_dir, json_path
 
 
 def _as_int_list(seq: Optional[Iterable[object]]) -> Optional[List[int]]:
@@ -605,8 +633,19 @@ def collect_videos_by_time(
             return "after"
         return "include"
 
-    for seg_id, _date_dir, json_path, mp4s in _iter_segment_entries(video_dir):
+    date_range = (window_start.date(), window_end.date())
+    for seg_id, seg_date_dir, json_path in _iter_segment_entries_lazy(
+        video_dir, date_range=date_range
+    ):
         ts = FilePatterns.parse_tail_datetime(seg_id)
+
+        # Coarse pre-filter on filename timestamp (free — no NFS I/O).
+        if ts is not None:
+            if ts + _MAX_SEGMENT_DURATION < window_start:
+                continue
+            if ts > window_end + _MAX_SEGMENT_DURATION:
+                break
+
         try:
             jp = JsonParser(str(json_path))
         except Exception as exc:
@@ -630,6 +669,14 @@ def collect_videos_by_time(
             continue
         if decision == "after":
             break
+
+        # Discover per-camera MP4s only for segments that passed the time filter.
+        mp4s: Dict[str, Path] = {}
+        for mp4_path in seg_date_dir.glob(f"{seg_id}.*.mp4"):
+            parsed = FilePatterns.parse_video_filename(mp4_path)
+            if parsed:
+                _, cam = parsed
+                mp4s[str(cam)] = mp4_path
 
         serials_from_json = jp.get_camera_serials()
         serial_map = {str(s): s for s in serials_from_json}
