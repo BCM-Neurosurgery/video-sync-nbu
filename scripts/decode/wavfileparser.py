@@ -174,9 +174,7 @@ class WavSerialDecoder:
 
         if data.ndim == 2:
             if data.shape[1] != 1:
-                raise ValueError(
-                    f"Expected mono WAV (1 channel), got {data.shape[1]}"
-                )
+                raise ValueError(f"Expected mono WAV (1 channel), got {data.shape[1]}")
             data = data[:, 0]
         self.n_channels = 1
 
@@ -249,10 +247,24 @@ class WavSerialDecoder:
         cfg["stride"] = int(cfg["block_stride"])
         return cfg
 
-    def _normalize01(self, sig: np.ndarray) -> Optional[np.ndarray]:
-        """Normalize 1-D signal to [0,1]; return None if the signal is flat."""
-        s_min = float(sig.min())
-        s_max = float(sig.max())
+    def _normalize01(
+        self,
+        sig: np.ndarray,
+        norm_range: Optional[Tuple[float, float]] = None,
+    ) -> Optional[np.ndarray]:
+        """Normalize 1-D signal to [0,1]; return None if the signal is flat.
+
+        If *norm_range* is provided, use those (min, max) values instead of
+        deriving them from *sig*.  This is essential when decoding chunks of
+        a larger recording separately (e.g. Reaper-split WAVs), so that each
+        chunk's binarization threshold maps to the same absolute audio level
+        as it would if the whole recording were decoded as one file.
+        """
+        if norm_range is not None:
+            s_min, s_max = float(norm_range[0]), float(norm_range[1])
+        else:
+            s_min = float(sig.min())
+            s_max = float(sig.max())
         if s_max <= s_min:
             return None
         return (sig - s_min) / (s_max - s_min)
@@ -310,6 +322,7 @@ class WavSerialDecoder:
         self,
         site: str = "jamail",
         threshold: float = 0.5,
+        norm_range: Optional[Tuple[float, float]] = None,
     ) -> Tuple[List[int], DecodeStats]:
         """Decode frame IDs with the MATLAB block method.
 
@@ -323,9 +336,14 @@ class WavSerialDecoder:
 
         Also records per-frame sample indices (start inclusive, end exclusive)
         into `self.frame_ranges` in chronological order.
+
+        If *norm_range* is provided, normalization uses the given (min, max)
+        instead of deriving them from this file.  Use this when decoding
+        chunks of a larger recording (e.g. Reaper splits) so that the
+        absolute binarization threshold matches across chunks.
         """
         cfg = self._get_cfg(site)
-        sig01 = self._normalize01(self.audio)
+        sig01 = self._normalize01(self.audio, norm_range=norm_range)
         if sig01 is None:
             # Reset frame ranges when nothing decoded
             self.frame_ranges = []
@@ -376,10 +394,15 @@ class WavSerialDecoder:
 
     # ---------------------- High-level API ----------------------
     def parse_counts(
-        self, site: str = "jamail", threshold: float = 0.5
+        self,
+        site: str = "jamail",
+        threshold: float = 0.5,
+        norm_range: Optional[Tuple[float, float]] = None,
     ) -> Tuple[List[int], DecodeStats]:
         """Decode with MATLAB-style block method only."""
-        return self.decode_by_block(site=site, threshold=threshold)
+        return self.decode_by_block(
+            site=site, threshold=threshold, norm_range=norm_range
+        )
 
     def save_counts_csv(
         self,
