@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import wave
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -112,16 +113,24 @@ def merge_channel_wavs(
         cmd = [
             ffmpeg,
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_path,
-            "-c", "copy",
-            "-rf64", "auto",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_path,
+            "-c",
+            "copy",
+            "-rf64",
+            "auto",
             str(output_path),
         ]
         logging.debug("ffmpeg merge cmd: %s", " ".join(cmd))
         proc = subprocess.run(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         if proc.returncode != 0:
             raise RuntimeError(
@@ -138,11 +147,30 @@ def merge_channel_wavs(
         output_path,
     )
 
+    # Build per-segment manifest with cumulative sample offsets so the decoder
+    # can later decode each Reaper WAV independently and merge the per-file
+    # CSVs at the same sample positions as the merged WAV's timeline.
+    segments: list[dict] = []
+    cumulative = 0
+    for info in ordered_files:
+        with wave.open(str(info.path), "rb") as wf:
+            n_samples = wf.getnframes()
+        segments.append(
+            {
+                "file": info.path.name,
+                "path": str(info.path.resolve()),
+                "start_sample": cumulative,
+                "n_samples": n_samples,
+            }
+        )
+        cumulative += n_samples
+
     metadata_path = output_path.with_suffix(".json")
     metadata = {
         "channel": channel,
         "merged_file": output_path.name,
         "source_files": [str(info.path) for info in ordered_files],
+        "segments": segments,
     }
     metadata_path.write_text(json.dumps(metadata, indent=2))
     logging.debug("Wrote metadata for channel %s to %s", channel, metadata_path)
