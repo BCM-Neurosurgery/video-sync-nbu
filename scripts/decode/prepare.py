@@ -59,14 +59,6 @@ def _prepare_serial_csv_per_file(
     Reaper WAV) and ``start_sample`` (cumulative sample offset in the merged
     timeline).  Returns the path to the merged ``raw.csv``; the caller still
     runs gapfill + filter.
-
-    Normalization is performed against the **global** min/max computed across
-    all source files.  This is critical: the block decoder normalizes each
-    input to [0,1] using min/max, then applies a fixed threshold (0.5) to
-    binarize.  If each file were normalized independently, files with
-    narrower dynamic range (e.g. 0958 and 1036 in the Jamail recording) would
-    map the threshold to a different absolute audio level, causing the bit
-    sampler to land on wrong positions and produce systematic decode errors.
     """
     audio_decoded_dir = artifact_root / "audio_decoded"
     audio_decoded_dir.mkdir(parents=True, exist_ok=True)
@@ -77,36 +69,8 @@ def _prepare_serial_csv_per_file(
     for stale in split_decoded.glob("*.csv"):
         stale.unlink(missing_ok=True)
 
-    # First pass: instantiate each decoder (loads the audio) and compute the
-    # global min/max across all source files.  We keep the decoder instances
-    # so we do not re-read the audio in the second pass.
-    decoders: list[tuple[dict, WavSerialDecoder]] = []
-    global_min = float("inf")
-    global_max = float("-inf")
-    for seg in serial_segments:
-        wav_path = Path(seg["path"])
-        logger.info("Loading %s for global range scan", wav_path.name)
-        dec = WavSerialDecoder(str(wav_path))
-        fmin = float(dec.audio.min())
-        fmax = float(dec.audio.max())
-        if fmin < global_min:
-            global_min = fmin
-        if fmax > global_max:
-            global_max = fmax
-        decoders.append((seg, dec))
-
-    logger.info(
-        "Global normalization range across %d source files: min=%.6f max=%.6f",
-        len(decoders),
-        global_min,
-        global_max,
-    )
-    norm_range = (global_min, global_max)
-
-    # Second pass: decode each file using the global normalization range so
-    # every chunk sees the same absolute binarization threshold.
     manifest_segments: list[dict] = []
-    for seg, dec in decoders:
+    for seg in serial_segments:
         wav_path = Path(seg["path"])
         offset = int(seg["start_sample"])
         csv_out = split_decoded / f"{wav_path.stem}.csv"
@@ -114,16 +78,12 @@ def _prepare_serial_csv_per_file(
         logger.info(
             "Decoding %s independently (offset=%d samples)", wav_path.name, offset
         )
-        counts, _stats = dec.parse_counts(
-            site=site, threshold=0.5, norm_range=norm_range
-        )
+        dec = WavSerialDecoder(str(wav_path))
+        counts, _stats = dec.parse_counts(site=site, threshold=0.5)
         dec.save_counts_csv(csv_out, counts, site=site, offset_samples=offset)
         logger.info("→ %s (%d rows)", csv_out.name, len(counts))
 
         manifest_segments.append({"file": csv_out.name, "start_sample": offset})
-
-    # Release decoder audio buffers before running the CSV merge.
-    decoders.clear()
 
     manifest_path = split_decoded / "_segments_manifest.json"
     manifest_path.write_text(
