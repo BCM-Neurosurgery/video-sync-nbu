@@ -67,9 +67,11 @@ def fetch_start_chunk_abs(
     """
     stitched_rel = relative_path_from_exact(stitched_exact, stitched_base)
 
+    db = settings.DATABASE_NAME
+
     # Check stitched presence
     check_cur = conn.query(
-        "SELECT 1 FROM emu24_stitch.`~external_Ext_Stitch` WHERE filepath = %s LIMIT 1",
+        f"SELECT 1 FROM `{db}`.`~external_Ext_Stitch` WHERE filepath = %s LIMIT 1",
         (stitched_rel,),
     )
     stitched_found = check_cur.fetchone() is not None
@@ -79,10 +81,10 @@ def fetch_start_chunk_abs(
     # Fetch start chunk relative path
     query = [
         "SELECT start_ext.filepath AS start_rel_path",
-        "FROM emu24_stitch.`__stitched_chunks` AS s",
-        "JOIN emu24_stitch.`~external_Ext_Stitch` AS ext ON s.nev_file = ext.hash",
-        "LEFT JOIN emu24_stitch.`__n_s_p_chunks` AS start_chunk ON start_chunk.file = s.start_filename",
-        "LEFT JOIN emu24_stitch.`~external_Ext_Chunk` AS start_ext ON start_chunk.nev_file = start_ext.hash",
+        f"FROM `{db}`.`__stitched_chunks` AS s",
+        f"JOIN `{db}`.`~external_Ext_Stitch` AS ext ON s.nev_file = ext.hash",
+        f"LEFT JOIN `{db}`.`__n_s_p_chunks` AS start_chunk ON start_chunk.file = s.start_filename",
+        f"LEFT JOIN `{db}`.`~external_Ext_Chunk` AS start_ext ON start_chunk.nev_file = start_ext.hash",
         "WHERE ext.filepath = %s",
         "LIMIT 1",
     ]
