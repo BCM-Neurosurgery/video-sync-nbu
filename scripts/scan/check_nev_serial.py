@@ -51,17 +51,22 @@ def _check_file(path: Path, *, preview_count: int = 3) -> Tuple[bool, str]:
 
         try:
             chunk_df = nev.get_chunk_serial_df()
-            previews = chunk_df["chunk_serial"].tolist()[:preview_count]
-        except Exception:
-            previews = []
+        except Exception as exc:
+            return False, f"has unparsed data but get_chunk_serial_df() failed: {exc}"
 
-        if previews:
-            preview_str = ", ".join(str(val) for val in previews)
-            LOGGER.info("%s: first serial values %s", path.name, preview_str)
-        else:
-            LOGGER.info("%s: serial data present (no preview available)", path.name)
+        if chunk_df.empty:
+            return False, "has unparsed data but no valid 5-row serial groups found"
 
-        return True, "serial data present"
+        previews = chunk_df["chunk_serial"].tolist()[:preview_count]
+        preview_str = ", ".join(str(val) for val in previews)
+        LOGGER.info(
+            "%s: %d serial chunks, first values: %s",
+            path.name,
+            len(chunk_df),
+            preview_str,
+        )
+
+        return True, f"serial data present ({len(chunk_df)} chunks)"
     except Exception as exc:  # pragma: no cover - defensive guard
         return False, f"error parsing NEV: {exc}"
 
