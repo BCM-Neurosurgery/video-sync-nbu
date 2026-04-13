@@ -1,4 +1,6 @@
-DATABASE_NAME = "emu24_stitch"
+import os
+
+DATABASE_NAME = os.getenv("DJ_DATABASE", "emu24_stitch")
 DATALAKE_PATH = "/mnt/datalake/data/emu/"
 STITCHED_PATH = "/mnt/stitched/EMU-18112"
 LOGGING_PATH = "/mnt/lake-database/stitched-logs/datajoint_computed_table.log"
