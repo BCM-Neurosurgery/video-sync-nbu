@@ -6,6 +6,10 @@ CLI example to scan up to five NEV files inside a directory tree::
 
     python -m scripts.scan.check_nev_serial --dir /path/to/task --limit 5
 
+Use ``--random`` to randomly sample files instead of taking the first N::
+
+    python -m scripts.scan.check_nev_serial --dir /path/to/task --limit 10 --random
+
 The command returns exit code 0 when every sampled file contains serial data
 (i.e., ``Nev.has_unparsed_data()`` is true) and non-zero otherwise. The module
 also exposes :func:`check_nev_serial` for programmatic use.
@@ -16,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 import logging
+import random
 from typing import Iterable, Iterator, List, Sequence, Tuple
 from itertools import islice
 
@@ -72,12 +77,15 @@ def _check_file(path: Path, *, preview_count: int = 3) -> Tuple[bool, str]:
 
 
 def check_nev_serial(
-    directory: Path, *, limit: int = 5
+    directory: Path, *, limit: int = 5, randomize: bool = False
 ) -> Tuple[bool, List[Tuple[Path, bool, str]]]:
     """Scan up to ``limit`` NEV files and verify they contain serial data."""
 
-    files_iter = _iter_nev_files(directory)
-    selected = list(islice(files_iter, max(1, limit)))
+    if randomize:
+        all_files = list(_iter_nev_files(directory))
+        selected = random.sample(all_files, min(limit, len(all_files)))
+    else:
+        selected = list(islice(_iter_nev_files(directory), max(1, limit)))
     if not selected:
         raise FileNotFoundError(f"No NSP1-*.nev files found under {directory}")
 
@@ -108,13 +116,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=5,
         help="Maximum number of files to inspect (default: 5)",
     )
+    parser.add_argument(
+        "--random",
+        action="store_true",
+        help="Randomly sample files instead of taking the first N",
+    )
     args = parser.parse_args(argv)
 
     if not LOGGER.handlers:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
-        passed, results = check_nev_serial(args.dir, limit=args.limit)
+        passed, results = check_nev_serial(
+            args.dir, limit=args.limit, randomize=args.random
+        )
     except FileNotFoundError as exc:
         LOGGER.error(str(exc))
         return 2
