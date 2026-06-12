@@ -229,14 +229,10 @@ def _anchor_frame_time_from_video(video, anchor: AnchorEntry) -> datetime:
 
 
 def _iter_videos(video_dir: Path):
-    """Yield ``Video`` objects discovered under ``video_dir``."""
+    """Yield metadata-only video records under ``video_dir`` without ffprobe."""
 
     discoverer = VideoDiscoverer(video_dir, log=LOGGER)
-    for group in discoverer.discover():
-        if not group.videos:
-            continue
-        for video in group.videos:
-            yield video
+    yield from discoverer.iter_videos_without_probe()
 
 
 def _iter_existing_anchor_files(layout: OutputLayout) -> Iterable[Path]:
@@ -297,13 +293,13 @@ def _derive_anchor_from_videos(
 
     best: Optional[tuple[AnchorEntry, object]] = None
     processed = 0
-    LOGGER.info("Scanning videos in %s to derive anchors…", video_dir)
+    LOGGER.info("Scanning video JSON metadata in %s to derive anchors…", video_dir)
 
     for video in _iter_videos(video_dir):
         processed += 1
         if processed % 10 == 0:
             LOGGER.info(
-                "Processed %d video(s) while searching for earliest anchor",
+                "Processed %d JSON-defined camera stream(s) while searching for earliest anchor",
                 processed,
             )
         try:
