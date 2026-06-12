@@ -7,7 +7,7 @@ name = "video-sync-nbu"
 version = "0.1.0"
 description = "Audio/video synchronization toolkit for NBU datasets."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
   { name = "BCM Neurosurgery" },

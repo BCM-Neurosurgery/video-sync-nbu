@@ -14,7 +14,7 @@ Audio/video synchronization toolkit for NBU datasets, with both a CLI pipeline a
 
 ## Requirements
 
-- Python 3.10+ (3.12 recommended)
+- Python 3.11+ (3.12 recommended)
 - `ffmpeg` on `PATH`
 - OS support for your chosen Python deps in `requirements.txt`
 
