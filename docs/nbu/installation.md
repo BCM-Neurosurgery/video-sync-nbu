@@ -6,7 +6,7 @@ preview the docs locally.
 ## Prerequisites
 
 - Miniconda/Anaconda installed (or Mamba).
-- Python 3.10+ target inside Conda.
+- Python 3.11+ target inside Conda.
 - FFmpeg available on your `PATH` (used for clipping/muxing).
   - macOS: `brew install ffmpeg`
   - Ubuntu/Debian: `sudo apt-get install ffmpeg`
