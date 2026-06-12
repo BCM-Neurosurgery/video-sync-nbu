@@ -1,7 +1,7 @@
 from pathlib import Path
 import logging
 from dataclasses import replace
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Iterable, Optional, Tuple, List
 from datetime import datetime
 
 
@@ -101,15 +101,7 @@ class VideoDiscoverer(_DirMixin):
             dur, res, fps, frame_count = self._extract_video_meta(mp4_path)
             cam_key = str(cam_serial)
             companion = cam_jsons.get(cam_key) if cam_jsons else None
-            start_rt: Optional[datetime] = None
-            if companion and companion.start_realtime:
-                start_rt = companion.start_realtime
-            elif companion and companion.timestamp:
-                start_rt = companion.timestamp
-            elif ts:
-                start_rt = ts
-            else:
-                start_rt = datetime.min.replace(tzinfo=DEFAULT_TZ)
+            start_rt = self._resolve_start_realtime(companion, ts)
             if companion is None:
                 companion = CamJson(
                     cam_serial=cam_key,
@@ -137,6 +129,17 @@ class VideoDiscoverer(_DirMixin):
                 )
             )
         return videos
+
+    @staticmethod
+    def _resolve_start_realtime(
+        companion: Optional[CamJson], ts: Optional[datetime]
+    ) -> datetime:
+        if companion is not None:
+            if companion.start_realtime is not None:
+                return companion.start_realtime
+            if companion.timestamp is not None:
+                return companion.timestamp
+        return ts or datetime.min.replace(tzinfo=DEFAULT_TZ)
 
     def _extract_cam_jsons(
         self, json_path: Path, ts: Optional[datetime]
@@ -442,6 +445,54 @@ class VideoDiscoverer(_DirMixin):
             frame_count=frame_count,
             companion_json=companion,
         )
+
+    def iter_videos_without_probe(self) -> Iterable[Video]:
+        """
+        Yield ``Video`` objects with JSON companions without running ffprobe.
+
+        This preserves the normal discovery candidate set by indexing MP4
+        filenames, but it leaves duration/resolution/fps blank. It is intended
+        for workflows that only need companion JSON arrays, such as audio
+        timestamp anchor derivation.
+        """
+        json_by_seg = self._index_jsons()
+        vids_by_seg = self._index_mp4s()
+
+        for seg_id in sorted(json_by_seg, key=FilePatterns.videogroup_sort_key):
+            json_path = json_by_seg[seg_id]
+            ts = FilePatterns.parse_tail_datetime(seg_id, DEFAULT_TZ)
+            cams = vids_by_seg.get(seg_id, {})
+            _, _, cam_jsons = self._build_json_wrapper(json_path, ts)
+
+            if not cams:
+                self.log.warning(
+                    "No MP4s found for segment %s (JSON: %s)", seg_id, json_path.name
+                )
+                continue
+
+            for cam_serial, mp4_path in sorted(cams.items(), key=lambda kv: kv[0]):
+                cam_key = str(cam_serial)
+                companion = cam_jsons.get(cam_key)
+                if companion is None:
+                    self.log.warning(
+                        "Camera %s not present in JSON %s; skipping.",
+                        cam_key,
+                        json_path.name,
+                    )
+                    continue
+
+                yield Video(
+                    path=mp4_path,
+                    segment_id=seg_id,
+                    cam_serial=cam_key,
+                    timestamp=ts,
+                    start_realtime=self._resolve_start_realtime(companion, ts),
+                    duration=0.0,
+                    resolution="",
+                    frame_rate=0.0,
+                    frame_count=0,
+                    companion_json=companion,
+                )
 
     # ---- public: full directory path --------------------------------------
 
