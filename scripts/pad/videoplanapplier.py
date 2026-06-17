@@ -23,7 +23,8 @@ Supported policies
 Notes
 -----
 - Input videos are assumed to be **video-only** (no audio), as in your pipeline.
-- Output video is encoded with libx264, yuv420p, CFR at `target_fps` (from plan or override).
+- Output video is encoded with the best available H.264 encoder, yuv420p, CFR
+  at `target_fps` (from plan or override).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from scripts.utility.ffutil import h264_encode_args
 from scripts.log.logutils import configure_standalone_logging, log_context
 from scripts.parsers.videofileparser import VideoFileParser
 from scripts.models import Video
@@ -200,14 +202,7 @@ def _spawn_encoder(
         "-i",
         "-",  # stdin raw frames
         "-an",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-preset",
-        str(preset),
-        "-crf",
-        str(crf),
+        *h264_encode_args(crf=crf, preset=preset),
         str(out_path),
     ]
     log.debug("Encoder cmd: %s", " ".join(cmd))
