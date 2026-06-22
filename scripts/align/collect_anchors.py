@@ -19,6 +19,7 @@ JSON list of anchors:
     "audio_sample": <int>,
     "cam_serial": "<str>",
     "segment_id": "<str>",
+    "frame_index": <int>,
     "frame_id": <int>,
     "frame_id_reidx": <int>
   }, ...
@@ -55,6 +56,7 @@ class Anchor:
                      recorder timeline (units: samples).
     cam_serial     : Stable camera hardware serial (string).
     segment_id     : VideoGroup identifier (e.g., basename with timestamp tail).
+    frame_index    : Zero-based decoded frame index in the MP4.
     frame_id       : Raw (zero-based) frame id of that video frame.
     frame_id_reidx : Re-indexed frame id (from JSON), typically contiguous
                      after any repairs / filtering.
@@ -64,6 +66,7 @@ class Anchor:
     audio_sample: int
     cam_serial: str
     segment_id: str
+    frame_index: int
     frame_id: int
     frame_id_reidx: int
 
@@ -169,6 +172,7 @@ def _collect_anchors_for_cam(
     serials: Sequence[int],
     frame_ids: Sequence[int],
     frame_ids_reidx: Sequence[int],
+    frame_count: int | None = None,
     *,
     min_k: int = 3,
     min_span_ratio: float = 0.05,
@@ -176,15 +180,19 @@ def _collect_anchors_for_cam(
     """
     Build anchors for one (segment_id, cam_serial) pair from per-frame arrays.
 
-    Selection: frames labeled NORMAL by frame_id deltas (Δfid==1) and whose
-    serial exists in the index_map.
+    Selection: frames with usable decoded-frame indices and serials present in
+    index_map. The first frame has no predecessor to compare against, but it is
+    still a valid anchor when its serial is present.
     """
     labels = label_frames(frame_ids)
+    max_frame_count = int(frame_count) if frame_count and frame_count > 0 else None
 
     cand: List[Tuple[int, int]] = [
         (i, int(s))
         for i, (lab, s) in enumerate(zip(labels, serials))
-        if lab == "NORMAL" and s in index_map
+        if (i == 0 or lab == "NORMAL")
+        and s in index_map
+        and (max_frame_count is None or i < max_frame_count)
     ]
 
     if len(cand) < min_k:
@@ -211,6 +219,7 @@ def _collect_anchors_for_cam(
             audio_sample=int(index_map[s]),
             cam_serial=str(cam_serial),
             segment_id=str(segment_id),
+            frame_index=int(i),
             frame_id=int(frame_ids[i]),
             frame_id_reidx=int(frame_ids_reidx[i]),
         )
@@ -251,6 +260,7 @@ def save_anchors_for_camera(
     index_map = load_serial_index_csv(serial_csv)
 
     serials, frame_ids, frame_ids_reidx = _extract_cam_arrays_from_video(video)
+    frame_count = int(getattr(video, "frame_count", 0) or 0)
     anchors = _collect_anchors_for_cam(
         index_map,
         str(getattr(video, "segment_id", "")),
@@ -258,6 +268,7 @@ def save_anchors_for_camera(
         serials,
         frame_ids,
         frame_ids_reidx,
+        frame_count=frame_count,
         min_k=min_k,
         min_span_ratio=min_span_ratio,
     )
