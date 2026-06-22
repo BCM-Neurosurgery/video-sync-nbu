@@ -53,8 +53,8 @@ class ClipWindow:
 
 @dataclass
 class MatchedWindow:
-    fid0: int
-    fid1: int
+    frame0: int
+    frame1: int
     s0: int
     s1: int
     fps: float  # CFR computed from anchors (frames / audio duration)
@@ -221,14 +221,17 @@ def compute_window_from_anchors(
     if not anchors_for_video:
         raise RuntimeError("No anchors for this video")
 
-    anchors_for_video = sorted(
-        anchors_for_video, key=lambda a: int(a["frame_id_reidx"])
-    )
+    def anchor_frame_index(anchor: dict) -> int:
+        if "frame_index" in anchor and anchor["frame_index"] is not None:
+            return int(anchor["frame_index"])
+        return int(anchor["frame_id_reidx"])
+
+    anchors_for_video = sorted(anchors_for_video, key=anchor_frame_index)
     a_start, a_end = anchors_for_video[0], anchors_for_video[-1]
 
-    fid0, fid1 = int(a_start["frame_id_reidx"]), int(a_end["frame_id_reidx"])
-    if fid1 < fid0:
-        fid0, fid1 = fid1, fid0
+    frame0, frame1 = anchor_frame_index(a_start), anchor_frame_index(a_end)
+    if frame1 < frame0:
+        frame0, frame1 = frame1, frame0
 
     s0, s1 = int(a_start["audio_sample"]), int(a_end["audio_sample"])
     if s1 < s0:
@@ -247,9 +250,9 @@ def compute_window_from_anchors(
             margin_samples,
         )
 
-    n_frames = fid1 - fid0 + 1
+    n_frames = frame1 - frame0 + 1
     if n_frames <= 0:
-        raise RuntimeError(f"Invalid frame span: [{fid0}, {fid1}]")
+        raise RuntimeError(f"Invalid frame span: [{frame0}, {frame1}]")
 
     audio_dur_sec = (s1 - s0) / float(fs)
     if audio_dur_sec <= 0:
@@ -259,15 +262,15 @@ def compute_window_from_anchors(
 
     logger.info(
         "Matched window: frames [%d..%d] (n=%d), samples [%d..%d) (%.3fs), CFR=%.6f fps",
-        fid0,
-        fid1,
+        frame0,
+        frame1,
         n_frames,
         s0,
         s1,
         audio_dur_sec,
         fps,
     )
-    return MatchedWindow(fid0=fid0, fid1=fid1, s0=s0, s1=s1, fps=fps)
+    return MatchedWindow(frame0=frame0, frame1=frame1, s0=s0, s1=s1, fps=fps)
 
 
 def clip_video_by_frames(
@@ -354,7 +357,7 @@ def sync_one_video(
       1) Discover AudioGroup (A1/A2 program, A3 serial) from `audio_dir`.
       2) Load & filter anchors for (segment_id, video.cam_serial); compute matched window.
       3) Trim A1/A2 WAVs to audio window [s0, s1).
-      4) Frame-accurate clip of `video` to [fid0..fid1] at CFR = mw.fps.
+      4) Frame-accurate clip of `video` to [frame0..frame1] at CFR = mw.fps.
       5) Mux clipped video with the two program-audio tracks.
 
     Returns
@@ -428,22 +431,22 @@ def sync_one_video(
         audio_len_samples=audio_len_samples,
         margin_samples=0,
     )
-    # Expect mw: s0, s1 (audio sample indices); fid0, fid1 (inclusive frame ids); fps (CFR)
+    # Expect mw: s0, s1 (audio sample indices); frame0, frame1 (inclusive decoded frame indices); fps (CFR)
     logger.info(
         "%s: matched window audio=[%d, %d) frames=[%d..%d] @ %.6f fps",
         log_label,
         mw.s0,
         mw.s1,
-        mw.fid0,
-        mw.fid1,
+        mw.frame0,
+        mw.frame1,
         mw.fps,
     )
 
     # ---- Build output tag from template -------------------------------------
     # Compute synced clip start time from authoritative JSON metadata.
-    # Both mw.fid0 and mw.fps are in the same (post-padding) reference frame.
+    # Both mw.frame0 and mw.fps are in the same (post-padding) reference frame.
     # start_realtime is UTC; convert to local time for filename timestamps.
-    synced_start_utc = video.start_realtime + timedelta(seconds=mw.fid0 / mw.fps)
+    synced_start_utc = video.start_realtime + timedelta(seconds=mw.frame0 / mw.fps)
     synced_start = synced_start_utc.astimezone(DEFAULT_TZ)
     tag = format_synced_tag(
         template=output_template or DEFAULT_TEMPLATE,
@@ -464,19 +467,19 @@ def sync_one_video(
         a1, a2, awindow, out_audio, tag, out_fs=fs, serial_fs=fs
     )
 
-    # 2) Clip video frames [fid0..fid1] at CFR=mw.fps
+    # 2) Clip video frames [frame0..frame1] at CFR=mw.fps
     work_dir = out_video.parent / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
     clip_mp4 = work_dir / f"{tag}_clip.mp4"
     logger.info(
         "%s: clipping video frames [%d..%d] @ %.6f fps → %s",
         tag,
-        mw.fid0,
-        mw.fid1,
+        mw.frame0,
+        mw.frame1,
         mw.fps,
         clip_mp4.name,
     )
-    clip_video_by_frames(vpath, mw.fid0, mw.fid1, mw.fps, clip_mp4)
+    clip_video_by_frames(vpath, mw.frame0, mw.frame1, mw.fps, clip_mp4)
 
     # 3) Mux: copy (clipped) video timing, add program audio
     out_path = out_video / f"{tag}.mp4"
