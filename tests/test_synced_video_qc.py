@@ -128,6 +128,29 @@ class SyncedVideoQcTests(unittest.TestCase):
         self.assertTrue(any("frame count" in message for message in messages))
         self.assertTrue(any("audio duration" in message for message in messages))
 
+    def test_qc_camera_dir_records_ffprobe_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            camera_dir = Path(tmp_dir) / "SEG" / "23512909"
+            synced_dir = camera_dir / "synced_video"
+            synced_dir.mkdir(parents=True)
+            (synced_dir / "SEG.serial23512909_synced.mp4").write_text(
+                "", encoding="utf-8"
+            )
+            (camera_dir / "sync.log").write_text(
+                (
+                    "INFO Matched window: frames [1..17999] (n=17999), "
+                    "samples [220500..27509428) (618.797s), CFR=29.087104 fps"
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(qc, "probe_media", side_effect=RuntimeError("bad mp4")):
+                result = qc.qc_camera_dir(camera_dir)
+
+        self.assertEqual(result["status"], qc.STATUS_FAIL)
+        messages = [issue["message"] for issue in result["issues"]]
+        self.assertTrue(any("ffprobe failed" in message for message in messages))
+
 
 if __name__ == "__main__":
     unittest.main()

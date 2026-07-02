@@ -263,7 +263,10 @@ def qc_camera_dir(
     if video_path is None:
         issues.append(_issue(STATUS_FAIL, "media", "Synced MP4 not found."))
     else:
-        media_info = probe_media(video_path)
+        try:
+            media_info = probe_media(video_path)
+        except Exception as exc:
+            issues.append(_issue(STATUS_FAIL, "media", f"ffprobe failed: {exc}"))
 
     if sync_log.window and media_info:
         issues.extend(_window_media_issues(sync_log.window, media_info, thresholds))
