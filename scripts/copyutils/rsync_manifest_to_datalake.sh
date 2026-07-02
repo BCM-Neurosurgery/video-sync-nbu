@@ -16,7 +16,7 @@ set -euo pipefail
 
 REMOTE="auto"
 ALLOWED_SOURCE_ROOT="/scratch/yewen/BCM"
-ALLOWED_DEST_ROOT="/mnt/datalake/data/TRBD-53761"
+ALLOWED_DEST_ROOT="/mnt/datalake/data/TRBD-53761/TRBD001/NBU"
 SOURCE_DIR=""
 DEST_DIR=""
 FILES_FROM=""
@@ -82,6 +82,15 @@ local_file_size() {
   fi
 }
 
+local_file_sha256() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    shasum -a 256 "$path" | awk '{print $1}'
+  fi
+}
+
 require_arg "--source-dir" "$SOURCE_DIR"
 require_arg "--dest-dir" "$DEST_DIR"
 require_arg "--files-from" "$FILES_FROM"
@@ -141,7 +150,10 @@ while IFS= read -r name; do
     echo "source file missing: $SOURCE_DIR/$name" >&2
     exit 1
   fi
-  printf '%s\t%s\n' "$name" "$(local_file_size "$SOURCE_DIR/$name")" >> "$TMP_SIZES"
+  printf '%s\t%s\t%s\n' \
+    "$name" \
+    "$(local_file_size "$SOURCE_DIR/$name")" \
+    "$(local_file_sha256 "$SOURCE_DIR/$name")" >> "$TMP_SIZES"
 done < "$TMP_MANIFEST"
 
 echo "PRECHECK"
@@ -163,7 +175,7 @@ fi
 if [[ ! -d "\$DST" ]]; then
   echo "DEST_DIR_MISSING_WOULD_CREATE	\$DST"
 fi
-while IFS=\$'\\t' read -r name src_size; do
+while IFS=\$'\\t' read -r name src_size src_sha256; do
   target="\$DST/\$name"
   if [[ -e "\$target" ]]; then
     dst_size=\$(stat -c '%s' "\$target")
@@ -171,7 +183,13 @@ while IFS=\$'\\t' read -r name src_size; do
       echo "DEST_TOO_LARGE	\$name	dst=\$dst_size	src=\$src_size"
       bad=1
     elif (( dst_size == src_size )); then
-      echo "DEST_COMPLETE	\$name	\$dst_size"
+      dst_sha256=\$(sha256sum "\$target" | awk '{print \$1}')
+      if [[ "\$dst_sha256" == "\$src_sha256" ]]; then
+        echo "DEST_COMPLETE	\$name	\$dst_size	sha256=\$dst_sha256"
+      else
+        echo "DEST_SAME_SIZE_DIFFERENT	\$name	size=\$dst_size	src_sha256=\$src_sha256	dst_sha256=\$dst_sha256"
+        bad=1
+      fi
     else
       echo "DEST_PARTIAL	\$name	dst=\$dst_size	src=\$src_size"
     fi
@@ -195,7 +213,7 @@ RSYNC_ARGS=(
   --progress
   --partial
   --append-verify
-  --size-only
+  --checksum
   --no-perms
   --no-owner
   --no-group
@@ -217,15 +235,27 @@ set -euo pipefail
 DST='$DEST_DIR'
 expected='$EXPECTED_COUNT'
 validate_ffprobe='$VALIDATE_FFPROBE'
-missing=0
+copy_validation_fail=0
 ffprobe_fail=0
 total=0
-while IFS= read -r name; do
+while IFS=\$'\\t' read -r name src_size src_sha256; do
   total=\$((total + 1))
   target="\$DST/\$name"
   if [[ ! -f "\$target" ]]; then
     echo "DEST_MISSING_AFTER_COPY	\$name"
-    missing=\$((missing + 1))
+    copy_validation_fail=\$((copy_validation_fail + 1))
+    continue
+  fi
+  dst_size=\$(stat -c '%s' "\$target")
+  if (( dst_size != src_size )); then
+    echo "DEST_SIZE_MISMATCH_AFTER_COPY	\$name	dst=\$dst_size	src=\$src_size"
+    copy_validation_fail=\$((copy_validation_fail + 1))
+    continue
+  fi
+  dst_sha256=\$(sha256sum "\$target" | awk '{print \$1}')
+  if [[ "\$dst_sha256" != "\$src_sha256" ]]; then
+    echo "DEST_SHA256_MISMATCH_AFTER_COPY	\$name	src_sha256=\$src_sha256	dst_sha256=\$dst_sha256"
+    copy_validation_fail=\$((copy_validation_fail + 1))
     continue
   fi
   if [[ "\$validate_ffprobe" == "1" ]]; then
@@ -235,14 +265,14 @@ while IFS= read -r name; do
     fi
   fi
 done <<'FILES'
-$(cat "$TMP_MANIFEST")
+$(cat "$TMP_SIZES")
 FILES
 echo "manifest_total=\$total"
 echo "manifest_expected=\$expected"
-echo "missing_after_copy=\$missing"
+echo "copy_validation_fail=\$copy_validation_fail"
 echo "ffprobe_fail=\$ffprobe_fail"
 test "\$total" -eq "\$expected"
-test "\$missing" -eq 0
+test "\$copy_validation_fail" -eq 0
 test "\$ffprobe_fail" -eq 0
 REMOTE_VALIDATE
 fi
