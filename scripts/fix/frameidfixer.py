@@ -4,6 +4,8 @@ import numpy as np
 
 
 class FrameIDFixer(SerialFixer):
+    WRAP_VALUE = 65535
+    WRAP_THRESHOLD = WRAP_VALUE // 2
 
     def fix(self, series: List[int]) -> List[int]:
         """
@@ -11,8 +13,9 @@ class FrameIDFixer(SerialFixer):
         after 65535 instead of rolling over.
 
         Logic:
-        - Assume the only decreases are true rollovers.
-        - Start counter at 0; whenever a drop is observed, counter += 1.
+        - Treat only large decreases as true rollovers.
+        - Small decreases can happen from local out-of-order frame-id glitches
+          and must not shift the rest of the recording by a full counter cycle.
         - Add 65535 * counter to each element.
         """
         if not series:
@@ -23,9 +26,10 @@ class FrameIDFixer(SerialFixer):
 
         counter = 0
         for i in range(1, len(s)):
-            if s[i - 1] > s[i]:
+            drop = s[i - 1] - s[i]
+            if drop > self.WRAP_THRESHOLD:
                 counter += 1
             counters[i] = counter
 
-        fixed = s + 65535 * counters
+        fixed = s + self.WRAP_VALUE * counters
         return fixed.tolist()

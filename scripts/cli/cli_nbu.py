@@ -704,6 +704,7 @@ def run_pipeline(
     audio_sample_end: int | None = None,
     run_id: int | None = None,
     output_template: str | None = None,
+    disable_video_padding: bool = False,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -985,6 +986,7 @@ def run_pipeline(
             filtered_csv=filtered_csv,
             overwrite_clips=overwrite_clips,
             output_template=output_template,
+            disable_video_padding=disable_video_padding,
         )
         if summary["fail"]:
             failures += 1
@@ -1072,6 +1074,7 @@ def process_segment(
     *,
     overwrite_clips: bool,
     output_template: str | None = None,
+    disable_video_padding: bool = False,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
     segment_out = parent_out / seg_id
@@ -1130,70 +1133,77 @@ def process_segment(
                 # ---------- Video padding (always-on: only if missing frames) ----------
                 if vid_res is not None and vid_res.missing_frames > 0:
                     clog.warning("Video has %d missing frames", vid_res.missing_frames)
-                    try:
-                        # 1) From video analysis json, build a padding plan json
-                        # with the name <video>_videopad.json
+                    if disable_video_padding:
+                        clog.warning(
+                            "Video padding disabled; continuing with decoded frame indices."
+                        )
+                    else:
                         try:
-                            vid_padjson = create_video_padding_plan(
-                                analysis_json=vid_res.out_json_path,
-                                target_fps=30.0,
-                                expect_step=1,
-                                policy="dup-prev",
-                                outdir=cam_out / "work",
-                            )
-                            clog.info(
-                                "Video padding plan created → %s", _name(vid_padjson)
-                            )
-                        except VideoPaddingError as e:
-                            clog.error("Video padding plan creation failed: %s", e)
-                            summary["fail"].append(f"{cam}:video-pad-plan")
-                            vid_padjson = None
-
-                        # 2) Apply plan (if available)
-                        if vid_padjson is not None:
-                            padded_dir = cam_out / "video_padded"
-                            padded_dir.mkdir(parents=True, exist_ok=True)
-
+                            # 1) From video analysis json, build a padding plan json
+                            # with the name <video>_videopad.json
                             try:
-                                # pad and save the video
-                                # pad Video object's fixed serial with 0s
-                                # pad fixed_frames_ids, and fixed_frame_idx_reidx
-                                out_path, vid = apply_video_padding_plan(
-                                    plan_json=vid_padjson,
-                                    video=vid,
-                                    out_dir=padded_dir,
-                                    crf=20,
-                                    preset="veryfast",
-                                    override_target_fps=30.0,
+                                vid_padjson = create_video_padding_plan(
+                                    analysis_json=vid_res.out_json_path,
+                                    target_fps=30.0,
+                                    expect_step=1,
+                                    policy="dup-prev",
+                                    outdir=cam_out / "work",
                                 )
-                                if out_path.exists():
-                                    clog.info(
-                                        "Video padding plan applied → %s",
-                                        _name(out_path),
-                                    )
-                                else:
-                                    clog.error("Padded video not found after apply")
-                                    summary["fail"].append(
-                                        f"{cam}:video-pad-apply-missing"
-                                    )
+                                clog.info(
+                                    "Video padding plan created → %s", _name(vid_padjson)
+                                )
                             except VideoPaddingError as e:
-                                clog.error("Video padding apply failed: %s", e)
-                                summary["fail"].append(f"{cam}:video-pad-apply")
+                                clog.error("Video padding plan creation failed: %s", e)
+                                summary["fail"].append(f"{cam}:video-pad-plan")
+                                vid_padjson = None
 
-                            try:
-                                analyze_video(
-                                    video=vid,
-                                    outdir=padded_dir,
-                                )
-                                clog.info("Video analysis completed")
-                            except VideoAnalysisError as e:
-                                clog.error("Video analysis failed: %s", e)
-                                summary["fail"].append(f"{cam}:video-analysis-postpad")
+                            # 2) Apply plan (if available)
+                            if vid_padjson is not None:
+                                padded_dir = cam_out / "video_padded"
+                                padded_dir.mkdir(parents=True, exist_ok=True)
 
-                    except Exception as e:
-                        # Catch-all for any unexpected failure inside the padding block
-                        clog.error("Video padding step failed: %s", e)
-                        summary["fail"].append(f"{cam}:video-pad")
+                                try:
+                                    # pad and save the video
+                                    # pad Video object's fixed serial with 0s
+                                    # pad fixed_frames_ids, and fixed_frame_idx_reidx
+                                    out_path, vid = apply_video_padding_plan(
+                                        plan_json=vid_padjson,
+                                        video=vid,
+                                        out_dir=padded_dir,
+                                        crf=20,
+                                        preset="veryfast",
+                                        override_target_fps=30.0,
+                                    )
+                                    if out_path.exists():
+                                        clog.info(
+                                            "Video padding plan applied → %s",
+                                            _name(out_path),
+                                        )
+                                    else:
+                                        clog.error("Padded video not found after apply")
+                                        summary["fail"].append(
+                                            f"{cam}:video-pad-apply-missing"
+                                        )
+                                except VideoPaddingError as e:
+                                    clog.error("Video padding apply failed: %s", e)
+                                    summary["fail"].append(f"{cam}:video-pad-apply")
+
+                                try:
+                                    analyze_video(
+                                        video=vid,
+                                        outdir=padded_dir,
+                                    )
+                                    clog.info("Video analysis completed")
+                                except VideoAnalysisError as e:
+                                    clog.error("Video analysis failed: %s", e)
+                                    summary["fail"].append(
+                                        f"{cam}:video-analysis-postpad"
+                                    )
+
+                        except Exception as e:
+                            # Catch-all for any unexpected failure inside the padding block
+                            clog.error("Video padding step failed: %s", e)
+                            summary["fail"].append(f"{cam}:video-pad")
                 else:
                     clog.info("No missing frames detected; padding not needed.")
 
@@ -1476,6 +1486,14 @@ if __name__ == "__main__":
         help="Allow ffmpeg to overwrite existing clipped audio files.",
     )
     parser.add_argument(
+        "--disable-video-padding",
+        action="store_true",
+        help=(
+            "Skip video frame duplication even when frame-id gaps are detected. "
+            "Use this when the decoded MP4 frame count is authoritative."
+        ),
+    )
+    parser.add_argument(
         "--resume-from-segment",
         dest="resume_from_segment",
         help="Skip earlier segments and resume processing from this segment ID.",
@@ -1555,5 +1573,6 @@ if __name__ == "__main__":
         audio_sample_end=args.audio_sample_end,
         run_id=args.run_id,
         output_template=args.output_template,
+        disable_video_padding=args.disable_video_padding,
     )
     raise SystemExit(rc)
