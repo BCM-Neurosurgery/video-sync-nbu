@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -136,6 +137,55 @@ def clip_program_audio(
     return out_a1, out_a2
 
 
+def _probe_duration(path: Path, stream_selector: str) -> float:
+    if shutil.which("ffprobe") is None:
+        raise FileNotFoundError("ffprobe not found on PATH. Please install ffprobe.")
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        stream_selector,
+        "-show_entries",
+        "stream=duration:format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "ffprobe failed while reading duration for "
+            f"{path}.\nCommand: {' '.join(cmd)}\n{proc.stderr.strip()}"
+        )
+
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ffprobe returned invalid JSON for {path}") from exc
+
+    values = [
+        stream.get("duration")
+        for stream in payload.get("streams", [])
+        if isinstance(stream, dict)
+    ]
+    values.append(payload.get("format", {}).get("duration"))
+    for value in values:
+        if value in (None, "N/A"):
+            continue
+        duration = float(value)
+        if math.isfinite(duration) and duration > 0:
+            return duration
+
+    raise RuntimeError(f"Could not determine {stream_selector} duration for {path}")
+
+
+def _match_audio_to_duration_filter(duration_sec: float) -> str:
+    duration = f"{duration_sec:.9f}"
+    return f"atrim=duration={duration},apad=whole_dur={duration},asetpts=PTS-STARTPTS"
+
+
 def mux_video_audio(
     mp4_in: Path, a1_clip: Path, a2_clip: Path, fps: Optional[float], out_path: Path
 ) -> Path:
@@ -147,6 +197,8 @@ def mux_video_audio(
         raise FileNotFoundError("ffmpeg not found on PATH. Please install ffmpeg.")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    video_duration = _probe_duration(mp4_in, "v:0")
+    audio_filter = _match_audio_to_duration_filter(video_duration)
 
     # Base command: inputs + stream mapping (video + two audio tracks)
     cmd = [
@@ -161,12 +213,14 @@ def mux_video_audio(
         str(a1_clip),
         "-i",
         str(a2_clip),
+        "-filter_complex",
+        f"[1:a:0]{audio_filter}[a1];[2:a:0]{audio_filter}[a2]",
         "-map",
         "0:v:0",
         "-map",
-        "1:a:0",
+        "[a1]",
         "-map",
-        "2:a:0",
+        "[a2]",
     ]
 
     if fps is not None:
@@ -183,7 +237,6 @@ def mux_video_audio(
         "aac",
         "-b:a",
         "192k",
-        "-shortest",
         "-movflags",
         "+faststart",
         str(out_path),
