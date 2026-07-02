@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-import sys
-import types
 import unittest
-
-sys.modules.setdefault(
-    "tqdm", types.SimpleNamespace(tqdm=lambda values, *args, **kwargs: values)
-)
 
 from scripts.fix.frameidfixer import FrameIDFixer
 
