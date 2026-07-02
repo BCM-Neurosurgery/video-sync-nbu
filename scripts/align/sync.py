@@ -43,6 +43,8 @@ from scripts.models import AudioGroup, Video
 
 logger = logging.getLogger(__name__)
 
+MAX_AUDIO_PAD_SECONDS = 0.050
+
 
 @dataclass
 class ClipWindow:
@@ -186,6 +188,32 @@ def _match_audio_to_duration_filter(duration_sec: float) -> str:
     return f"atrim=duration={duration},apad=whole_dur={duration},asetpts=PTS-STARTPTS"
 
 
+def _assert_audio_can_cover_video(
+    video_duration_sec: float,
+    audio_clips: List[Tuple[str, Path, float]],
+    *,
+    max_pad_seconds: float = MAX_AUDIO_PAD_SECONDS,
+) -> None:
+    short_clips = []
+    for label, path, audio_duration_sec in audio_clips:
+        missing_sec = video_duration_sec - audio_duration_sec
+        if missing_sec > max_pad_seconds:
+            short_clips.append(
+                f"{label}={path} duration={audio_duration_sec:.6f}s "
+                f"short_by={missing_sec:.6f}s"
+            )
+
+    if not short_clips:
+        return
+
+    details = "; ".join(short_clips)
+    raise RuntimeError(
+        "Audio clip is shorter than video beyond allowed mux padding "
+        f"({max_pad_seconds:.3f}s). Refusing to silently pad missing audio. "
+        f"video_duration={video_duration_sec:.6f}s; {details}"
+    )
+
+
 def mux_video_audio(
     mp4_in: Path, a1_clip: Path, a2_clip: Path, fps: Optional[float], out_path: Path
 ) -> Path:
@@ -198,6 +226,15 @@ def mux_video_audio(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     video_duration = _probe_duration(mp4_in, "v:0")
+    a1_duration = _probe_duration(a1_clip, "a:0")
+    a2_duration = _probe_duration(a2_clip, "a:0")
+    _assert_audio_can_cover_video(
+        video_duration,
+        [
+            ("A1", a1_clip, a1_duration),
+            ("A2", a2_clip, a2_duration),
+        ],
+    )
     audio_filter = _match_audio_to_duration_filter(video_duration)
 
     # Base command: inputs + stream mapping (video + two audio tracks)

@@ -40,7 +40,11 @@ class SyncMuxTests(unittest.TestCase):
             out = root / "synced" / "out.mp4"
 
             with patch.object(sync.shutil, "which", return_value="/usr/bin/ffmpeg"):
-                with patch.object(sync, "_probe_duration", return_value=616.069345):
+                with patch.object(
+                    sync,
+                    "_probe_duration",
+                    side_effect=[616.069345, 616.040000, 616.069345],
+                ):
                     with patch.object(
                         sync.subprocess,
                         "run",
@@ -68,6 +72,35 @@ class SyncMuxTests(unittest.TestCase):
         self.assertIn("[a2]", cmd)
         self.assertIn("-c:v", cmd)
         self.assertEqual(cmd[cmd.index("-c:v") + 1], "copy")
+
+    def test_mux_rejects_material_audio_underrun(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            video = root / "clip.mp4"
+            audio_1 = root / "a1.wav"
+            audio_2 = root / "a2.wav"
+            out = root / "synced" / "out.mp4"
+
+            with patch.object(sync.shutil, "which", return_value="/usr/bin/ffmpeg"):
+                with patch.object(
+                    sync,
+                    "_probe_duration",
+                    side_effect=[600.0, 599.99, 599.80],
+                ):
+                    with patch.object(sync.subprocess, "run") as run_mock:
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            "Refusing to silently pad missing audio",
+                        ):
+                            sync.mux_video_audio(
+                                video,
+                                audio_1,
+                                audio_2,
+                                fps=None,
+                                out_path=out,
+                            )
+
+        run_mock.assert_not_called()
 
 
 if __name__ == "__main__":
