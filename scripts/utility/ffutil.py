@@ -8,6 +8,8 @@ from functools import lru_cache
 
 log = logging.getLogger(__name__)
 
+NVENC_CQ_OFFSET = 5
+
 
 @lru_cache(maxsize=1)
 def detect_h264_encoder() -> str:
@@ -62,6 +64,7 @@ def h264_encode_args(*, crf: int = 18, preset: str = "veryfast") -> list[str]:
     """Return ffmpeg H.264 encoding args for the best available encoder."""
     encoder = detect_h264_encoder()
     if encoder == "h264_nvenc":
+        nvenc_cq = _nvenc_cq_from_crf(crf)
         return [
             "-c:v",
             "h264_nvenc",
@@ -72,7 +75,7 @@ def h264_encode_args(*, crf: int = 18, preset: str = "veryfast") -> list[str]:
             "-rc",
             "vbr",
             "-cq",
-            str(crf),
+            str(nvenc_cq),
             "-b:v",
             "0",
             "-pix_fmt",
@@ -99,3 +102,8 @@ def h264_encode_args(*, crf: int = 18, preset: str = "veryfast") -> list[str]:
         "-pix_fmt",
         "yuv420p",
     ]
+
+
+def _nvenc_cq_from_crf(crf: int) -> int:
+    """Map libx264-style CRF input to a less aggressive NVENC CQ value."""
+    return max(0, min(51, int(crf) + NVENC_CQ_OFFSET))
