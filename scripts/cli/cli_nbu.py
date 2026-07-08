@@ -339,6 +339,26 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
     return prepared_dir
 
 
+def _missing_skip_decode_artifacts(artifact_root: Path) -> list[Path]:
+    audio_decoded_dir = artifact_root / "audio_decoded"
+    required = (
+        audio_decoded_dir / "raw.csv",
+        audio_decoded_dir / "raw-gapfilled-filtered.csv",
+    )
+    return [path for path in required if not path.exists()]
+
+
+def _preflight_skip_decode_artifacts(artifact_root: Path) -> bool:
+    missing = _missing_skip_decode_artifacts(artifact_root)
+    if not missing:
+        return True
+
+    for path in missing:
+        logger.error("--skip-decode set but missing %s", path.name)
+    logger.error("Required decoded audio artifacts missing while --skip-decode.")
+    return False
+
+
 def _write_run_manifest(
     *,
     run_root: Path,
@@ -763,6 +783,9 @@ def run_pipeline(
     artifact_root.mkdir(parents=True, exist_ok=True)
     logger.info("Run mode=%s", run_mode)
     logger.info("Artifact root: %s", artifact_root)
+
+    if skip_decode and not _preflight_skip_decode_artifacts(artifact_root):
+        return 4
 
     # Support segmented WAV naming (e.g., 01-YYMMDD_HHMM.wav) by first
     # normalizing into one canonical file per channel.
