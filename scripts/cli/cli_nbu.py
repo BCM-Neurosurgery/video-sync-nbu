@@ -254,10 +254,7 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
     Segmented layouts like ``01-YYMMDD_HHMM.wav`` are merged to:
       <artifact_root>/audio_prepared/merged_segments/merged-01.wav, ...
     """
-    if not audio_dir.exists():
-        raise AudioGroupDiscoverError(f"Audio directory does not exist: {audio_dir}")
-    if not audio_dir.is_dir():
-        raise AudioGroupDiscoverError(f"Audio path is not a directory: {audio_dir}")
+    _validate_audio_input_dir(audio_dir)
 
     audio_files = sorted(
         p
@@ -337,6 +334,13 @@ def _prepare_audio_input_dir(audio_dir: Path, artifact_root: Path) -> Path:
         _name(prepared_dir),
     )
     return prepared_dir
+
+
+def _validate_audio_input_dir(audio_dir: Path) -> None:
+    if not audio_dir.exists():
+        raise AudioGroupDiscoverError(f"Audio directory does not exist: {audio_dir}")
+    if not audio_dir.is_dir():
+        raise AudioGroupDiscoverError(f"Audio path is not a directory: {audio_dir}")
 
 
 def _missing_skip_decode_artifacts(artifact_root: Path) -> list[Path]:
@@ -783,6 +787,12 @@ def run_pipeline(
     artifact_root.mkdir(parents=True, exist_ok=True)
     logger.info("Run mode=%s", run_mode)
     logger.info("Artifact root: %s", artifact_root)
+
+    try:
+        _validate_audio_input_dir(audio_dir)
+    except AudioGroupDiscoverError as e:
+        logger.error("Audio input preparation failed: %s", e)
+        return 2
 
     if skip_decode and not _preflight_skip_decode_artifacts(artifact_root):
         return 4

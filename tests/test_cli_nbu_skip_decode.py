@@ -43,6 +43,28 @@ class CliNbuSkipDecodeTests(unittest.TestCase):
         self.assertEqual(rc, 4)
         prepare_mock.assert_not_called()
 
+    def test_missing_audio_dir_is_reported_before_skip_decode_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            video_dir = root / "video"
+            out_dir = root / "out"
+            video_dir.mkdir()
+
+            with patch.object(cli_nbu, "_preflight_skip_decode_artifacts") as preflight:
+                rc = cli_nbu.run_pipeline(
+                    audio_dir=root / "missing-audio",
+                    video_dir=video_dir,
+                    out_dir=out_dir,
+                    site="nbu_sleep",
+                    segments=None,
+                    cameras=None,
+                    target_pairs=None,
+                    skip_decode=True,
+                )
+
+        self.assertEqual(rc, 2)
+        preflight.assert_not_called()
+
     def test_skip_decode_preflight_passes_when_required_csvs_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
