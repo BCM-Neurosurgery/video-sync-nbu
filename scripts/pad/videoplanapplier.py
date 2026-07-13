@@ -47,6 +47,8 @@ from scripts.models import Video
 # Module-level logger (handlers/formatting controlled by logutils)
 log = logging.getLogger(__name__)
 
+HISTORICAL_FIRST_SEGMENT_DROPPED_ROW_INDEX = 1
+
 
 # -----------------------------
 # Data structures
@@ -248,6 +250,143 @@ def _close_process(proc: subprocess.Popen, *, name: str) -> None:
         raise RuntimeError(f"{name} failed with exit code {proc.returncode}. {err}")
 
 
+def _drop_index(values: Optional[Sequence[Any]], index: int) -> Optional[List[Any]]:
+    if values is None:
+        return None
+    copied = list(values)
+    if not (0 <= index < len(copied)):
+        raise IndexError(f"Cannot drop index {index} from list of length {len(copied)}")
+    return copied[:index] + copied[index + 1 :]
+
+
+def _drop_index_for_optional_companion_array(
+    values: Optional[Sequence[Any]], index: int, expected_len: int
+) -> Optional[List[Any]]:
+    if values is None:
+        return None
+    copied = list(values)
+    if len(copied) == expected_len - 1:
+        return copied
+    if len(copied) != expected_len:
+        raise RuntimeError(
+            f"Optional CamJson array length {len(copied)} is neither "
+            f"{expected_len} nor {expected_len - 1}; cannot reconcile safely."
+        )
+    return _drop_index(copied, index)
+
+
+def _looks_like_historical_first_segment_mismatch(
+    fids_u: Sequence[int],
+    fids_r: Sequence[int],
+    *,
+    src_frames: int,
+) -> bool:
+    """Return true for the old writer bug that skipped JSON row 1 in the MP4."""
+    expected_len = src_frames + 1
+    if len(fids_u) != expected_len or len(fids_r) != expected_len:
+        return False
+    if src_frames < 2:
+        return False
+    try:
+        first_u = int(fids_u[0])
+        second_u = int(fids_u[1])
+        third_u = int(fids_u[2])
+        first_r = int(fids_r[0])
+        second_r = int(fids_r[1])
+        third_r = int(fids_r[2])
+    except (TypeError, ValueError, IndexError):
+        return False
+
+    return (
+        second_u == first_u + 1
+        and third_u == second_u + 1
+        and first_r == 0
+        and second_r == 1
+        and third_r == 2
+    )
+
+
+def reconcile_video_companion_frame_count(
+    video: Video,
+    *,
+    repair_historical_first_segment_mismatch: bool = False,
+) -> Video:
+    """Align companion JSON arrays to the decoded MP4 frame count when safe.
+
+    Old FLIR recordings can have 18,000 JSON rows but 17,999 encoded MP4
+    frames because the historical writer skipped the second queued image when
+    opening the first segment's VideoWriter. That repair is deliberately
+    opt-in; by default, all mismatches are hard failures.
+    """
+    src_frames = int(getattr(video, "frame_count", 0) or 0)
+    cj = getattr(video, "companion_json", None)
+    if cj is None or src_frames <= 0:
+        return video
+
+    serials = list(getattr(cj, "fixed_serials", None) or [])
+    fids_u = list(getattr(cj, "fixed_frame_ids", None) or [])
+    fids_r = list(getattr(cj, "fixed_reidx_frame_ids", None) or [])
+    lengths = (len(serials), len(fids_u), len(fids_r))
+    if lengths == (src_frames, src_frames, src_frames):
+        return video
+
+    looks_like_historical_mismatch = lengths == (
+        src_frames + 1,
+        src_frames + 1,
+        src_frames + 1,
+    ) and _looks_like_historical_first_segment_mismatch(
+        fids_u, fids_r, src_frames=src_frames
+    )
+    if looks_like_historical_mismatch and repair_historical_first_segment_mismatch:
+        drop_index = HISTORICAL_FIRST_SEGMENT_DROPPED_ROW_INDEX
+        expected_len = src_frames + 1
+        adapter = logging.LoggerAdapter(
+            log,
+            extra={
+                "seg": getattr(video, "segment_id", "-"),
+                "cam": getattr(video, "cam_serial", "-"),
+            },
+        )
+        adapter.warning(
+            "Companion JSON has one more row than decoded MP4 frames "
+            "(json=%d, mp4=%d). Treating as historical first-segment writer "
+            "mismatch and dropping companion row index %d before video padding.",
+            src_frames + 1,
+            src_frames,
+            drop_index,
+        )
+        return replace(
+            video,
+            companion_json=replace(
+                cj,
+                real_times=_drop_index_for_optional_companion_array(
+                    getattr(cj, "real_times", None), drop_index, expected_len
+                ),
+                raw_serials=_drop_index_for_optional_companion_array(
+                    getattr(cj, "raw_serials", None), drop_index, expected_len
+                ),
+                raw_frame_ids=_drop_index_for_optional_companion_array(
+                    getattr(cj, "raw_frame_ids", None), drop_index, expected_len
+                ),
+                fixed_serials=_drop_index(serials, drop_index),
+                fixed_frame_ids=_drop_index(fids_u, drop_index),
+                fixed_reidx_frame_ids=_drop_index(fids_r, drop_index),
+            ),
+        )
+
+    detail = (
+        f"CamJson array lengths ({len(serials)}/{len(fids_u)}/{len(fids_r)}) "
+        f"!= src_frames ({src_frames}); cannot construct updated arrays."
+    )
+    if looks_like_historical_mismatch:
+        detail += (
+            " This resembles the documented historical first-segment writer "
+            "mismatch; rerun with the explicit repair option only after "
+            "confirming the affected source segment."
+        )
+    raise RuntimeError(detail)
+
+
 # -----------------------------
 # Public API
 # -----------------------------
@@ -260,6 +399,7 @@ def apply_video_padding_plan(
     preset: str = "veryfast",
     override_target_fps: Optional[float] = None,
     override_policy: Optional[str] = None,
+    repair_historical_first_segment_mismatch: bool = False,
     progress_every: int = 2000,
 ) -> Tuple[Path, Video]:
     """
@@ -292,6 +432,11 @@ def apply_video_padding_plan(
         raise RuntimeError(
             f"Video meta incomplete (fps={src_fps}, frames={src_frames}) for {video_path.name}"
         )
+
+    video = reconcile_video_companion_frame_count(
+        video,
+        repair_historical_first_segment_mismatch=repair_historical_first_segment_mismatch,
+    )
 
     # Sanity checks and setup
     target_fps = (
@@ -517,6 +662,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=2000,
         help="Log progress every N input frames (0 to disable). Default: 2000.",
     )
+    ap.add_argument(
+        "--repair-historical-first-segment-json-mismatch",
+        action="store_true",
+        help=(
+            "Opt in to the documented old FLIR first-segment repair for sources "
+            "with one more companion JSON row than decoded MP4 frames. Use only "
+            "after confirming the affected source segment."
+        ),
+    )
     return ap
 
 
@@ -533,6 +687,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             preset=str(args.preset),
             override_target_fps=float(args.target_fps) if args.target_fps else None,
             override_policy=str(args.policy) if args.policy else None,
+            repair_historical_first_segment_mismatch=(
+                args.repair_historical_first_segment_json_mismatch
+            ),
             progress_every=(
                 int(args.progress_every) if args.progress_every is not None else 2000
             ),
