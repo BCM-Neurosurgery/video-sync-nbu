@@ -150,7 +150,10 @@ from scripts.clip.audioclip import clip_from_csv
 from scripts.pad.audiopadder import AudioPadder
 from scripts.pad.audioplanapplier import AudioPlanApplier
 from scripts.pad.videoplancreater import create_video_padding_plan
-from scripts.pad.videoplanapplier import apply_video_padding_plan
+from scripts.pad.videoplanapplier import (
+    apply_video_padding_plan,
+    reconcile_video_companion_frame_count,
+)
 from scripts.align.sync import sync_one_video
 from scripts.index.discover import AudioDiscoverer
 from scripts.sites import SITE_CHOICES, get_serial_channel
@@ -729,6 +732,7 @@ def run_pipeline(
     run_id: int | None = None,
     output_template: str | None = None,
     disable_video_padding: bool = False,
+    repair_historical_first_segment_json_mismatch: bool = False,
 ) -> int:
     """
     Orchestrate discovery + per-(segment,camera) processing.
@@ -1020,6 +1024,9 @@ def run_pipeline(
             overwrite_clips=overwrite_clips,
             output_template=output_template,
             disable_video_padding=disable_video_padding,
+            repair_historical_first_segment_json_mismatch=(
+                repair_historical_first_segment_json_mismatch
+            ),
         )
         if summary["fail"]:
             failures += 1
@@ -1108,6 +1115,7 @@ def process_segment(
     overwrite_clips: bool,
     output_template: str | None = None,
     disable_video_padding: bool = False,
+    repair_historical_first_segment_json_mismatch: bool = False,
 ) -> dict:
     """Process one segment across one or more cameras. Returns a summary dict."""
     segment_out = parent_out / seg_id
@@ -1145,6 +1153,17 @@ def process_segment(
                         log=logger,
                     )
                     clog.info("Built Video object: %s", _name(vid.path))
+                    try:
+                        vid = reconcile_video_companion_frame_count(
+                            vid,
+                            repair_historical_first_segment_mismatch=(
+                                repair_historical_first_segment_json_mismatch
+                            ),
+                        )
+                    except RuntimeError as e:
+                        clog.error("Video/JSON frame-count mismatch: %s", e)
+                        summary["fail"].append(f"{cam}:video-json-frame-count")
+                        continue
                 except VideoDiscoverError as e:
                     clog.error("Video discovery failed: %s", e)
                     summary["fail"].append(f"{cam}:video-discover")
@@ -1183,12 +1202,13 @@ def process_segment(
                                     outdir=cam_out / "work",
                                 )
                                 clog.info(
-                                    "Video padding plan created → %s", _name(vid_padjson)
+                                    "Video padding plan created → %s",
+                                    _name(vid_padjson),
                                 )
                             except VideoPaddingError as e:
                                 clog.error("Video padding plan creation failed: %s", e)
                                 summary["fail"].append(f"{cam}:video-pad-plan")
-                                vid_padjson = None
+                                continue
 
                             # 2) Apply plan (if available)
                             if vid_padjson is not None:
@@ -1206,6 +1226,9 @@ def process_segment(
                                         crf=20,
                                         preset="veryfast",
                                         override_target_fps=30.0,
+                                        repair_historical_first_segment_mismatch=(
+                                            repair_historical_first_segment_json_mismatch
+                                        ),
                                     )
                                     if out_path.exists():
                                         clog.info(
@@ -1217,9 +1240,11 @@ def process_segment(
                                         summary["fail"].append(
                                             f"{cam}:video-pad-apply-missing"
                                         )
+                                        continue
                                 except VideoPaddingError as e:
                                     clog.error("Video padding apply failed: %s", e)
                                     summary["fail"].append(f"{cam}:video-pad-apply")
+                                    continue
 
                                 try:
                                     analyze_video(
@@ -1232,11 +1257,13 @@ def process_segment(
                                     summary["fail"].append(
                                         f"{cam}:video-analysis-postpad"
                                     )
+                                    continue
 
                         except Exception as e:
                             # Catch-all for any unexpected failure inside the padding block
                             clog.error("Video padding step failed: %s", e)
                             summary["fail"].append(f"{cam}:video-pad")
+                            continue
                 else:
                     clog.info("No missing frames detected; padding not needed.")
 
@@ -1527,6 +1554,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--repair-historical-first-segment-json-mismatch",
+        action="store_true",
+        help=(
+            "Opt in to the documented old FLIR first-segment repair for sources "
+            "with one more companion JSON row than decoded MP4 frames. Use only "
+            "after confirming the affected source segment."
+        ),
+    )
+    parser.add_argument(
         "--resume-from-segment",
         dest="resume_from_segment",
         help="Skip earlier segments and resume processing from this segment ID.",
@@ -1607,5 +1643,8 @@ if __name__ == "__main__":
         run_id=args.run_id,
         output_template=args.output_template,
         disable_video_padding=args.disable_video_padding,
+        repair_historical_first_segment_json_mismatch=(
+            args.repair_historical_first_segment_json_mismatch
+        ),
     )
     raise SystemExit(rc)
